@@ -3,6 +3,10 @@
 // own files that survives both backends, so it is pasted, and this file is the one
 // to copy from). Values are 0..1 unless said.
 //
+// In the .frag files the floats from uTime to uBandLow are packed four to a vec4
+// (uP0..uP7, each name a #define of its component): Metal gives each uniform a buffer
+// slot of its own and has 31. The order, and so every setFloat index, is this one.
+//
 //   uniform vec2 uResolution;   // the pass's size in pixels
 //   uniform float uTime;        // seconds, running
 //   uniform float uBeat;        // through the beat

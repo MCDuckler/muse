@@ -24,41 +24,52 @@
 // them is a field of blocks and not one flat pastel sheet.
 
 uniform vec2 uResolution;
-uniform float uTime;
-uniform float uBeat;
-uniform float uBar;
-uniform float uPhrase;
-uniform float uEnergy;
-uniform float uIntensity;
-uniform float uKick;
-uniform float uLow;
-uniform float uMid;
-uniform float uHigh;
-uniform float uAir;
-uniform float uOnset;
-uniform float uHue;
-uniform float uHue2;
-uniform float uDropNear;
-uniform float uBuild;
-uniform float uHit;
-uniform float uVocal;
-uniform float uM1;      // the genome: a salt on every roll, so each record has its own
-uniform float uM2;
-uniform float uM3;
-uniform float uM4;
-uniform float uHitKick;
-uniform float uHitSnare;
-uniform float uHitTop;
-uniform float uBeatDecay;
-uniform float uBarDecay;
-uniform float uBarSaw;
-uniform float uPhraseSaw;
-uniform float uDownbeat;
-uniform float uExposure;
-uniform float uBandLow;
+// The show's floats, four to a vec4 in the same order (the same setFloat indices,
+// the native stage's order too): Metal gives each uniform a buffer slot of its own
+// and has 31, so on a Mac every scene past uExposure would not build. The names stay.
+uniform vec4 uP0;  // uTime uBeat uBar uPhrase
+uniform vec4 uP1;  // uEnergy uIntensity uKick uLow
+uniform vec4 uP2;  // uMid uHigh uAir uOnset
+uniform vec4 uP3;  // uHue uHue2 uDropNear uBuild
+uniform vec4 uP4;  // uHit uVocal uM1 uM2
+uniform vec4 uP5;  // uM3 uM4 uHitKick uHitSnare
+uniform vec4 uP6;  // uHitTop uBeatDecay uBarDecay uBarSaw
+uniform vec4 uP7;  // uPhraseSaw uDownbeat uExposure uBandLow
 uniform float uBandMid;
 uniform float uBandHigh;
 uniform float uBarIndex;
+#define uTime uP0.x
+#define uBeat uP0.y
+#define uBar uP0.z
+#define uPhrase uP0.w
+#define uEnergy uP1.x
+#define uIntensity uP1.y
+#define uKick uP1.z
+#define uLow uP1.w
+#define uMid uP2.x
+#define uHigh uP2.y
+#define uAir uP2.z
+#define uOnset uP2.w
+#define uHue uP3.x
+#define uHue2 uP3.y
+#define uDropNear uP3.z
+#define uBuild uP3.w
+#define uHit uP4.x
+#define uVocal uP4.y
+#define uM1 uP4.z
+#define uM2 uP4.w
+#define uM3 uP5.x
+#define uM4 uP5.y
+#define uHitKick uP5.z
+#define uHitSnare uP5.w
+#define uHitTop uP6.x
+#define uBeatDecay uP6.y
+#define uBarDecay uP6.z
+#define uBarSaw uP6.w
+#define uPhraseSaw uP7.x
+#define uDownbeat uP7.y
+#define uExposure uP7.z
+#define uBandLow uP7.w
 
 out vec4 fragColor;
 

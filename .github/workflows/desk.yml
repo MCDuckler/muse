@@ -100,8 +100,34 @@ jobs:
           cat "$log"
           ls -l smoke
           cat smoke/bench-egui-wgpu.json
-          grep -q '^STAGE fps=' "$log" || { echo "the stage never drew"; exit 1; }
+          grep -q 'STAGE fps=' "$log" || { echo "the stage never drew"; exit 1; }
           if grep -q "the Desk's show could not start" "$log"; then exit 1; fi
+          echo "Metal shader refusals: $(grep -c 'Impeller validation' "$log" || true)"
+      - name: Smoke — every shader scene builds on Metal
+        timeout-minutes: 6
+        run: |
+          # Impeller on Metal gives each uniform a buffer slot and has 31: a shader past
+          # that does not build, and its scene draws nothing (the scene .frag files pack
+          # their floats into vec4s for this). Each scene alone on the demo record.
+          st="$APP/Contents/Helpers/WetOwl.app/Contents/MacOS/WetOwl"
+          bad=0
+          for sc in kinetic flash blocks fold glide drift echo milk; do
+            "$st" --stage --demo --scene "$sc" --shot > "smoke/$sc.log" 2>&1 &
+            pid=$!
+            sleep 14
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            shot=$(grep -o 'STAGE shot [^ ]*' "smoke/$sc.log" | head -1 | cut -d' ' -f3)
+            [ -n "$shot" ] && [ -f "$shot" ] && cp "$shot" "smoke/$sc.png"
+            if grep -q 'Impeller validation' "smoke/$sc.log"; then
+              echo "$sc: a shader would not build on Metal"
+              grep -m2 'Impeller validation' "smoke/$sc.log" | cut -c1-300
+              bad=1
+            else
+              echo "$sc: built (shot: ${shot:-none})"
+            fi
+          done
+          exit $bad
       - uses: actions/upload-artifact@v4
         if: always()
         with:

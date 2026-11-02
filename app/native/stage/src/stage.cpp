@@ -551,12 +551,22 @@ void drawScene(const glsl::Program* p, Target& t, const float* common, const flo
     return;
   }
   glUseProgram(p->id);
-  for (int i = 1; kCommon[i]; i++) {
-    const GLint at = p->loc(kCommon[i]);
-    if (at < 0) continue;
+  auto value = [&](int i) {
     float v = common[i + 1];
     if (knobs && i >= 19 && i <= 22) v = knobs[i - 19];  // uM1..uM4
-    glUniform1f(at, v);
+    return v;
+  };
+  for (int i = 1; kCommon[i]; i++) {
+    const GLint at = p->loc(kCommon[i]);
+    if (at >= 0) glUniform1f(at, value(i));
+  }
+  // The scene .frag files pack uTime..uBandLow four to a vec4, uP0..uP7, in the same
+  // order (Metal, under Flutter's stage on a Mac, has 31 uniform slots).
+  for (int k = 0; k < 8; k++) {
+    const std::string name = "uP" + std::to_string(k);
+    if (const GLint at = p->loc(name.c_str()); at >= 0) {
+      glUniform4f(at, value(4 * k + 1), value(4 * k + 2), value(4 * k + 3), value(4 * k + 4));
+    }
   }
   if (const GLint at = p->loc("uResolution"); at >= 0) glUniform2f(at, (float)t.w, (float)t.h);
   if (const GLint at = p->loc("wsHeight"); at >= 0) glUniform1f(at, (float)t.h);
