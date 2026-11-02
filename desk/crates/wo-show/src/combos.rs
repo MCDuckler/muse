@@ -14,6 +14,11 @@ named!(
     pub enum Fx { None = "none", Kaleidoscope = "kaleidoscope", Slit = "slit", Both = "both", Mosh = "mosh" }
 );
 
+impl Fx {
+    /// Every effect, as a slice for combos_of.
+    pub const ALL_REF: &'static [Fx] = &[Fx::None, Fx::Kaleidoscope, Fx::Slit, Fx::Both, Fx::Mosh];
+}
+
 /// The backgrounds, by key: a ground's kind, and its variant after a dot.
 pub const COMBO_GROUNDS: &[&str] = &["black", "white", "milk", "wash", "pulse.grid", "pulse.rays", "pulse.smoke", "pulse.stars", "field.drift", "cover", "camera"];
 

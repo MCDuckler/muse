@@ -442,6 +442,8 @@ pub struct ShowState {
     pub rig_from: Option<ShowRig>,
     pub genome: Genome,
     pub dyn_: Flat,
+    /// Live numbers from elsewhere (`milk.ok`, `cam.*`), as they are.
+    pub extra: Flat,
 }
 
 impl Default for ShowState {
@@ -465,6 +467,7 @@ impl Default for ShowState {
             rig_from: None,
             genome: Genome::default(),
             dyn_: Flat::new(),
+            extra: Flat::new(),
         }
     }
 }
@@ -472,6 +475,15 @@ impl Default for ShowState {
 impl ShowState {
     pub fn master(&self) -> &ShowDeck {
         if self.master_name == "B" { &self.b } else { &self.a }
+    }
+
+    pub fn deck(&self, name: &str) -> &ShowDeck {
+        if name == "B" { &self.b } else { &self.a }
+    }
+
+    /// One number by name (0 where there is none).
+    pub fn num(&self, name: &str) -> f64 {
+        self.extra.get(name).or_else(|| self.dyn_.get(name)).copied().unwrap_or_else(|| self.flat().get(name).copied().unwrap_or(0.0))
     }
 
     pub fn other(&self) -> &ShowDeck {
@@ -495,6 +507,7 @@ impl ShowState {
         m.insert("show.scene.k".into(), self.scene_k);
         self.genome.flat_into(&mut m);
         m.extend(self.dyn_.iter().map(|(k, v)| (k.clone(), *v)));
+        m.extend(self.extra.iter().map(|(k, v)| (k.clone(), *v)));
         let (ma, ot) = (self.master(), self.other());
         let intensity = if self.macros.blackout { 0.0 } else { (ma.energy * ma.channel.level + ot.energy * ot.channel.level).clamp(0.0, 1.0) * self.macros.intensity };
         m.insert("intensity".into(), intensity);

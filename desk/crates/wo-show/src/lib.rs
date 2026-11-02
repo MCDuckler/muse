@@ -5,6 +5,8 @@
 //! favourites stay shared while both exist.
 pub mod combos;
 pub mod deck;
+pub mod director;
+pub mod events;
 pub mod faves;
 pub mod json;
 pub mod plan;
