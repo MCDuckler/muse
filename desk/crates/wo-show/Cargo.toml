@@ -1,0 +1,10 @@
+[package]
+name = "wo-show"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The show's model and rules (no GPU, no I/O): the rig, the combinations, the plan, the director — ported from v1's app/lib/src/state/show"
+
+[dependencies]
+serde_json = "1.0.154"
