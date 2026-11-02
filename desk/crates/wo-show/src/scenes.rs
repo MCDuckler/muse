@@ -10,6 +10,12 @@ use serde_json::Value;
 use crate::json::{knobs, num, obj, strings, text};
 use crate::rig::{Figure, Ground, Look, RigFigure, RigFinish, RigGround, SceneMeta, ShowRig};
 
+include!(concat!(env!("OUT_DIR"), "/scenes.rs"));
+
+/// The scenes the Rust stage draws as shaders now (P2); the rest of [IN_SCOPE] come with
+/// their phases (MilkDrop P3, the sims P5, the dancers P6, the 3D type P8).
+pub const DRAWN: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift"];
+
 /// The scenes the Rust stage draws (plan §1): the rest stay v1's until they are ported, or not.
 pub const IN_SCOPE: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift", "milk", "fluid", "veins", "dance-art", "type3d"];
 
@@ -140,6 +146,11 @@ impl SceneBook {
         SceneBook::from_strings(paths.iter().filter_map(|p| std::fs::read_to_string(p).ok()))
     }
 
+    /// The scenes the app ships (taken in at build time).
+    pub fn shipped() -> SceneBook {
+        SceneBook::from_strings(SHIPPED_SCENES.iter().map(|s| s.to_string()))
+    }
+
     pub fn from_strings(jsons: impl IntoIterator<Item = String>) -> SceneBook {
         let scenes = jsons
             .into_iter()
@@ -192,5 +203,17 @@ mod tests {
         let kin = &book.scenes["kinetic"];
         assert_eq!(kin.layers[0].knob(1), 0.0);
         assert_eq!(kin.finish.particles, vec!["sparks"]);
+    }
+}
+
+#[cfg(test)]
+mod shipped_tests {
+    use super::*;
+
+    #[test]
+    fn the_shipped_scenes_are_the_files() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../app/assets/show/scenes");
+        assert_eq!(SceneBook::shipped(), SceneBook::from_dir(&dir));
+        assert_eq!(SceneBook::shipped().only(DRAWN).scenes.len(), DRAWN.len());
     }
 }

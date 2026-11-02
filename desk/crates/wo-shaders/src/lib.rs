@@ -19,6 +19,33 @@ use std::fmt::Write as _;
 
 pub use naga;
 
+include!(concat!(env!("OUT_DIR"), "/shipped.rs"));
+
+/// A shipped shader's source, by its path under app/shaders/show (`kinetic.frag`,
+/// `sim/type3d.frag`).
+pub fn shipped(path: &str) -> Option<&'static str> {
+    SHIPPED.iter().find(|(p, _)| *p == path).map(|(_, s)| *s)
+}
+
+/// A shipped shader fitted, by its path.
+pub fn fit_shipped(path: &str) -> Result<Fitted, Trouble> {
+    let src = shipped(path).ok_or_else(|| Trouble { name: path.into(), what: "no such shader".into(), glsl: None })?;
+    fit(path.trim_end_matches(".frag"), src)
+}
+
+/// The shaders the Rust stage draws, by path under app/shaders/show (plan §1: the scenes in
+/// scope and the passes round them).
+pub const IN_SCOPE: &[&str] = &[
+    // the scenes
+    "kinetic.frag", "flash.frag", "blocks.frag", "glide.frag", "drift.frag", "milk.frag",
+    // the grounds (pulse.*, field.*), the passes: trails, blur, composite, the blend, the
+    // kaleidoscope, the finish
+    "pulse.frag", "field.frag", "feedback.frag", "blur.frag", "composite.frag", "under.frag", "ghosts.frag", "finish.frag",
+    // the treatments, the fluid's five passes, the 3D text
+    "sim/dance_fx.frag", "sim/fluid_advect.frag", "sim/fluid_div.frag", "sim/fluid_jacobi.frag", "sim/fluid_project.frag",
+    "sim/fluid_look.frag", "sim/type3d.frag",
+];
+
 /// One float uniform as the shader declares it: its name, its floats, and where it sits in
 /// the block (bytes).
 #[derive(Clone, Debug, PartialEq, Eq)]

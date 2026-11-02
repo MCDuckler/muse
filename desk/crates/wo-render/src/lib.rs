@@ -1,13 +1,91 @@
 //! The Rust stage's renderer (plan: ~/.claude/plans/wetowl-stage-rust.md §2.4): wgpu on
 //! Vulkan, Direct3D 12 and Metal, drawing the show's shaders as wo-shaders fits them.
 //!
-//! P0 (the spike): a device of its own with no window, a full-screen pass built from a
-//! fitted shader (its floats in Flutter's order, its samplers in theirs), and a picture
-//! read back. The passes, the rig and the stage come in P2.
+//! - [Gpu]: a device, with a window's surface or none (a test, a shot, a bench);
+//! - [Pass]: a full-screen pass built from a fitted shader (its floats in Flutter's order,
+//!   its samplers in theirs);
+//! - [Stage]: the show's frame (wo_show::frame::StageFrame) drawn the native stage's way —
+//!   ground, figure, particles, blend, trails, bloom, finish;
+//! - [Arena]: the frame's uniforms, in one buffer written once a frame.
 use std::borrow::Cow;
 
 pub use wgpu;
 pub use wo_shaders::{self, Fitted};
+
+pub mod particles;
+pub mod stage;
+pub use stage::Stage;
+
+/// One frame's uniform blocks, side by side in one buffer at the device's alignment, written
+/// once before the frame's commands are submitted (a buffer written twice before a submit
+/// holds the last write for every draw that reads it).
+pub struct Arena {
+    buf: wgpu::Buffer,
+    data: Vec<u8>,
+    align: usize,
+    cap: usize,
+    /// The most a frame wanted, for the next [Arena::begin] to grow to.
+    wanted: usize,
+}
+
+impl Arena {
+    pub fn new(gpu: &Gpu, cap: usize) -> Arena {
+        let align = gpu.device.limits().min_uniform_buffer_offset_alignment as usize;
+        Arena { buf: Arena::buffer(gpu, cap), data: Vec::with_capacity(cap), align, cap, wanted: 0 }
+    }
+
+    fn buffer(gpu: &Gpu, cap: usize) -> wgpu::Buffer {
+        gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("uniforms"),
+            size: cap as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// A new frame: empty, and bigger where the last one wanted more than there was.
+    pub fn begin(&mut self, gpu: &Gpu) {
+        if self.wanted > self.cap {
+            self.cap = self.wanted.next_power_of_two();
+            self.buf = Arena::buffer(gpu, self.cap);
+        }
+        self.data.clear();
+        self.wanted = 0;
+    }
+
+    /// A block for this frame: where it sits (None when the frame has run out of room; the
+    /// next one has more).
+    pub fn push(&mut self, bytes: &[u8]) -> Option<wgpu::BufferBinding<'_>> {
+        let at = self.data.len().div_ceil(self.align) * self.align;
+        let size = bytes.len().max(16);
+        self.wanted = self.wanted.max(at + size);
+        if at + size > self.cap {
+            return None;
+        }
+        self.data.resize(at, 0);
+        self.data.extend_from_slice(bytes);
+        self.data.resize(at + size, 0);
+        Some(wgpu::BufferBinding { buffer: &self.buf, offset: at as u64, size: wgpu::BufferSize::new(size as u64) })
+    }
+
+    /// The frame's blocks up to the GPU, before its commands are submitted.
+    pub fn upload(&self, gpu: &Gpu) {
+        if !self.data.is_empty() {
+            gpu.queue.write_buffer(&self.buf, 0, &self.data);
+        }
+    }
+}
+
+/// The values of a pass's floats in its order, by name: `f(name, comps)` for each.
+pub fn values_by(floats: &[wo_shaders::Float], f: impl Fn(&str, u32) -> Vec<f32>) -> Vec<f32> {
+    let mut out = vec![];
+    for fl in floats {
+        let mut v = f(&fl.name, fl.comps);
+        v.resize(fl.comps as usize, 0.0);
+        out.extend(v);
+    }
+    out
+}
 
 /// A GPU with no window: for a bench, a test, a shot.
 pub struct Gpu {
@@ -149,7 +227,50 @@ impl Pass {
         }
     }
 
+    /// The pass's floats, in its order.
+    pub fn floats(&self) -> &[wo_shaders::Float] {
+        &self.fitted_floats
+    }
+
+    /// Draws into `target` with `values` (setFloat order) and `textures` (the samplers'
+    /// order), its floats in this frame's [Arena]: a pass can be drawn more than once a frame.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_in(&self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, arena: &mut Arena, target: &wgpu::TextureView, values: &[f32], textures: &[&wgpu::TextureView]) {
+        assert_eq!(textures.len(), self.samplers, "{}: {} samplers", self.name, self.samplers);
+        let block = (self.block_size > 0).then(|| wo_shaders::Fitted::block_of(&self.fitted_floats, self.block_size, values));
+        let binding = match &block {
+            Some(b) => match arena.push(b) {
+                Some(binding) => Some(binding),
+                None => return,
+            },
+            None => None,
+        };
+        let mut entries = vec![];
+        if let Some(b) = binding {
+            entries.push(wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Buffer(b) });
+        }
+        for (i, t) in textures.iter().enumerate() {
+            entries.push(wgpu::BindGroupEntry { binding: 1 + 2 * i as u32, resource: wgpu::BindingResource::TextureView(t) });
+            entries.push(wgpu::BindGroupEntry { binding: 2 + 2 * i as u32, resource: wgpu::BindingResource::Sampler(&self.sampler) });
+        }
+        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some(&self.name), layout: &self.layout, entries: &entries });
+        let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(&self.name),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+        rp.set_pipeline(&self.pipeline);
+        rp.set_bind_group(0, &group, &[]);
+        rp.draw(0..3, 0..1);
+    }
+
     /// Draws into `target` with `values` (setFloat order) and `textures` (the samplers' order).
+    /// Once a submit: the floats are the pass's own buffer (see [Pass::draw_in]).
     pub fn draw(&self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, values: &[f32], textures: &[&wgpu::TextureView]) {
         assert_eq!(textures.len(), self.samplers, "{}: {} samplers", self.name, self.samplers);
         if let Some(buf) = &self.floats {

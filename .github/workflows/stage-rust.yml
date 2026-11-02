@@ -41,6 +41,12 @@ jobs:
           # Windows: Direct3D 12 (WARP on the runner); elsewhere the platform's own
           WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}
         run: cargo run --release -p wo-render --example scene_shots -- "$GITHUB_WORKSPACE/shots-${{ runner.os }}"
+      - name: The stage's whole frame against its goldens (every drawn scene, the blends)
+        env:
+          WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}
+          WO_NEED_GPU: "1"
+          WO_SHOTS: ${{ github.workspace }}/shots-${{ runner.os }}/stage
+        run: cargo test --release -p wo-render -- --nocapture
       - name: A dancer read, posed and drawn on this GPU API
         env:
           WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}

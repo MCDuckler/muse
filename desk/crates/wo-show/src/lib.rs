@@ -9,6 +9,7 @@ pub mod director;
 pub mod doc;
 pub mod engine;
 pub mod events;
+pub mod frame;
 pub mod faves;
 pub mod json;
 pub mod plan;

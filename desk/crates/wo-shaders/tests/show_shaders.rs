@@ -6,17 +6,7 @@ use std::path::PathBuf;
 
 use naga::back::{hlsl, msl, spv};
 
-/// The in-scope shaders, by path under app/shaders/show.
-pub const IN_SCOPE: &[&str] = &[
-    // the scenes
-    "kinetic.frag", "flash.frag", "blocks.frag", "glide.frag", "drift.frag", "milk.frag",
-    // the grounds (pulse.*, field.*), the passes: trails, blur, composite, the blend, the
-    // kaleidoscope, the finish
-    "pulse.frag", "field.frag", "feedback.frag", "blur.frag", "composite.frag", "under.frag", "ghosts.frag", "finish.frag",
-    // the treatments, the fluid's five passes, the 3D text
-    "sim/dance_fx.frag", "sim/fluid_advect.frag", "sim/fluid_div.frag", "sim/fluid_jacobi.frag", "sim/fluid_project.frag",
-    "sim/fluid_look.frag", "sim/type3d.frag",
-];
+use wo_shaders::IN_SCOPE;
 
 fn dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../app/shaders/show")
