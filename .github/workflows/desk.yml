@@ -163,9 +163,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The tag sits on the default branch: the Actions token may not make a tag on a
+          # commit that changes workflow files (desk does), and a rolling release is
+          # its asset, not its tag.
           tag=wetowl-desk-macos
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" \
-            --prerelease --latest=false --target "$GITHUB_SHA" \
+            --prerelease --latest=false --target "${{ github.event.repository.default_branch }}" \
             --title "WetOwl Desk for Mac (rolling)" \
             --notes "The newest WetOwl Desk for macOS, from the desk branch. Install without an administrator: curl -fsSL https://raw.githubusercontent.com/MCDuckler/muse/desk/desk/deploy/macos/install.sh | bash"
           gh release upload "$tag" desk/target/macos/wetowl-desk-macos.zip --clobber
