@@ -1,13 +1,17 @@
-# WetOwl Desk (v2) Windows build: the booth (egui), zipped with bench.cmd for a tester
-# to run on real hardware (see desk/README.md). Runs on
-# pushes to the desk branch that touch desk/ (or by hand). No music goes in the zip:
-# the booths play the tester's own fetched records, else synthesised ones.
+# WetOwl Desk (v2) builds.
+# - windows: the booth (egui), zipped with bench.cmd for a tester to run on real hardware
+#   (see desk/README.md). No music goes in the zip: the booths play the tester's own
+#   fetched records, else synthesised ones.
+# - macos: "WetOwl Desk.app" (Apple silicon + Intel, the stage inside it), smoke-tested
+#   with its stage, and on pushes to desk published as the rolling release
+#   wetowl-desk-macos, which desk/deploy/macos/install.sh fetches (no administrator).
+# Runs on pushes to the desk branch that touch desk/, the engine or the Mac runner (or by hand).
 name: Desk
 
 on:
   push:
     branches: [desk]
-    paths: ["desk/**", "app/native/engine/**", ".github/workflows/desk-bakeoff.yml"]
+    paths: ["desk/**", "app/native/engine/**", "app/macos/**", "app/lib/src/ui/show/**", "app/lib/src/state/show/**", ".github/workflows/desk.yml"]
   workflow_dispatch:
 
 jobs:
@@ -45,3 +49,78 @@ jobs:
           path: |
             desk/wetowl-desk-windows.zip
             desk/smoke/
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      STAGE: app/build/macos/Build/Products/Release/WetOwl.app
+      APP: desk/target/macos/WetOwl Desk.app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desk
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: The stage — the WetOwl app, built from this checkout
+        working-directory: app
+        run: |
+          flutter pub get
+          stamp="$(date -u +%Y%m%d%H%M)"
+          flutter build macos --release \
+            --build-number="$stamp" \
+            --dart-define=MUSE_SERVER=https://89-58-49-140.nip.io \
+            --dart-define=MUSE_BUILD="desk-stage-$stamp"
+          # In Resources, not beside the program: see lib/src/worker/build_stamp.dart.
+          echo "$stamp" > "../$STAGE/Contents/Resources/build-stamp.txt"
+      - name: The Desk, bundled with its stage
+        run: desk/deploy/macos/bundle.sh "$PWD/$STAGE"
+      - name: Smoke — the Desk opens its stage, and both draw
+        timeout-minutes: 4
+        run: |
+          # As Finder would start it (output not a terminal → its log file), with no
+          # sound card or controllers on the runner. The stage must start as a stage
+          # (the command line reached Dart: STAGE lines), connect, and draw.
+          mkdir -p smoke
+          log="$HOME/Library/Logs/WetOwl Desk.log"
+          WO_AUDIO=off WO_CONTROLLERS=off "$APP/Contents/MacOS/wetowl-desk" --bench 30 --stage --out "$PWD/smoke" </dev/null >/dev/null 2>&1 &
+          desk=$!
+          sleep 20
+          screencapture -x smoke/mac-screen.png || true
+          pgrep -fl 'Helpers/WetOwl.app' || true
+          wait $desk || echo "the Desk exited with $?"
+          cat "$log"
+          ls -l smoke
+          cat smoke/bench-egui-wgpu.json
+          grep -q '^STAGE fps=' "$log" || { echo "the stage never drew"; exit 1; }
+          if grep -q "the Desk's show could not start" "$log"; then exit 1; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wetowl-desk-macos
+          path: |
+            desk/target/macos/wetowl-desk-macos.zip
+            smoke/
+      - name: Engine and decoder tests
+        working-directory: desk
+        run: cargo test --release --workspace
+      - name: Published for the installer (rolling release wetowl-desk-macos)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/desk'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=wetowl-desk-macos
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" \
+            --prerelease --latest=false --target "$GITHUB_SHA" \
+            --title "WetOwl Desk for Mac (rolling)" \
+            --notes "The newest WetOwl Desk for macOS, from the desk branch. Install without an administrator: curl -fsSL https://raw.githubusercontent.com/MCDuckler/muse/desk/desk/deploy/macos/install.sh | bash"
+          gh release upload "$tag" desk/target/macos/wetowl-desk-macos.zip --clobber
+          gh release edit "$tag" --notes "Build $(cat "$APP/Contents/Resources/build.txt"). The newest WetOwl Desk for macOS, from the desk branch. Install without an administrator, in Terminal: curl -fsSL https://raw.githubusercontent.com/MCDuckler/muse/desk/desk/deploy/macos/install.sh | bash"

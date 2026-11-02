@@ -312,11 +312,29 @@ impl Session {
 
     /// The WetOwl app's sign-in on this computer (its shared_preferences.json), if any.
     pub fn from_wetowl_app() -> Option<Session> {
+        if cfg!(target_os = "macos") {
+            return Self::from_mac_defaults();
+        }
         let prefs = app_folder()?.join("shared_preferences.json");
         let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(prefs).ok()?).ok()?;
         Some(Session {
             server: v.get("flutter.muse.server")?.as_str()?.trim_end_matches('/').to_owned(),
             token: v.get("flutter.muse.token")?.as_str()?.to_owned(),
+            user: None,
+        })
+    }
+
+    /// On a Mac the app's preferences are the user defaults of its bundle id
+    /// (io.wetowl.muse), not a file: `defaults read` gives them.
+    fn from_mac_defaults() -> Option<Session> {
+        let read = |key: &str| -> Option<String> {
+            let out = std::process::Command::new("/usr/bin/defaults").args(["read", "io.wetowl.muse", key]).output().ok()?;
+            let v = String::from_utf8(out.stdout).ok()?.trim().to_owned();
+            (out.status.success() && !v.is_empty()).then_some(v)
+        };
+        Some(Session {
+            server: read("flutter.muse.server")?.trim_end_matches('/').to_owned(),
+            token: read("flutter.muse.token")?,
             user: None,
         })
     }

@@ -196,11 +196,38 @@ fn glow() -> bool {
     }
 }
 
+/// A Mac opens the Desk from Finder with its output going nowhere: there it writes to
+/// ~/Library/Logs/WetOwl Desk.log instead (the stage window it starts writes there too).
+/// From a terminal it writes to the terminal, as everywhere.
+#[cfg(target_os = "macos")]
+fn log_to_file() {
+    use std::io::IsTerminal;
+    use std::os::fd::AsRawFd;
+    if std::io::stderr().is_terminal() {
+        return;
+    }
+    let Some(home) = std::env::var_os("HOME") else { return };
+    let dir = std::path::Path::new(&home).join("Library/Logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let Ok(log) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("WetOwl Desk.log")) else { return };
+    // SAFETY: dup2 onto the standard descriptors, before any thread writes to them.
+    unsafe {
+        libc::dup2(log.as_raw_fd(), 1);
+        libc::dup2(log.as_raw_fd(), 2);
+    }
+    eprintln!("---- WetOwl Desk {} started", env!("CARGO_PKG_VERSION"));
+}
+
 fn main() -> eframe::Result {
+    #[cfg(target_os = "macos")]
+    log_to_file();
     let renderer = if glow() { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
+    // A laptop's screen on a Mac is about 1500 points wide: the full design at 1920 would
+    // open past its edges. The booth fits its design to whatever the window is.
+    let size = if cfg!(target_os = "macos") { [1440.0, 860.0] } else { [1920.0, 1080.0] };
     let options = eframe::NativeOptions {
         renderer,
-        viewport: egui::ViewportBuilder::default().with_inner_size([1920.0, 1080.0]).with_title("WetOwl Desk").with_app_id("wetowl-desk").with_icon(icon()),
+        viewport: egui::ViewportBuilder::default().with_inner_size(size).with_title("WetOwl Desk").with_app_id("wetowl-desk").with_icon(icon()),
         ..Default::default()
     };
     eframe::run_native("WetOwl Desk", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))

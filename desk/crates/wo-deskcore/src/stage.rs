@@ -53,14 +53,29 @@ pub struct StageView {
 
 /// The stage window's program: WO_STAGE, else the stage installed beside the Desk
 /// (stage/wetowl), else the WetOwl app's own (Linux: ~/.local/opt/wetowl).
+///
+/// On a Mac the stage is the WetOwl app carried inside the Desk's bundle
+/// (WetOwl Desk.app/Contents/Helpers/WetOwl.app, see deploy/macos/bundle.sh), else a
+/// WetOwl.app in ~/Applications or /Applications.
 pub fn program() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("WO_STAGE").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
-    let name = if cfg!(windows) { "wetowl.exe" } else { "wetowl" };
-    let beside = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("stage").join(name)));
-    let app = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/opt/wetowl").join(name)).filter(|_| cfg!(target_os = "linux"));
-    [beside, app].into_iter().flatten().find(|p| p.is_file())
+    let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from));
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let candidates: Vec<PathBuf> = if cfg!(target_os = "macos") {
+        let inside = "WetOwl.app/Contents/MacOS/WetOwl";
+        // exe_dir is …/WetOwl Desk.app/Contents/MacOS
+        let helpers = exe_dir.as_ref().and_then(|d| d.parent()).map(|c| c.join("Helpers").join(inside));
+        let mine = home.map(|h| h.join("Applications").join(inside));
+        [helpers, mine, Some(PathBuf::from("/Applications").join(inside))].into_iter().flatten().collect()
+    } else {
+        let name = if cfg!(windows) { "wetowl.exe" } else { "wetowl" };
+        let beside = exe_dir.map(|d| d.join("stage").join(name));
+        let app = home.map(|h| h.join(".local/opt/wetowl").join(name)).filter(|_| cfg!(target_os = "linux"));
+        [beside, app].into_iter().flatten().collect()
+    };
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 impl Stage {

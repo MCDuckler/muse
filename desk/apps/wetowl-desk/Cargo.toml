@@ -12,3 +12,6 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 wo-control = { version = "0.1.0", path = "../../crates/wo-control" }
 wo-deskcore.workspace = true
 wo-house = { version = "0.1.0", path = "../../crates/wo-house" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.191"
