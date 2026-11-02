@@ -14,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod server;
+pub mod v2;
 pub use server::{Server, Thumb};
 
 /// What the engine measured of a bus, as the show's sound (ShowAudio's JSON, no stems).

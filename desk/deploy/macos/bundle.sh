@@ -21,7 +21,7 @@ export MACOSX_DEPLOYMENT_TARGET=11.0
 
 targets=(aarch64-apple-darwin x86_64-apple-darwin)
 for t in "${targets[@]}"; do
-  cargo build --release -p wetowl-desk --target "$t"
+  cargo build --release -p wetowl-desk -p wetowl-stage --target "$t"
 done
 
 out="$desk/target/macos"
@@ -33,6 +33,9 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 lipo -create -output "$app/Contents/MacOS/wetowl-desk" \
   "target/aarch64-apple-darwin/release/wetowl-desk" "target/x86_64-apple-darwin/release/wetowl-desk"
 lipo -archs "$app/Contents/MacOS/wetowl-desk"
+# the Rust stage beside it (the Desk directing; chosen on the Show page)
+lipo -create -output "$app/Contents/MacOS/wetowl-stage" \
+  "target/aarch64-apple-darwin/release/wetowl-stage" "target/x86_64-apple-darwin/release/wetowl-stage"
 
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' apps/wetowl-desk/Cargo.toml | head -1)
 build="$(date -u +%Y%m%d%H%M)"
@@ -60,6 +63,7 @@ if [ -n "$stage" ]; then
   # inside first, then the bundle around it (a seal over unsigned code is "damaged")
   codesign --force --sign - --entitlements ../app/macos/Runner/Release.entitlements "$app/Contents/Helpers/WetOwl.app"
 fi
+codesign --force --sign - --identifier io.wetowl.stage "$app/Contents/MacOS/wetowl-stage"
 codesign --force --sign - --identifier io.wetowl.desk "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 

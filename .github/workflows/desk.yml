@@ -12,7 +12,7 @@ on:
   push:
     branches: [desk]
     # (the Rust stage's crates have their own workflow, stage-rust.yml, until the Desk carries the stage)
-    paths: ["desk/**", "!desk/crates/wo-shaders/**", "!desk/crates/wo-render/**", "!desk/crates/wo-dance/**", "!desk/crates/wo-milk/**", "!desk/crates/wo-show/**", "!desk/apps/wetowl-stage/**", "app/native/engine/**", "app/native/stage/**", "app/native/milk/**", "app/shaders/**", "app/macos/**", "app/lib/src/ui/show/**", "app/lib/src/state/show/**", ".github/workflows/desk.yml"]
+    paths: ["desk/**", "!desk/crates/wo-dance/**", "!desk/crates/wo-milk/**", "app/assets/show/**", "app/native/engine/**", "app/native/stage/**", "app/native/milk/**", "app/shaders/**", "app/macos/**", "app/lib/src/ui/show/**", "app/lib/src/state/show/**", ".github/workflows/desk.yml"]
   workflow_dispatch:
 
 jobs:
@@ -28,7 +28,7 @@ jobs:
         with:
           workspaces: desk
       - name: Build the Desk
-        run: cargo build --release -p wetowl-desk
+        run: cargo build --release -p wetowl-desk -p wetowl-stage
       - name: Engine and decoder tests
         run: cargo test --release --workspace
       - name: Smoke — the egui booth starts and draws (WARP, no GPU here)
@@ -41,7 +41,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force pkg | Out-Null
-          Copy-Item target/release/wetowl-desk.exe, bakeoff/bench.cmd pkg/
+          Copy-Item target/release/wetowl-desk.exe, target/release/wetowl-stage.exe, bakeoff/bench.cmd pkg/
           Copy-Item design/fonts/OFL-*.txt pkg/
           Compress-Archive -Path pkg/* -DestinationPath wetowl-desk-windows.zip -Force
       - uses: actions/upload-artifact@v4
@@ -117,6 +117,19 @@ jobs:
           grep -q 'STAGE fps=' "$log" || { echo "the stage never drew"; exit 1; }
           if grep -q "the Desk's show could not start" "$log"; then exit 1; fi
           echo "Metal shader refusals: $(grep -c 'Impeller validation' "$log" || true)"
+      - name: Smoke — the Desk opens the Rust stage, directs it, and it draws
+        timeout-minutes: 3
+        run: |
+          log="$HOME/Library/Logs/WetOwl Desk.log"
+          : > "$log"
+          WO_STAGE_RUST=1 WO_AUDIO=off WO_CONTROLLERS=off "$APP/Contents/MacOS/wetowl-desk" --bench 20 --stage --out "$PWD/smoke/rust" </dev/null >/dev/null 2>&1 &
+          desk=$!
+          sleep 14
+          screencapture -x smoke/mac-screen-rust.png || true
+          wait $desk || echo "the Desk exited with $?"
+          grep -E 'STAGE|stage:' "$log" | tail -8
+          grep -q 'STAGE fps=' "$log" || { echo "the Rust stage never drew"; exit 1; }
+          grep -E 'STAGE fps=' "$log" | grep -q 'cues=[1-9]' || { echo "the Rust stage heard no cue from the Desk"; exit 1; }
       - name: Smoke — every shader scene builds on Metal
         timeout-minutes: 6
         run: |

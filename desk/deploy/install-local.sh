@@ -13,13 +13,16 @@
 set -euo pipefail
 desk=$(cd "$(dirname "$0")/.." && pwd)
 cd "$desk"
-cargo build --release -p wetowl-desk
+cargo build --release -p wetowl-desk -p wetowl-stage
 
 dest="$HOME/.local/opt/wetowl-desk"
 mkdir -p "$dest" "$HOME/.local/state" "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/256x256/apps"
 # a new file renamed into place: replacing a running binary in place fails (text busy)
 install -m 755 target/release/wetowl-desk "$dest/wetowl-desk.new"
 mv -f "$dest/wetowl-desk.new" "$dest/wetowl-desk"
+# the Rust stage (the Desk directing; chosen on the Show page)
+install -m 755 target/release/wetowl-stage "$dest/wetowl-stage.new"
+mv -f "$dest/wetowl-stage.new" "$dest/wetowl-stage"
 printf '%s %s\n' "$(git rev-parse --short HEAD)" "$(date -u +%Y%m%d%H%M)" > "$dest/build.txt"
 if [ "${1:-}" = "--stage" ]; then
   (cd ../app && flutter build linux --release --dart-define=MUSE_SERVER="${MUSE_SERVER:-https://89-58-49-140.nip.io}" \

@@ -33,10 +33,18 @@ fn a_stage_reads_the_desk() {
     let heard_a = |f: &serde_json::Value| f["d"]["a"]["heard"]["low"].as_f64().unwrap_or(0.0) > 0.0;
     let mut frames = vec![];
     let mut sound = 0usize;
+    let (mut records, mut cues) = (0usize, 0usize);
     let t0 = Instant::now();
     while (frames.len() < 20 || !frames.iter().any(heard) || !frames.iter().any(heard_a) || sound == 0) && t0.elapsed() < Duration::from_secs(10) {
         d.tick();
         match ws.read() {
+            // ShowWire v2 beside the frames: the decks' records, the Desk's director's cue
+            Ok(Message::Text(t)) if t.starts_with(r#"{"t":"record""#) => records += 1,
+            Ok(Message::Text(t)) if t.starts_with(r#"{"t":"cue""#) => {
+                let c = serde_json::from_str::<serde_json::Value>(&t).unwrap();
+                assert!(c["cue"]["scene"].is_string(), "{t}");
+                cues += 1;
+            }
             Ok(Message::Text(t)) => {
                 assert!(t.starts_with(r#"{"t":"desk""#), "{t}");
                 frames.push(serde_json::from_str::<serde_json::Value>(&t).unwrap());
@@ -53,6 +61,7 @@ fn a_stage_reads_the_desk() {
         sleep(Duration::from_millis(5));
     }
     assert!(frames.len() >= 20, "{} frames", frames.len());
+    assert!(records >= 1 && cues >= 1, "{records} records, {cues} cues");
     assert_eq!(d.stage().stages, 1);
     let a = |f: &serde_json::Value| f["d"]["a"].clone();
     let (first, last) = (a(&frames[0]), a(&frames[frames.len() - 1]));

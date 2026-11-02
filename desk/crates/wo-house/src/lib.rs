@@ -114,6 +114,9 @@ pub struct Playlist {
 pub struct Analysis {
     #[serde(default)]
     pub duration_ms: Option<i64>,
+    /// How loud each bar is, 0..255 (by the downbeats), the song's shape.
+    #[serde(default)]
+    pub energy: Vec<i64>,
     /// "cold", "fade" or "".
     #[serde(default)]
     pub ends: String,
@@ -213,6 +216,7 @@ impl Analysis {
             t.markers = self.four_bars.iter().map(|&m| s(m)).collect();
         }
         t.phrases = self.phrases.iter().map(|&m| s(m)).collect();
+        t.energy = self.energy.iter().map(|&e| e.clamp(0, 255) as u8).collect();
         let st = self.structure.clone().unwrap_or_default();
         let drops = if st.drops_ms.is_empty() { &self.drops } else { &st.drops_ms };
         t.drops = drops.iter().map(|&m| s(m)).collect();

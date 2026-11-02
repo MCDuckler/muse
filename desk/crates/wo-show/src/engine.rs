@@ -39,6 +39,43 @@ pub struct Cue {
     pub why: String,
 }
 
+impl Cue {
+    /// As the wire carries it: the rigs in v1's JSON, each with its transformation even where
+    /// none is on (v1 leaves an idle one out, and reads it back as the defaults).
+    pub fn to_json(&self) -> serde_json::Value {
+        let rig = |r: &ShowRig| {
+            let mut j = r.to_json();
+            j["transform"] = r.transform.to_json();
+            j
+        };
+        serde_json::json!({
+            "scene": self.scene,
+            "rig": rig(&self.rig),
+            "from": self.from,
+            "rigFrom": self.rig_from.as_ref().map(rig),
+            "k": self.k,
+            "mosh": self.mosh,
+            "macros": serde_json::to_value(&self.macros).unwrap_or_default(),
+            "why": self.why,
+        })
+    }
+
+    pub fn from_json(j: &serde_json::Value) -> Cue {
+        let s = |k: &str| j.get(k).and_then(serde_json::Value::as_str).map(str::to_owned);
+        let rig = |k: &str| j.get(k).and_then(serde_json::Value::as_object).map(ShowRig::from_json);
+        Cue {
+            scene: s("scene"),
+            rig: rig("rig").unwrap_or_default(),
+            from: s("from"),
+            rig_from: rig("rigFrom"),
+            k: j.get("k").and_then(serde_json::Value::as_f64).unwrap_or(1.0),
+            mosh: j.get("mosh").and_then(serde_json::Value::as_i64).unwrap_or(0),
+            macros: j.get("macros").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default(),
+            why: s("why").unwrap_or_default(),
+        }
+    }
+}
+
 impl Default for Cue {
     fn default() -> Self {
         Cue { scene: None, rig: ShowRig::default(), from: None, rig_from: None, k: 1.0, mosh: 0, macros: ShowMacros::default(), why: String::new() }
@@ -108,6 +145,26 @@ impl Direct {
     /// A hit the hands landed (the stage flashes, fading).
     pub fn hit(&mut self) {
         self.hit_at = Some(self.clock);
+    }
+
+    /// The performer's NEXT (`by` 1) and PREVIOUS (-1): the scene beside this one among those
+    /// the director may use, cut to.
+    pub fn next(&mut self, by: i64) {
+        self.director.next(by, crate::director::SceneChange::Cut);
+    }
+
+    /// Another scene now, datamoshed into (the hands' MOSH).
+    pub fn mosh_next(&mut self) {
+        self.director.next(1, crate::director::SceneChange::Mosh);
+    }
+
+    /// The scene on held (the director picks no other), or let go.
+    pub fn hold(&mut self, on: bool) {
+        self.director.locked = on;
+    }
+
+    pub fn held(&self) -> bool {
+        self.director.locked
     }
 
     /// One frame, `dt` seconds after the last: the decks as the ear hears them, the room's
@@ -257,6 +314,47 @@ mod tests {
         assert_eq!(st.scene, direct.cue().scene);
         assert!(!st.genome.is_empty(), "the record's genome");
         assert_eq!(st.flat()["master.bar.index"], (40_000.0f64 / 1875.0).floor());
+    }
+
+    #[test]
+    fn a_cue_goes_over_the_wire_and_back_whole() {
+        let book = crate::scenes::SceneBook::shipped().only(IN_SCOPE);
+        let mut direct = Direct::new(&book, ShowDoc::default(), None, 5);
+        let r = record();
+        let a = ShowDeck::derive("A", Some(&r), true, 70_000.0, Channel::default(), ShowAudio { low: 0.6, ..Default::default() });
+        direct.macros.strobe = 0.5;
+        direct.macros.tune.insert("ascii.cell".into(), 1.2);
+        let (cue, _) = direct.tick(1.0 / 60.0, Room { a, b: ShowDeck { name: "B".into(), ..Default::default() }, ..Default::default() }, Flat::new());
+        assert!(cue.scene.is_some());
+        let back = Cue::from_json(&serde_json::from_str(&cue.to_json().to_string()).unwrap());
+        assert_eq!(back, cue);
+        // the facts too
+        let facts: RecordFacts = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(facts, r);
+    }
+
+    #[test]
+    fn the_hands_step_and_hold_the_scenes() {
+        let book = crate::scenes::SceneBook::shipped().only(crate::scenes::DRAWN);
+        let mut direct = Direct::new(&book, ShowDoc::default(), None, 5);
+        let r = record();
+        let room = |ms: f64| Room { a: ShowDeck::derive("A", Some(&r), true, ms, Channel::default(), ShowAudio::default()), b: ShowDeck { name: "B".into(), ..Default::default() }, ..Default::default() };
+        let (c0, _) = direct.tick(1.0 / 60.0, room(1000.0), Flat::new());
+        direct.next(1);
+        let (c1, _) = direct.tick(1.0 / 60.0, room(1016.0), Flat::new());
+        assert_ne!(c0.scene, c1.scene, "NEXT changed the scene");
+        direct.next(-1);
+        let (c2, _) = direct.tick(1.0 / 60.0, room(1033.0), Flat::new());
+        assert_eq!(c2.scene, c0.scene, "PREVIOUS went back");
+        direct.hold(true);
+        for i in 0..(60 * 120) {
+            let (c, _) = direct.tick(1.0 / 60.0, room(1050.0 + i as f64 * 16.67), Flat::new());
+            assert_eq!(c.scene, c0.scene, "held through two minutes");
+        }
+        let n = direct.director.moshes;
+        direct.mosh_next();
+        let (c3, _) = direct.tick(1.0 / 60.0, room(200_000.0), Flat::new());
+        assert_eq!(c3.mosh, n + 1, "MOSH moshed");
     }
 
     #[test]

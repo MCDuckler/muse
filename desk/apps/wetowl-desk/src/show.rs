@@ -249,6 +249,23 @@ impl App {
         }
         if !on && let Some(k) = &v.kept_screen {
             clip_text(p, pos2(inner.left() + 70.0, y + 14.0), &format!("opens full screen on {k}"), 12.0, col(theme::FAINT_ON_GLASS), inner.width() - 70.0);
+            y += 18.0;
+        }
+
+        // which stage: the WetOwl app's, or the Rust one (the Desk directing; its scenes
+        // so far), where it is installed beside the Desk
+        if v.rust_here {
+            y += 14.0;
+            label(p, pos2(inner.left(), y + 10.0), Align2::LEFT_CENTER, "Stage", col(theme::SOFT));
+            let kinds = [("app".to_owned(), "WetOwl app".to_owned()), ("rust".to_owned(), "Rust · 5 scenes".to_owned())];
+            let picked;
+            (y, picked) = chips(ui, p, Rect::from_min_max(pos2(inner.left() + 70.0, y - 4.0), pos2(inner.right(), inner.bottom())), true, &kinds, if v.rust { "rust" } else { "app" }, "stage-kind");
+            if let Some(k) = picked {
+                desk.set_rust_stage(k == "rust");
+            }
+            if v.rust && let Some(why) = &v.why {
+                clip_text(p, pos2(inner.left() + 70.0, y + 14.0), why, 12.0, col(theme::FAINT_ON_GLASS), inner.width() - 70.0);
+            }
         }
     }
 }

@@ -351,7 +351,8 @@ impl Dynamics {
 // ------------------------------------------------------------------ the hands
 
 /// The performer's hands on the show.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ShowMacros {
     /// A master for everything, 0..1.
     pub intensity: f64,

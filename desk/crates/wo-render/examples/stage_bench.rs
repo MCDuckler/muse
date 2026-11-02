@@ -47,7 +47,7 @@ fn main() {
             }
             let f = stage_frame(&st, &book, t);
             let t0 = Instant::now();
-            let cmd = stage.draw(&gpu, &f, 1.0 / 60.0, &view, w, h, None);
+            let cmd = stage.draw(&gpu, &f, 1.0 / 60.0, Some(&view), w, h, None);
             gpu.queue.submit([cmd]);
             let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
             if i >= 30 {
@@ -62,7 +62,7 @@ fn main() {
             let a = ShowDeck::derive("A", Some(&r), true, t * 1000.0, Channel::default(), ShowAudio::default());
             let st = ShowState { a, scene: Some(scene.into()), ..Default::default() };
             let f = stage_frame(&st, &book, t);
-            let cmd = stage.draw(&gpu, &f, 1.0 / 60.0, &view, w, h, None);
+            let cmd = stage.draw(&gpu, &f, 1.0 / 60.0, Some(&view), w, h, None);
             gpu.queue.submit([cmd]);
             if i % 3 == 2 {
                 let _ = gpu.device.poll(wgpu::PollType::Poll);

@@ -153,7 +153,7 @@ fn every_scene_and_way_of_blending_draws_as_its_golden() {
             let mut st = state(case.scene, t, &mut dyns);
             (case.edit)(&mut st, &book);
             let f = stage_frame(&st, &book, 10.0 + t);
-            let cmd = stage.draw(&gpu, &f, 1.0 / 60.0, &view, W, H, None);
+            let cmd = stage.draw(&gpu, &f, 1.0 / 60.0, Some(&view), W, H, None);
             gpu.queue.submit([cmd]);
             assert_eq!(stage.drawn.missing, None, "{}", case.name);
         }

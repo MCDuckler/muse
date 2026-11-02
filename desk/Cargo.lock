@@ -4651,8 +4651,12 @@ dependencies = [
 name = "wetowl-stage"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
+ "tungstenite",
  "winit",
  "wo-render",
+ "wo-show",
+ "wo-wire",
 ]
 
 [[package]]
@@ -5338,6 +5342,7 @@ dependencies = [
  "wo-decode",
  "wo-engine",
  "wo-house",
+ "wo-show",
  "wo-wave",
  "wo-wire",
 ]
@@ -5407,6 +5412,7 @@ dependencies = [
 name = "wo-show"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
 ]
 
@@ -5424,6 +5430,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tungstenite",
+ "wo-show",
 ]
 
 [[package]]

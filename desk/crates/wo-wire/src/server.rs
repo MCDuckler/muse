@@ -58,6 +58,11 @@ struct Heard {
     shown: Option<Shown>,
     /// What a stage is told first (crate::hello), with the Desk's house once signed in.
     hello: Option<String>,
+    /// Lines a stage connecting later is told after the hello, newest by key (v2: each
+    /// deck's record, the cue).
+    kept: std::collections::BTreeMap<String, String>,
+    /// Stages that said they are v2 (the Rust stage).
+    v2: usize,
 }
 
 pub struct Server {
@@ -141,6 +146,18 @@ impl Server {
         }
     }
 
+    /// A line to every stage, and to every stage that connects from now on (the newest of
+    /// its `key`).
+    pub fn keep(&self, key: &str, line: String) {
+        self.heard.lock().unwrap().kept.insert(key.to_owned(), line.clone());
+        self.say(&line);
+    }
+
+    /// Whether a v2 stage (one the Desk directs) is reading.
+    pub fn v2(&self) -> bool {
+        self.heard.lock().unwrap().v2 > 0
+    }
+
     /// How many stages are reading.
     pub fn stages(&self) -> usize {
         let h = self.heard.lock().unwrap();
@@ -178,15 +195,22 @@ fn serve(stream: TcpStream, token: &str, heard: Arc<Mutex<Heard>>) {
     let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(4)));
     let (tx, rx) = mpsc::sync_channel::<Message>(BACKLOG);
     let alive = Arc::new(AtomicBool::new(true));
-    let hello = {
+    let (hello, kept) = {
         let mut h = heard.lock().unwrap();
         h.links.push(Link { tx, alive: alive.clone() });
-        h.hello.clone().unwrap_or_else(|| crate::hello(None))
+        (h.hello.clone().unwrap_or_else(|| crate::hello(None)), h.kept.values().cloned().collect::<Vec<_>>())
     };
     let _ = ws.send(Message::text(hello));
-    run(&mut ws, &rx, &alive, &heard);
+    for k in kept {
+        let _ = ws.send(Message::text(k));
+    }
+    let mut v2 = false;
+    run(&mut ws, &rx, &alive, &heard, &mut v2);
     alive.store(false, Ordering::Relaxed);
     let mut h = heard.lock().unwrap();
+    if v2 {
+        h.v2 -= 1;
+    }
     h.links.retain(|l| l.alive.load(Ordering::Relaxed));
     if h.links.is_empty() {
         h.thumb = None;
@@ -194,7 +218,7 @@ fn serve(stream: TcpStream, token: &str, heard: Arc<Mutex<Heard>>) {
     }
 }
 
-fn run(ws: &mut WebSocket<TcpStream>, rx: &Receiver<Message>, alive: &AtomicBool, heard: &Mutex<Heard>) {
+fn run(ws: &mut WebSocket<TcpStream>, rx: &Receiver<Message>, alive: &AtomicBool, heard: &Mutex<Heard>, v2: &mut bool) {
     while alive.load(Ordering::Relaxed) {
         let mut wrote = false;
         while let Ok(m) = rx.try_recv() {
@@ -215,7 +239,12 @@ fn run(ws: &mut WebSocket<TcpStream>, rx: &Receiver<Message>, alive: &AtomicBool
                 }
             }
             Ok(Message::Text(t)) => {
-                if t.starts_with(r#"{"t":"ping""#) {
+                if t.as_str() == crate::v2::STAGE_HELLO {
+                    if !*v2 {
+                        *v2 = true;
+                        heard.lock().unwrap().v2 += 1;
+                    }
+                } else if t.starts_with(r#"{"t":"ping""#) {
                     let _ = ws.send(Message::text(t.replacen("\"ping\"", "\"pong\"", 1)));
                 } else if let Some(s) = crate::shown(&t) {
                     heard.lock().unwrap().shown = Some(s);
@@ -290,5 +319,35 @@ mod tests {
         }
         assert_eq!(server.stages(), 0);
         assert!(server.thumb().is_none(), "the picture goes with the last stage");
+    }
+
+    #[test]
+    fn a_stage_connecting_later_is_told_what_was_kept_and_says_it_is_v2() {
+        let server = Server::open().unwrap();
+        server.keep("record.A", crate::v2::record("A", None));
+        server.keep("cue", r#"{"t":"cue","cue":{"scene":"x"}}"#.into());
+        server.keep("cue", r#"{"t":"cue","cue":{"scene":"y"}}"#.into());
+        let (mut ws, _) = tungstenite::connect(server.url()).unwrap();
+        assert!(ws.read().unwrap().to_text().unwrap().starts_with(r#"{"t":"hello""#));
+        // the kept lines by key, the newest of each
+        assert_eq!(ws.read().unwrap().to_text().unwrap(), r#"{"t":"cue","cue":{"scene":"y"}}"#);
+        assert_eq!(ws.read().unwrap().to_text().unwrap(), crate::v2::record("A", None));
+        assert!(!server.v2());
+        ws.send(Message::text(crate::v2::STAGE_HELLO)).unwrap();
+        for _ in 0..200 {
+            if server.v2() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(server.v2());
+        drop(ws);
+        for _ in 0..200 {
+            if !server.v2() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!server.v2(), "gone with the stage");
     }
 }

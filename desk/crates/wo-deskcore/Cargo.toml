@@ -14,6 +14,7 @@ wo-booth = { path = "../wo-booth" }
 wo-house = { path = "../wo-house" }
 wo-control = { path = "../wo-control" }
 wo-wire = { path = "../wo-wire" }
+wo-show = { path = "../wo-show" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 memory-stats = "1.2.0"
 cpu-time = "1.0.0"

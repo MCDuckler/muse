@@ -14,6 +14,7 @@ pub mod backdrop;
 pub mod bench;
 pub mod library;
 pub mod records;
+mod show;
 pub mod stage;
 pub mod synth;
 pub mod theme;
@@ -1180,6 +1181,12 @@ impl Desk {
         self.stage.thumb()
     }
 
+    /// The Rust stage (apps/wetowl-stage, the Desk directing) instead of the WetOwl app's:
+    /// kept for the next time; a window open now starts again as the other.
+    pub fn set_rust_stage(&mut self, on: bool) {
+        self.stage.set_rust(on);
+    }
+
     /// Where a stage window started by hand connects (`wetowl --stage <url>`).
     pub fn stage_url(&mut self) -> Option<String> {
         self.stage.url()
@@ -1242,6 +1249,15 @@ impl Desk {
         let heard = self.engine.features(Bus::Master, from, to).map(|m| wo_wire::Heard { master: audio(&m), spectrum: m.spectrum.to_vec() });
         let frame = wo_wire::Frame { a: deck(0), b: deck(1), heard, mix: self.show_mix() };
         self.stage.say(&wo_wire::frame(&frame));
+        // the Desk directs (ShowWire v2): each deck's record as facts when it changes, then
+        // the director's cue — the Rust stage draws it, a v1 stage directs itself
+        for i in 0..2 {
+            let s = &self.slots[i];
+            let t = &s.timing;
+            let key = (s.record.id, s.record.title.clone(), t.grid.beats.len(), t.grid.bar_one, t.sections.len(), t.energy.len(), t.drops.len());
+            self.stage.record(i, key, || show::facts_of(&s.record, t));
+        }
+        self.stage.direct(&frame);
         // and the room's sound over the same span, for MilkDrop: what the master
         // plays, every fader, EQ and kill in it (v1's stage read the records instead)
         let rate = self.engine.rate();

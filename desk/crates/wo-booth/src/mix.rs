@@ -86,6 +86,8 @@ pub struct Timing {
     pub ins: Vec<Place>,
     /// Each bar's start and loudness (dBFS), the structure's.
     pub bars_db: Vec<(f64, f64)>,
+    /// How loud each bar is, 0..255, by the grid's bars (the analysis's; the show reads it).
+    pub energy: Vec<u8>,
     /// Where a hand said it leaves, and comes in.
     pub hand_out: Option<f64>,
     pub hand_in: Option<f64>,

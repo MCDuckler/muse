@@ -499,11 +499,12 @@ impl Stage {
         self.passes.contains_key(shader)
     }
 
-    /// One frame, `dt` seconds after the last, into `out` (`out_w`×`out_h`, the stage's
-    /// output format) — and into `thumb` (an RGBA8 picture of any size) where given. The
-    /// commands to submit; the frame's uniforms are already on their way.
+    /// One frame, `dt` seconds after the last, for an output `out_w`×`out_h`: into `out`
+    /// (the stage's output format) and into `thumb` (an RGBA8 picture of any size), each
+    /// where given (a hidden window draws only the picture). The commands to submit; the
+    /// frame's uniforms are already on their way.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw(&mut self, gpu: &Gpu, frame: &StageFrame, dt: f64, out: &wgpu::TextureView, out_w: u32, out_h: u32, thumb: Option<&wgpu::TextureView>) -> wgpu::CommandBuffer {
+    pub fn draw(&mut self, gpu: &Gpu, frame: &StageFrame, dt: f64, out: Option<&wgpu::TextureView>, out_w: u32, out_h: u32, thumb: Option<&wgpu::TextureView>) -> wgpu::CommandBuffer {
         // held still: the frame from before the freeze, the hands' white and black over it
         let f = if frame.freeze {
             let mut h = self.held.get_or_insert_with(|| frame.clone()).clone();
@@ -725,7 +726,9 @@ impl Stage {
         let mixk = if leaving { f.k } else { 1.0 };
         let bloom0 = &self.bloom[0].as_ref().unwrap().view;
         let fl = [out_w as f32, out_h as f32, p.bloom, p.vignette, p.grain, p.tone, p.fringe, f.common[0], if self.agx { 1.0 } else { 0.0 }, mixk, f.white, f.black];
-        self.finish.draw(gpu, &mut enc, &mut self.arena, &self.sampler, out, &fl, &[&current.view, bloom0, from], false);
+        if let Some(out) = out {
+            self.finish.draw(gpu, &mut enc, &mut self.arena, &self.sampler, out, &fl, &[&current.view, bloom0, from], false);
+        }
         if let Some(t) = thumb {
             self.finish_thumb.draw(gpu, &mut enc, &mut self.arena, &self.sampler, t, &fl, &[&current.view, bloom0, from], false);
         }

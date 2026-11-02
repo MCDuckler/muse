@@ -60,7 +60,7 @@ impl ShowAudio {
 }
 
 /// A section of the record (its form): intro, verse, build, drop, breakdown, outro…
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Section {
     pub label: String,
     pub start_ms: f64,
@@ -68,7 +68,8 @@ pub struct Section {
 }
 
 /// What the Desk knows of a record and sends once per load.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct RecordFacts {
     pub track_id: Option<i64>,
     pub title: Option<String>,

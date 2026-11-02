@@ -33,7 +33,14 @@ pub(crate) struct Stage {
     reading: Option<Instant>,
     /// What a stage is told first: the Desk's house, once signed in.
     hello: Option<String>,
+    /// The Desk's director (ShowWire v2), from the first frame a stage reads.
+    show: Option<crate::show::Show>,
+    /// What each deck's facts were made from, to make them again only on a change.
+    facts_key: [Option<FactsKey>; 2],
 }
+
+/// A deck's record and how much of its timing is known.
+pub(crate) type FactsKey = (i64, String, usize, usize, usize, usize, usize);
 
 /// A stage reading this long without saying what it shows is one from before the Desk
 /// (a WetOwl app whose stage does not direct the show itself).
@@ -59,12 +66,20 @@ pub struct StageView {
     pub told: Shown,
     /// The screen the Desk keeps the stage on (full screen there when it opens).
     pub kept_screen: Option<String>,
+    /// The stage is the Rust one (the Desk directs), asked for; and whether it is here.
+    pub rust: bool,
+    pub rust_here: bool,
+    /// Why the director chose the scene on, in words (the Rust stage's show).
+    pub why: Option<String>,
 }
 
 /// What the Desk keeps of the stage between runs: the screen it fills.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Kept {
     screen: Option<String>,
+    /// The Rust stage rather than the WetOwl app's.
+    #[serde(default)]
+    rust: bool,
 }
 
 impl Kept {
@@ -82,6 +97,15 @@ impl Kept {
             let _ = std::fs::write(f, serde_json::to_string_pretty(self).unwrap());
         }
     }
+}
+
+/// The Rust stage's program: beside the Desk's own (on a Mac, in its bundle's MacOS).
+pub fn rust_program() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("WO_STAGE_RUST").filter(|p| !p.is_empty() && p != "1") {
+        return Some(PathBuf::from(p));
+    }
+    let name = if cfg!(windows) { "wetowl-stage.exe" } else { "wetowl-stage" };
+    std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(name))).filter(|p| p.is_file())
 }
 
 /// The stage window's program: WO_STAGE, else the stage installed beside the Desk
@@ -135,7 +159,8 @@ impl Stage {
             return;
         }
         self.close();
-        let Some(program) = program() else {
+        let rust = self.kept().rust || std::env::var_os("WO_STAGE_RUST").is_some();
+        let Some(program) = rust.then(rust_program).flatten().or_else(program) else {
             self.trouble = Some("no stage here: install the WetOwl app, or set WO_STAGE to its program".into());
             return;
         };
@@ -234,13 +259,52 @@ impl Stage {
         self.kept = std::cell::OnceCell::from(k);
     }
 
+    /// A deck's record, as the show's facts, made again when `key` says it changed: kept for
+    /// the stages (now and to come).
+    pub(crate) fn record(&mut self, deck: usize, key: FactsKey, facts: impl FnOnce() -> wo_show::deck::RecordFacts) {
+        if self.facts_key[deck].as_ref() == Some(&key) {
+            return;
+        }
+        self.facts_key[deck] = Some(key);
+        let f = facts();
+        let line = self.show.get_or_insert_with(crate::show::Show::new).record(deck, Some(f));
+        if let (Some(line), Some(w)) = (line, &self.wire) {
+            w.keep(["record.A", "record.B"][deck], line);
+        }
+    }
+
+    /// The director's frame: its cue to the stages when it changed.
+    pub(crate) fn direct(&mut self, frame: &wo_wire::Frame) {
+        let line = self.show.get_or_insert_with(crate::show::Show::new).tick(frame);
+        if let (Some(line), Some(w)) = (line, &self.wire) {
+            w.keep("cue", line);
+        }
+    }
+
+    /// The Rust stage, or the WetOwl app's, from the next window on (one open now starts
+    /// again).
+    pub(crate) fn set_rust(&mut self, on: bool) {
+        if self.kept().rust == on {
+            return;
+        }
+        let k = Kept { rust: on, ..self.kept().clone() };
+        self.keep(k);
+        if self.child.is_some() {
+            self.close();
+            self.open();
+        }
+    }
+
     pub(crate) fn hand(&mut self, h: Hand) {
+        if let Some(s) = &mut self.show {
+            s.hand(&h);
+        }
         match &h {
             Hand::Blackout(on) => self.blackout = *on,
             Hand::Freeze(on) => self.freeze = *on,
             // the screen chosen is kept for the next time the stage opens
-            Hand::Screen(name) => self.keep(Kept { screen: Some(name.clone()) }),
-            Hand::Full(false) => self.keep(Kept { screen: None }),
+            Hand::Screen(name) => self.keep(Kept { screen: Some(name.clone()), ..self.kept().clone() }),
+            Hand::Full(false) => self.keep(Kept { screen: None, ..self.kept().clone() }),
             _ => {}
         }
         self.say(&wo_wire::hand(h));
@@ -255,6 +319,27 @@ impl Stage {
         // a stage that tells its own blackout and freeze (the Desk's PERFORM) is believed;
         // an older one is taken to do as it was told
         let perform = !shown.sets.is_empty() || !shown.screens.is_empty() || shown.said_n > 0 || shown.look.is_some();
+        // a Rust stage draws what the Desk directs: the Desk's own word on the show
+        let directed = self.wire.as_ref().is_some_and(wo_wire::Server::v2).then_some(self.show.as_ref()).flatten();
+        if let Some(s) = directed {
+            let cue = s.cue();
+            let name = cue.scene.as_ref().map(|id| s.direct.looks.get(id).map_or(id.clone(), |l| l.name.clone()));
+            return StageView {
+                stages,
+                starting: false,
+                trouble: None,
+                scene: name.clone(),
+                untold: false,
+                held: s.direct.held(),
+                blackout: cue.macros.blackout,
+                freeze: cue.macros.freeze,
+                told: Shown { scene: name, held: s.direct.held(), blackout: cue.macros.blackout, freeze: cue.macros.freeze, ..shown },
+                kept_screen: self.kept().screen.clone(),
+                rust: self.kept().rust,
+                rust_here: rust_program().is_some(),
+                why: Some(cue.why.clone()).filter(|w| !w.is_empty()),
+            };
+        }
         StageView {
             stages,
             starting: stages == 0 && self.child.is_some() && waiting,
@@ -266,6 +351,9 @@ impl Stage {
             freeze: stages > 0 && if perform { shown.freeze } else { self.freeze },
             told: shown,
             kept_screen: self.kept().screen.clone(),
+            rust: self.kept().rust,
+            rust_here: rust_program().is_some(),
+            why: None,
         }
     }
 

@@ -29,6 +29,11 @@ impl ComboScores {
     /// Below this a combination does not come by itself.
     pub const FLOOR: f64 = 0.3;
 
+    /// The audit's table as the app ships it (taken in at build time).
+    pub fn shipped() -> Option<ComboScores> {
+        ComboScores::parse(include_str!("../../../../app/assets/show/combo_scores.json"))
+    }
+
     pub fn parse(text: &str) -> Option<ComboScores> {
         let j: Value = serde_json::from_str(text).ok()?;
         let ix = |k: &str| -> Option<HashMap<String, usize>> { Some(j.get(k)?.as_array()?.iter().enumerate().filter_map(|(i, v)| v.as_str().map(|s| (s.to_owned(), i))).collect()) };
