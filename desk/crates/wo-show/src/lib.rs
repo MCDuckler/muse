@@ -4,9 +4,13 @@
 //! spec. Everything here reads and writes v1's JSON as v1 does, so show.json, the sets and the
 //! favourites stay shared while both exist.
 pub mod combos;
+pub mod deck;
+pub mod faves;
 pub mod json;
 pub mod plan;
 pub mod rig;
+pub mod scores;
+pub mod taste;
 
 pub use combos::{Combo, Fx, Mask, Mix};
 pub use rig::{Figure, Ground, Look, SceneMeta, ShowRig};
