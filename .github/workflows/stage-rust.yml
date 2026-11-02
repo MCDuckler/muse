@@ -7,7 +7,7 @@ name: Stage (Rust)
 on:
   push:
     branches: [desk]
-    paths: ["desk/crates/wo-shaders/**", "desk/crates/wo-render/**", "desk/apps/wetowl-stage/**", "app/shaders/**", ".github/workflows/stage-rust.yml"]
+    paths: ["desk/crates/wo-shaders/**", "desk/crates/wo-render/**", "desk/crates/wo-dance/**", "desk/crates/wo-milk/**", "desk/apps/wetowl-stage/**", "app/shaders/**", "app/assets/show/dance/**", ".github/workflows/stage-rust.yml"]
   workflow_dispatch:
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
           key: stage-rust
       - name: "A Vulkan driver (Linux: Mesa's lavapipe, on the CPU)"
         if: runner.os == 'Linux'
-        run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers xvfb
+        run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers xvfb libxkbcommon-x11-0
       - name: The shaders fitted, read and written for Metal, Direct3D and Vulkan
         run: cargo test --release -p wo-shaders
       - name: The scenes drawn on this GPU API
@@ -39,6 +39,12 @@ jobs:
           # Windows: Direct3D 12 (WARP on the runner); elsewhere the platform's own
           WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}
         run: cargo run --release -p wo-render --example scene_shots -- "$GITHUB_WORKSPACE/shots-${{ runner.os }}"
+      - name: A dancer read, posed and drawn on this GPU API
+        env:
+          WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}
+        run: |
+          cargo test --release -p wo-dance
+          cargo run --release -p wo-dance --example dancer_shot -- ../app/assets/show/dance/chris long22 "$GITHUB_WORKSPACE/shots-${{ runner.os }}/dancer.png"
       - name: The stage window, full screen on a screen chosen by name
         env:
           WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}
