@@ -11,7 +11,7 @@ name: Desk
 on:
   push:
     branches: [desk]
-    paths: ["desk/**", "app/native/engine/**", "app/macos/**", "app/lib/src/ui/show/**", "app/lib/src/state/show/**", ".github/workflows/desk.yml"]
+    paths: ["desk/**", "app/native/engine/**", "app/native/stage/**", "app/shaders/**", "app/macos/**", "app/lib/src/ui/show/**", "app/lib/src/state/show/**", ".github/workflows/desk.yml"]
   workflow_dispatch:
 
 jobs:
