@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+
+import 'shader_floats.dart';
 import 'package:muse/src/ui/show/show_words.dart';
 
 void main() {
@@ -109,10 +111,7 @@ void main() {
   group('the shader', () {
     test('its floats are the ones WordsParams names, in its order', () {
       final src = File('shaders/show/sim/words_fx.frag').readAsStringSync();
-      final decl = RegExp(r'uniform\s+(float|vec2|vec3|vec4)\s+(\w+)\s*;');
-      final inFile = [
-        for (final m in decl.allMatches(src)) (m.group(2)!, switch (m.group(1)) { 'float' => 1, 'vec2' => 2, 'vec3' => 3, _ => 4 })
-      ];
+      final inFile = shaderFloats('shaders/show/sim/words_fx.frag');
       expect(inFile, WordsParams.uniforms);
       expect(WordsParams.length, inFile.fold(0, (a, u) => a + u.$2));
       expect(WordsParams.at['uResolution'], 0);

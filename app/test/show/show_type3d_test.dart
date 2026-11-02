@@ -1,10 +1,11 @@
 // The 3D type: what the hands say of it (kept, read back, the record's words in a
 // line), its line as a distance field, and its frame's numbers for either stage.
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+
+import 'shader_floats.dart';
 import 'package:muse/src/state/show/show_pool.dart';
 import 'package:muse/src/state/show/show_rig.dart';
 import 'package:muse/src/state/show/show_state.dart';
@@ -102,11 +103,7 @@ void main() {
   });
 
   test('the floats are the shader\'s, in its order (both stages set them so)', () {
-    final declared = <(String, int)>[
-      for (final m in RegExp(r'^uniform (float|vec2|vec3|vec4) (\w+);', multiLine: true).allMatches(File('shaders/show/sim/type3d.frag').readAsStringSync()))
-        (m.group(2)!, switch (m.group(1)) { 'vec2' => 2, 'vec3' => 3, 'vec4' => 4, _ => 1 }),
-    ];
-    expect(Type3dParams.uniforms, declared);
+    expect(Type3dParams.uniforms, shaderFloats('shaders/show/sim/type3d.frag'));
   });
 
   test('two lines: the next set ahead, turned to on its moment; the bends a phrase picks are the hands\'', () async {

@@ -49,6 +49,9 @@
 // colour premultiplied by it where uPremul (a canvas), straight otherwise (the native
 // stage's blend reads the coverage).
 
+// Floats side by side are packed four to a vec4, in the same order (the same setFloat
+// indices, the native stage's order too): Metal gives each uniform a buffer slot of its
+// own and has 31. Each name is a #define of its component.
 uniform vec2 uResolution;
 uniform float uTime;
 uniform vec3 uRotX;
@@ -57,14 +60,16 @@ uniform vec3 uRotZ;
 uniform vec3 uPos;
 uniform vec2 uHalf;
 uniform vec2 uHalfB;
-uniform float uRange;
-uniform float uRangeB;
-uniform float uMix;
-uniform float uMixMode;
-uniform float uSeed;
-uniform float uDepth;
-uniform float uBevel;
-uniform float uWave;
+uniform vec4 uT00;  // uRange uRangeB uMix uMixMode
+#define uRange uT00.x
+#define uRangeB uT00.y
+#define uMix uT00.z
+#define uMixMode uT00.w
+uniform vec4 uT01;  // uSeed uDepth uBevel uWave
+#define uSeed uT01.x
+#define uDepth uT01.y
+#define uBevel uT01.z
+#define uWave uT01.w
 uniform float uWavePhase;
 uniform float uTwist;
 uniform vec4 uDeformA;
@@ -74,10 +79,11 @@ uniform float uLook;
 uniform vec3 uInk;
 uniform vec3 uInk2;
 uniform vec3 uRim;
-uniform float uGlow;
-uniform float uKick;
-uniform float uFlash;
-uniform float uFov;
+uniform vec4 uT10;  // uGlow uKick uFlash uFov
+#define uGlow uT10.x
+#define uKick uT10.y
+#define uFlash uT10.z
+#define uFov uT10.w
 uniform vec2 uMirror;
 uniform float uGroundOn;
 uniform float uPremul;

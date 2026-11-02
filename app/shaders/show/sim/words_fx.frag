@@ -22,23 +22,38 @@
 // A snare may slip rows (uGlitch); a drop's kick may pull the reds and blues apart
 // (uSplit); a word flares as it comes (uFlash).
 
+// Floats side by side are packed four to a vec4, in the same order (the same setFloat
+// indices, the native stage's order too): Metal gives each uniform a buffer slot of its
+// own and has 31. Each name is a #define of its component.
 uniform vec2 uResolution;
-uniform float uTime;
-uniform float uKick;
-uniform float uSnare;
-uniform float uLow;
-uniform float uBeat;
-uniform float uShadow;     // the shadow's reach, pixels
-uniform float uShadowK;    // how dark it is, 0..1
-uniform float uSplit;      // the chromatic split, pixels
-uniform float uGlitch;     // 0..1
+// uShadow: the shadow's reach, pixels
+// uShadowK: how dark it is, 0..1
+// uSplit: the chromatic split, pixels
+// uGlitch: 0..1
+uniform vec4 uW00;  // uTime uKick uSnare uLow
+#define uTime uW00.x
+#define uKick uW00.y
+#define uSnare uW00.z
+#define uLow uW00.w
+uniform vec4 uW01;  // uBeat uShadow uShadowK uSplit
+#define uBeat uW01.x
+#define uShadow uW01.y
+#define uShadowK uW01.z
+#define uSplit uW01.w
+uniform float uGlitch;
 uniform vec3 uInk;
 uniform vec3 uAccent;
-uniform float uAccentK;    // the word being sung in the accent, 0..1
-uniform float uDimK;       // an unsung word's share, karaoke
-uniform float uFadeIn;     // seconds a word takes to come
-uniform float uFlash;      // how much a word flares as it comes
-uniform float uCur;        // which picture holds the line on: 0 uT0, 1 uT1
+// uAccentK: the word being sung in the accent, 0..1
+// uDimK: an unsung word's share, karaoke
+// uFadeIn: seconds a word takes to come
+// uFlash: how much a word flares as it comes
+// uCur: which picture holds the line on: 0 uT0, 1 uT1
+uniform vec4 uW10;  // uAccentK uDimK uFadeIn uFlash
+#define uAccentK uW10.x
+#define uDimK uW10.y
+#define uFadeIn uW10.z
+#define uFlash uW10.w
+uniform float uCur;
 uniform vec4 uRectA;       // where the line's picture sits on the stage, 0..1
 uniform float uFadeA;
 uniform vec2 uScaleA;      // about its middle
@@ -52,10 +67,12 @@ uniform vec4 uAgeA3;
 uniform vec4 uRectB;       // the line before, going
 uniform float uFadeB;
 uniform vec2 uScaleB;
-uniform float uRiseB;      // lifted, 0..1 of the height
-uniform float uModeB;
-uniform float uOnB;
-uniform float uKB;
+// uRiseB: lifted, 0..1 of the height
+uniform vec4 uW20;  // uRiseB uModeB uOnB uKB
+#define uRiseB uW20.x
+#define uModeB uW20.y
+#define uOnB uW20.z
+#define uKB uW20.w
 uniform vec4 uAgeB0;
 uniform vec4 uAgeB1;
 uniform vec4 uAgeB2;
