@@ -12,7 +12,7 @@ on:
   push:
     branches: [desk]
     # (the Rust stage's crates have their own workflow, stage-rust.yml, until the Desk carries the stage)
-    paths: ["desk/**", "!desk/crates/wo-shaders/**", "!desk/crates/wo-render/**", "!desk/crates/wo-dance/**", "!desk/crates/wo-milk/**", "!desk/apps/wetowl-stage/**", "app/native/engine/**", "app/native/stage/**", "app/native/milk/**", "app/shaders/**", "app/macos/**", "app/lib/src/ui/show/**", "app/lib/src/state/show/**", ".github/workflows/desk.yml"]
+    paths: ["desk/**", "!desk/crates/wo-shaders/**", "!desk/crates/wo-render/**", "!desk/crates/wo-dance/**", "!desk/crates/wo-milk/**", "!desk/crates/wo-show/**", "!desk/apps/wetowl-stage/**", "app/native/engine/**", "app/native/stage/**", "app/native/milk/**", "app/shaders/**", "app/macos/**", "app/lib/src/ui/show/**", "app/lib/src/state/show/**", ".github/workflows/desk.yml"]
   workflow_dispatch:
 
 jobs:

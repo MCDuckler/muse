@@ -132,6 +132,9 @@ fn hash31(s: &str) -> u32 {
     h
 }
 
+/// The hands' taste for a combination.
+pub type Taste = Box<dyn Fn(&Combo) -> f64 + Send>;
+
 pub struct Director {
     pub scenes: Vec<SceneMeta>,
     rng: Rng,
@@ -171,7 +174,7 @@ pub struct Director {
     scene_book: HashMap<String, String>,
     combo_book: HashMap<String, Combo>,
     /// The hands' taste for a combination (taste.rs); None: no lean.
-    pub taste: Option<Box<dyn Fn(&Combo) -> f64 + Send>>,
+    pub taste: Option<Taste>,
     /// The family a scene belongs to, by id.
     pub families: BTreeMap<String, String>,
     /// How much each scene has been on, seconds, fading with a twenty-minute half-life.

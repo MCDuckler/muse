@@ -168,7 +168,7 @@ impl RecordFacts {
         }
         let period = (n * sxy - sx * sy) / (n * sxx - sx * sx);
         let origin = (sy - period * sx) / n;
-        if !(period > 0.0) {
+        if period.is_nan() || period <= 0.0 {
             return None;
         }
         let x = (ms - origin) / period;

@@ -251,7 +251,7 @@ impl RigTransform {
         self.on() || self.slit
     }
     pub fn turn_radians(&self) -> f64 {
-        self.turn * 3.14159265
+        self.turn * std::f64::consts::PI
     }
 
     pub fn to_json(&self) -> Value {
