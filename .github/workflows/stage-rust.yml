@@ -29,9 +29,9 @@ jobs:
         with:
           workspaces: desk
           key: stage-rust
-      - name: A Vulkan driver (Linux: Mesa's lavapipe, on the CPU)
+      - name: "A Vulkan driver (Linux: Mesa's lavapipe, on the CPU)"
         if: runner.os == 'Linux'
-        run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers
+        run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers xvfb
       - name: The shaders fitted, read and written for Metal, Direct3D and Vulkan
         run: cargo test --release -p wo-shaders
       - name: The scenes drawn on this GPU API
@@ -39,6 +39,19 @@ jobs:
           # Windows: Direct3D 12 (WARP on the runner); elsewhere the platform's own
           WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}
         run: cargo run --release -p wo-render --example scene_shots -- "$GITHUB_WORKSPACE/shots-${{ runner.os }}"
+      - name: The stage window, full screen on a screen chosen by name
+        env:
+          WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}
+        run: |
+          # Linux: X11 under Xvfb (Wayland is checked on the dev box, headless mutter with
+          # two screens); Windows and macOS: the runner's own desktop.
+          cargo build --release -p wetowl-stage
+          bin=target/release/wetowl-stage
+          run() { if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a -s "-screen 0 1920x1080x24" "$bin" "$@"; else "$bin" "$@"; fi; }
+          run --list-screens | tee screens.txt
+          screen=$(head -1 screens.txt | sed -E 's/^SCREEN (.*) [0-9]+x[0-9]+$/\1/')
+          run --scene blocks --screen "$screen" --seconds 6 | tee stage.txt
+          grep -qF "screen=$screen full=1" stage.txt || { echo "not full screen on $screen"; exit 1; }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -4637,6 +4637,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wetowl-stage"
+version = "0.1.0"
+dependencies = [
+ "winit",
+ "wo-render",
+]
+
+[[package]]
 name = "wgpu"
 version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

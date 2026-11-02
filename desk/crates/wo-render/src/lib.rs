@@ -14,17 +14,18 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub info: wgpu::AdapterInfo,
+    pub adapter: wgpu::Adapter,
     vertex: wgpu::ShaderModule,
 }
 
 impl Gpu {
-    /// The best adapter there is (WGPU_BACKEND / WGPU_ADAPTER_NAME choose, as wgpu reads them).
-    pub fn headless() -> Result<Gpu, String> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    /// The best adapter for `surface` (or none: no window). WGPU_BACKEND, WGPU_ADAPTER_NAME
+    /// and WGPU_POWER_PREF choose, as wgpu reads them.
+    pub fn new(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Result<Gpu, String> {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::HighPerformance),
             force_fallback_adapter: false,
-            compatible_surface: None,
+            compatible_surface: surface,
             apply_limit_buckets: false,
         }))
         .map_err(|e| format!("no GPU adapter: {e}"))?;
@@ -40,7 +41,13 @@ impl Gpu {
             label: Some("full-screen triangle"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(wo_shaders::VERTEX_WGSL)),
         });
-        Ok(Gpu { device, queue, info, vertex })
+        Ok(Gpu { device, queue, info, vertex, adapter })
+    }
+
+    /// A GPU with no window: for a bench, a test, a shot.
+    pub fn headless() -> Result<Gpu, String> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        Gpu::new(&instance, None)
     }
 }
 
