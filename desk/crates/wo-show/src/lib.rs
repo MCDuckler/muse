@@ -6,6 +6,7 @@
 pub mod combos;
 pub mod deck;
 pub mod director;
+pub mod doc;
 pub mod events;
 pub mod faves;
 pub mod json;
