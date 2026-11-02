@@ -9,7 +9,9 @@ pub mod faves;
 pub mod json;
 pub mod plan;
 pub mod rig;
+pub mod rng;
 pub mod scores;
+pub mod state;
 pub mod taste;
 
 pub use combos::{Combo, Fx, Mask, Mix};
