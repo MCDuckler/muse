@@ -1,0 +1,47 @@
+# The Rust stage (plan: ~/.claude/plans/wetowl-stage-rust.md), on all three desktops:
+# the show's shaders fitted and checked (wo-shaders), then drawn headless on each GPU API
+# — Vulkan (Linux, Mesa's software lavapipe on the runner), Direct3D 12 (Windows, WARP),
+# Metal (macOS) — and the pictures kept, a sheet per OS.
+name: Stage (Rust)
+
+on:
+  push:
+    branches: [desk]
+    paths: ["desk/crates/wo-shaders/**", "desk/crates/wo-render/**", "desk/apps/wetowl-stage/**", "app/shaders/**", ".github/workflows/stage-rust.yml"]
+  workflow_dispatch:
+
+jobs:
+  draw:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: desk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desk
+          key: stage-rust
+      - name: A Vulkan driver (Linux: Mesa's lavapipe, on the CPU)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers
+      - name: The shaders fitted, read and written for Metal, Direct3D and Vulkan
+        run: cargo test --release -p wo-shaders
+      - name: The scenes drawn on this GPU API
+        env:
+          # Windows: Direct3D 12 (WARP on the runner); elsewhere the platform's own
+          WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}
+        run: cargo run --release -p wo-render --example scene_shots -- "$GITHUB_WORKSPACE/shots-${{ runner.os }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stage-shots-${{ runner.os }}
+          path: shots-${{ runner.os }}/
+          retention-days: 14
