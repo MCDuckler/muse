@@ -8,7 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub use wo_wire::{Hand, Thumb};
+pub use wo_wire::{Hand, Screen, SetRef, Shown, Thumb};
 
 /// Frames a second to the stage (it draws at its own rate, carrying the decks on
 /// between them).
@@ -26,6 +26,9 @@ pub(crate) struct Stage {
     pub(crate) heard_to: Option<f64>,
     trouble: Option<String>,
     blackout: bool,
+    freeze: bool,
+    /// The screen kept (read once, written on a change).
+    kept: std::cell::OnceCell<Kept>,
     /// Since when a stage has been reading.
     reading: Option<Instant>,
     /// What a stage is told first: the Desk's house, once signed in.
@@ -51,6 +54,34 @@ pub struct StageView {
     pub untold: bool,
     pub held: bool,
     pub blackout: bool,
+    pub freeze: bool,
+    /// All the stage told of itself (its look, holds, sets, screens, what it said).
+    pub told: Shown,
+    /// The screen the Desk keeps the stage on (full screen there when it opens).
+    pub kept_screen: Option<String>,
+}
+
+/// What the Desk keeps of the stage between runs: the screen it fills.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Kept {
+    screen: Option<String>,
+}
+
+impl Kept {
+    fn file() -> Option<PathBuf> {
+        dirs::config_dir().map(|d| d.join("wetowl-desk").join("stage.json"))
+    }
+
+    fn read() -> Kept {
+        Self::file().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    }
+
+    fn save(&self) {
+        if let Some(f) = Self::file() {
+            let _ = std::fs::create_dir_all(f.parent().unwrap());
+            let _ = std::fs::write(f, serde_json::to_string_pretty(self).unwrap());
+        }
+    }
 }
 
 /// The stage window's program: WO_STAGE, else the stage installed beside the Desk
@@ -109,9 +140,13 @@ impl Stage {
             return;
         };
         let Some(url) = self.wire().map(wo_wire::Server::url) else { return };
-        match Command::new(&program)
-            .arg("--stage")
-            .arg(&url)
+        let mut cmd = Command::new(&program);
+        cmd.arg("--stage").arg(&url);
+        // the screen it was kept on: full screen there from the start
+        if let Some(screen) = self.kept().screen.clone() {
+            cmd.arg("--screen").arg(screen);
+        }
+        match cmd
             .env("WETOWL_NON_UNIQUE", "1")
             // its STAGE lines (frames a second, the scene) into the Desk's own log
             .stdin(Stdio::null())
@@ -190,9 +225,23 @@ impl Stage {
         self.hello = Some(hello);
     }
 
+    fn kept(&self) -> &Kept {
+        self.kept.get_or_init(Kept::read)
+    }
+
+    fn keep(&mut self, k: Kept) {
+        k.save();
+        self.kept = std::cell::OnceCell::from(k);
+    }
+
     pub(crate) fn hand(&mut self, h: Hand) {
-        if let Hand::Blackout(on) = h {
-            self.blackout = on;
+        match &h {
+            Hand::Blackout(on) => self.blackout = *on,
+            Hand::Freeze(on) => self.freeze = *on,
+            // the screen chosen is kept for the next time the stage opens
+            Hand::Screen(name) => self.keep(Kept { screen: Some(name.clone()) }),
+            Hand::Full(false) => self.keep(Kept { screen: None }),
+            _ => {}
         }
         self.say(&wo_wire::hand(h));
     }
@@ -203,14 +252,20 @@ impl Stage {
         let untold = stages > 0 && told.is_none() && self.reading.is_some_and(|t| t.elapsed() > UNTOLD);
         let shown = told.unwrap_or_default();
         let waiting = self.started.is_some_and(|t| t.elapsed() < PATIENCE);
+        // a stage that tells its own blackout and freeze (the Desk's PERFORM) is believed;
+        // an older one is taken to do as it was told
+        let perform = !shown.sets.is_empty() || !shown.screens.is_empty() || shown.said_n > 0 || shown.look.is_some();
         StageView {
             stages,
             starting: stages == 0 && self.child.is_some() && waiting,
             trouble: if stages == 0 { self.trouble.clone() } else { None },
-            scene: shown.scene,
+            scene: shown.scene.clone(),
             untold,
             held: shown.held,
-            blackout: self.blackout && stages > 0,
+            blackout: stages > 0 && if perform { shown.blackout } else { self.blackout },
+            freeze: stages > 0 && if perform { shown.freeze } else { self.freeze },
+            told: shown,
+            kept_screen: self.kept().screen.clone(),
         }
     }
 

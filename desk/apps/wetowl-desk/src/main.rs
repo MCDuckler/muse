@@ -1,6 +1,6 @@
 //! WetOwl Desk: the glass booth of the Look board (design/tokens.json), painted by hand over
 //! one blurred stage, driven by wo-deskcore. `--bench 30 [--out DIR]` measures it;
-//! `--stage` opens the show's window from the start.
+//! `--stage` opens the show's window from the start; `--page show` opens on the Show page.
 //!
 //! The Desk keeps time on a thread of its own (the Auto DJ, the controllers, the stage's
 //! frames), so the set goes on while the window is hidden — behind a full-screen stage,
@@ -17,6 +17,7 @@ use wo_deskcore::{Desk, ShowHand};
 
 mod booth;
 mod paint;
+mod show;
 
 use booth::fit_the_design;
 use paint::{col, fonts};
@@ -45,6 +46,12 @@ pub(crate) struct App {
     /// The crate row a controller's browse is on, and whether the keys are shown.
     pub(crate) cursor: usize,
     pub(crate) show_keys: bool,
+    /// The booth, or the Show page (K).
+    pub(crate) page: show::Page,
+    /// The stage's last word, and since when it shows.
+    pub(crate) said: (u32, Option<Instant>),
+    /// The strobe held down on the page.
+    pub(crate) strobe: bool,
 }
 
 impl App {
@@ -78,6 +85,10 @@ impl App {
             app_sign_in: Desk::app_sign_in_here(),
             cursor: 0,
             show_keys: false,
+            // --page show: open on the Show page (screenshots, a show-only night)
+            page: if std::env::args().collect::<Vec<_>>().windows(2).any(|w| w[0] == "--page" && w[1] == "show") { show::Page::Show } else { show::Page::Booth },
+            said: (0, None),
+            strobe: false,
         }
     }
 
@@ -264,6 +275,18 @@ impl App {
                     let x = d.crossfader() + dir as f32 * 0.05;
                     d.set_crossfader(x);
                 }
+            }
+            K::K => self.page = if self.page == show::Page::Show { show::Page::Booth } else { show::Page::Show },
+            K::Comma => d.show(ShowHand::Previous),
+            K::Period => d.show(ShowHand::Next),
+            K::J => d.show(ShowHand::Mosh),
+            K::L => {
+                let held = d.stage().held;
+                d.show(ShowHand::Hold(!held));
+            }
+            K::V => {
+                let on = !d.stage().freeze;
+                d.show(ShowHand::Freeze(on));
             }
             K::H => d.show(ShowHand::Hit),
             K::B => {

@@ -1072,6 +1072,18 @@ impl Desk {
                 self.set_crossfader(x);
             }
             a @ (A::Load(_) | A::Browse(..)) => self.for_the_crate.push(a),
+            A::Show(cue) => {
+                use wo_control::ShowCue as C;
+                let v = self.stage.view();
+                self.show(match cue {
+                    C::Previous => ShowHand::Previous,
+                    C::Next => ShowHand::Next,
+                    C::Hit => ShowHand::Hit,
+                    C::Blackout => ShowHand::Blackout(!v.blackout),
+                    C::Freeze => ShowHand::Freeze(!v.freeze),
+                    C::Strobe(on) => ShowHand::Strobe(on),
+                });
+            }
         }
     }
 

@@ -5280,9 +5280,11 @@ name = "wo-deskcore"
 version = "0.1.0"
 dependencies = [
  "cpu-time",
+ "dirs",
  "image",
  "memory-stats",
  "midir",
+ "serde",
  "serde_json",
  "tungstenite",
  "wo-booth",

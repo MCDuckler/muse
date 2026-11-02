@@ -72,6 +72,13 @@ pub(crate) fn label_sized(p: &Painter, pos: Pos2, anchor: Align2, s: &str, size:
     r
 }
 
+/// How wide [label_sized] draws `s`.
+pub(crate) fn label_width(p: &Painter, s: &str, size: f32) -> f32 {
+    let mut job = LayoutJob::default();
+    job.append(&s.to_uppercase(), 0.0, TextFormat { font_id: FontId::new(size, family("label")), extra_letter_spacing: size * 0.09, ..Default::default() });
+    p.layout_job(job).size().x
+}
+
 pub(crate) fn panel(p: &Painter, r: Rect, dense: bool) {
     let fill = col(if dense { theme::GLASS_DENSE } else { theme::GLASS_PANEL });
     p.rect(r, CornerRadius::same(10), fill, Stroke::new(1.0, col(theme::GLASS_EDGE)), StrokeKind::Inside);

@@ -6,6 +6,7 @@ use wo_deskcore::{Desk, Shelf, ShowHand, Snapshot, Style, Transition};
 
 use crate::App;
 use crate::paint::*;
+use crate::show::Page;
 
 impl App {
     /// The whole booth over the backdrop, for this frame's snapshot.
@@ -13,6 +14,14 @@ impl App {
         let l = layout(full);
         self.top_bar(desk, ui, p, l.top, s);
         self.overviews(desk, p, l.overview, s);
+        if self.page == Page::Show {
+            let main = Rect::from_min_max(pos2(l.overview.left(), l.overview.bottom() + 10.0), l.auto.max);
+            self.show_page(desk, ui, p, main, s);
+            if self.show_keys {
+                self.keys(p, full);
+            }
+            return;
+        }
         self.waves(desk, p, l.waves, s);
         for d in 0..2 {
             self.deck(desk, ui, p, l.decks[d], s, d);
@@ -38,7 +47,10 @@ impl App {
             ("A", "Auto DJ on / off"),
             ("M  Space", "Mix now"),
             ("S  N", "Not that: another record next"),
+            ("K", "The Show page / the booth"),
             ("H  B", "The show: a hit, the blackout"),
+            (",  .", "The scene before / after"),
+            ("J  L  V", "Mosh in, hold the scene, freeze"),
             ("?", "These keys"),
         ];
         let r = Rect::from_center_size(full.center(), vec2(460.0, 70.0 + rows.len() as f32 * 30.0));
@@ -61,9 +73,16 @@ impl App {
         text(p, pos2(ball.right() + 1.0, logo.center().y + 1.0), Align2::LEFT_CENTER, "WL", 27.0, "mark", Color32::WHITE);
         let mut x = logo.right() + 18.0;
         for (i, tab) in ["Booth", "Show", "Crate", "Pool"].iter().enumerate() {
-            let t = label_sized(p, pos2(x + 16.0, r.center().y), Align2::LEFT_CENTER, tab, 13.0, if i == 0 { col(theme::TEXT) } else { Color32::from_rgb(0x8D, 0x91, 0x9B) });
-            if i == 0 {
+            let page = [Some(Page::Booth), Some(Page::Show), None, None][i];
+            let here = page == Some(self.page);
+            let t = label_sized(p, pos2(x + 16.0, r.center().y), Align2::LEFT_CENTER, tab, 13.0, if here { col(theme::TEXT) } else { Color32::from_rgb(0x8D, 0x91, 0x9B) });
+            if here {
                 p.rect_filled(Rect::from_min_size(pos2(x, r.bottom() - 2.0), vec2(t.width() + 32.0, 2.0)), CornerRadius::ZERO, col(theme::RED));
+            }
+            if let Some(page) = page
+                && ui.interact(Rect::from_min_max(pos2(x, r.top()), pos2(t.right() + 16.0, r.bottom())), ui.scope_id().with(("tab", i)), Sense::click()).clicked()
+            {
+                self.page = page;
             }
             x = t.right() + 16.0;
         }
@@ -114,7 +133,7 @@ impl App {
         p.circle_filled(pos2(auto.left() + 14.0, auto.center().y), 3.5, if s.auto { col(theme::OK) } else { col(theme::FAINT) });
     }
 
-    fn overviews(&self, desk: &mut Desk, p: &Painter, r: Rect, s: &Snapshot) {
+    pub(crate) fn overviews(&self, desk: &mut Desk, p: &Painter, r: Rect, s: &Snapshot) {
         panel(p, r, true);
         for d in 0..2 {
             let y = r.top() + 8.0 + d as f32 * 28.0;
@@ -682,6 +701,10 @@ impl App {
             }
         }
         p.rect_stroke(pic, CornerRadius::same(6), Stroke::new(1.0, white(0.08)), StrokeKind::Inside);
+        // the picture opens the Show page, where the show is played
+        if ui.interact(pic, ui.scope_id().with("stage-pic"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            self.page = Page::Show;
+        }
         // the scene on
         let y = pic.bottom() + 16.0;
         let sc = label(p, pos2(inner.left(), y), Align2::LEFT_CENTER, "Scene", col(theme::FAINT_ON_GLASS));
@@ -718,7 +741,7 @@ impl App {
         }
     }
 
-    fn auto_dj(&mut self, desk: &mut Desk, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
+    pub(crate) fn auto_dj(&mut self, desk: &mut Desk, ui: &mut egui::Ui, p: &Painter, r: Rect, s: &Snapshot) {
         panel(p, r, false);
         let inner = r.shrink(14.0);
         label(p, inner.left_top(), Align2::LEFT_TOP, "Auto DJ", col(theme::SOFT));

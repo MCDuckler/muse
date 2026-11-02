@@ -45,6 +45,8 @@ dependencies:
   ffi: ^2.1.0
   crypto: ^3.0.0
   window_manager: ^0.5.2
+  # the stage window's screens (stage_screens.dart); window_manager brings it already
+  screen_retriever: ^0.2.2
   # The booth's decks on an iPhone and an iPad: see dependency_overrides.
   media_kit_libs_ios_audio: ^1.1.4
   # The icon in a desk's tray: see lib/src/ui/tray.dart and dependency_overrides.

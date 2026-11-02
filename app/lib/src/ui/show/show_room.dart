@@ -133,6 +133,9 @@ PlanShares _sharesOf(ShowEngine show) => PlanShares.of(show.pool.plan, show.kind
 /// A scene's name.
 String _sceneName(String id, SceneBook? book) => book?[id]?.name ?? id;
 
+/// A combination in words, for the Desk's panel (desk_hands.dart).
+String showComboWords(Combo c, SceneBook? book) => _comboWords(c, book);
+
 /// A combination in words: `Dancer · ascii on White · no mask · add`.
 String _comboWords(Combo c, SceneBook? book) => [
       '${book?[c.scene]?.name ?? c.scene}${c.style != 'raw' ? ' · ${c.style}' : ''}',

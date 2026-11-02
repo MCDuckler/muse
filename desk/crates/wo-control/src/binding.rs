@@ -50,6 +50,24 @@ pub enum Action {
     Unloop(usize),
     Crossfader(f32),
     Browse(i32, i32),
+    /// The show (the stage's director), as the v1 booth binds it.
+    Show(ShowCue),
+}
+
+/// What a controller does to the show. PFL and SOURCE have no use in a booth with one
+/// output, so they are the show's (v1's binding.dart): PFL the scene before (A) or after
+/// (B); SOURCE a hit (A) or the blackout (B); with shift, the picture frozen (A) or the
+/// strobe for as long as it is held (B). Layouts may also name `show.*` controls.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ShowCue {
+    Previous,
+    Next,
+    Hit,
+    /// Toggles.
+    Blackout,
+    /// Toggles.
+    Freeze,
+    Strobe(bool),
 }
 
 /// How close counts as "there" for a knob to take over: three steps of a 7-bit knob.
@@ -132,6 +150,12 @@ impl Binding {
                 "browse.down" if pressed => vec![Action::Browse(0, 1)],
                 "browse.left" if pressed => vec![Action::Browse(-1, 0)],
                 "browse.right" if pressed => vec![Action::Browse(1, 0)],
+                "show.scene.prev" if pressed => vec![Action::Show(ShowCue::Previous)],
+                "show.scene.next" if pressed => vec![Action::Show(ShowCue::Next)],
+                "show.hit" if pressed => vec![Action::Show(ShowCue::Hit)],
+                "show.blackout" if pressed => vec![Action::Show(ShowCue::Blackout)],
+                "show.freeze" if pressed => vec![Action::Show(ShowCue::Freeze)],
+                "show.strobe" if e.kind == Kind::Button => vec![Action::Show(ShowCue::Strobe(pressed))],
                 _ => vec![],
             };
         };
@@ -188,6 +212,14 @@ impl Binding {
                 let v = if (e.value - 0.5).abs() < 0.012 { 0.5 } else { e.value };
                 vec![Action::Eq(d, band, v as f32)]
             }
+            "pfl" if pressed => vec![Action::Show(if d == 0 { ShowCue::Previous } else { ShowCue::Next })],
+            "source" if e.kind == Kind::Button => match (shift, d) {
+                (true, 0) if pressed => vec![Action::Show(ShowCue::Freeze)],
+                (true, 1) => vec![Action::Show(ShowCue::Strobe(pressed))],
+                (false, 0) if pressed => vec![Action::Show(ShowCue::Hit)],
+                (false, 1) if pressed => vec![Action::Show(ShowCue::Blackout)],
+                _ => vec![],
+            },
             "kill.low" if pressed => vec![Action::KillToggle(d, 0)],
             "kill.mid" if pressed => vec![Action::KillToggle(d, 1)],
             "kill.high" if pressed => vec![Action::KillToggle(d, 2)],
@@ -236,6 +268,17 @@ mod tests {
         assert_eq!(b.handle(&button("deck.b.pad.6", true), &at), vec![Action::LoopOut(1)]);
         assert_eq!(b.handle(&button("deck.a.cue", true), &at), vec![Action::CueDown(0)]);
         assert_eq!(b.handle(&button("deck.a.cue", false), &at), vec![Action::CueUp(0)]);
+        // PFL and SOURCE are the show's
+        assert_eq!(b.handle(&button("deck.a.pfl", true), &at), vec![Action::Show(ShowCue::Previous)]);
+        assert_eq!(b.handle(&button("deck.b.pfl", true), &at), vec![Action::Show(ShowCue::Next)]);
+        assert_eq!(b.handle(&button("deck.a.source", true), &at), vec![Action::Show(ShowCue::Hit)]);
+        assert!(b.handle(&button("deck.a.source", false), &at).is_empty());
+        assert_eq!(b.handle(&button("deck.b.source", true), &at), vec![Action::Show(ShowCue::Blackout)]);
+        b.handle(&button("deck.a.stop", true), &at);
+        assert_eq!(b.handle(&button("deck.b.source", true), &at), vec![Action::Show(ShowCue::Strobe(true))], "shift: the strobe while held");
+        assert_eq!(b.handle(&button("deck.b.source", false), &at), vec![Action::Show(ShowCue::Strobe(false))]);
+        assert_eq!(b.handle(&button("deck.a.source", true), &at), vec![Action::Show(ShowCue::Freeze)]);
+        b.handle(&button("deck.a.stop", false), &at);
     }
 
     #[test]

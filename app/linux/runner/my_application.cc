@@ -15,6 +15,31 @@ struct _MyApplication {
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
+// The stage window full screen on one monitor — the projector — asked by the Desk
+// (lib/src/ui/show/stage_screens.dart). Wayland lets no program place its own window,
+// but it may ask for full screen on an output, which GTK passes on.
+static void stage_window_call(FlMethodChannel* channel, FlMethodCall* call, gpointer user_data) {
+  GtkWindow* window = GTK_WINDOW(user_data);
+  g_autoptr(FlMethodResponse) response = nullptr;
+  if (g_strcmp0(fl_method_call_get_name(call), "fullscreenOn") == 0) {
+    FlValue* args = fl_method_call_get_args(call);
+    FlValue* m = args != nullptr && fl_value_get_type(args) == FL_VALUE_TYPE_MAP
+                     ? fl_value_lookup_string(args, "monitor")
+                     : nullptr;
+    const int i = m != nullptr && fl_value_get_type(m) == FL_VALUE_TYPE_INT ? (int)fl_value_get_int(m) : -1;
+    GdkDisplay* display = gtk_widget_get_display(GTK_WIDGET(window));
+    const gboolean ok = i >= 0 && i < gdk_display_get_n_monitors(display);
+    if (ok) {
+      gtk_window_unfullscreen(window);
+      gtk_window_fullscreen_on_monitor(window, gtk_window_get_screen(window), i);
+    }
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_bool(ok)));
+  } else {
+    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+  }
+  fl_method_call_respond(call, response, nullptr);
+}
+
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
@@ -92,6 +117,13 @@ static void my_application_activate(GApplication* application) {
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
   stage_texture_register(FL_PLUGIN_REGISTRY(view));
+  {
+    g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+    FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(fl_view_get_engine(view));
+    // kept for the window's life (the application holds the window)
+    FlMethodChannel* channel = fl_method_channel_new(messenger, "wetowl/stage_window", FL_METHOD_CODEC(codec));
+    fl_method_channel_set_method_call_handler(channel, stage_window_call, window, nullptr);
+  }
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }

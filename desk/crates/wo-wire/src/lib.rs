@@ -95,7 +95,7 @@ pub struct Frame {
 }
 
 /// A hand on the show.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Hand {
     /// The flash.
     Hit,
@@ -110,6 +110,23 @@ pub enum Hand {
     Strobe(bool),
     /// The picture held still.
     Freeze(bool),
+    /// The look on judged, as v1's PERFORM does (app/lib/src/ui/show/desk_hands.dart):
+    /// never again; the last never wider (any mask and blend, then the style in the
+    /// scene); half as often; twice; kept as a favourite; the last judging undone.
+    Never,
+    Wider,
+    Less,
+    More,
+    Keep,
+    Undo,
+    /// Every hold let go: the director has it all.
+    LetGo,
+    /// A set on, by id ("" the show as shipped).
+    Set(String),
+    /// The stage full screen on the screen of this name.
+    Screen(String),
+    /// Full screen where the window is, or a window again.
+    Full(bool),
 }
 
 /// The house the Desk is signed into: the stage reads the records' beats, sections,
@@ -146,6 +163,7 @@ pub fn frame(f: &Frame) -> String {
 }
 
 pub fn hand(h: Hand) -> String {
+    let named = |what: &str, key: &str, v: &str| format!(r#"{{"t":"hands","do":"{what}","{key}":{}}}"#, serde_json::Value::from(v));
     let (what, on) = match h {
         Hand::Hit => ("hit", None),
         Hand::Next => ("next", None),
@@ -155,6 +173,16 @@ pub fn hand(h: Hand) -> String {
         Hand::Blackout(on) => ("blackout", Some(on)),
         Hand::Strobe(on) => ("strobe", Some(on)),
         Hand::Freeze(on) => ("freeze", Some(on)),
+        Hand::Never => ("never", None),
+        Hand::Wider => ("wider", None),
+        Hand::Less => ("less", None),
+        Hand::More => ("more", None),
+        Hand::Keep => ("keep", None),
+        Hand::Undo => ("undo", None),
+        Hand::LetGo => ("letgo", None),
+        Hand::Full(on) => ("full", Some(on)),
+        Hand::Set(id) => return named("set", "id", &id),
+        Hand::Screen(name) => return named("screen", "name", &name),
     };
     match on {
         Some(on) => format!(r#"{{"t":"hands","do":"{what}","on":{on}}}"#),
@@ -162,12 +190,45 @@ pub fn hand(h: Hand) -> String {
     }
 }
 
-/// What the stage says it shows.
+/// What the stage says it shows (a stage from before the Desk's PERFORM says only the
+/// scene and whether it is held).
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Shown {
     pub scene: Option<String>,
-    #[serde(default)]
     pub held: bool,
+    /// The look on, in words: `Dancer · ascii on White · add`.
+    pub look: Option<String>,
+    /// How many things the hands hold.
+    pub holds: u32,
+    pub blackout: bool,
+    pub freeze: bool,
+    pub sets: Vec<SetRef>,
+    /// The set on, by id; None the show as shipped.
+    pub set: Option<String>,
+    /// The last thing the hands were told, counted (a new count is news).
+    pub said: Option<String>,
+    pub said_n: u32,
+    /// Whether UNDO and WIDER have something to do.
+    pub undo: bool,
+    pub wider: bool,
+    pub screens: Vec<Screen>,
+    /// The screen the window is full screen on, by name.
+    pub screen: Option<String>,
+    pub full: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct SetRef {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Screen {
+    pub name: String,
+    pub w: u32,
+    pub h: u32,
 }
 
 /// A stage's line: `shown`, or None for any other.
@@ -208,8 +269,25 @@ mod tests {
     }
 
     #[test]
+    fn the_perform_hands() {
+        assert_eq!(hand(Hand::Never), r#"{"t":"hands","do":"never"}"#);
+        assert_eq!(hand(Hand::LetGo), r#"{"t":"hands","do":"letgo"}"#);
+        assert_eq!(hand(Hand::Full(false)), r#"{"t":"hands","do":"full","on":false}"#);
+        assert_eq!(hand(Hand::Set("l:1".into())), r#"{"t":"hands","do":"set","id":"l:1"}"#);
+        assert_eq!(hand(Hand::Screen("BenQ \"W1070\"".into())), r#"{"t":"hands","do":"screen","name":"BenQ \"W1070\""}"#);
+    }
+
+    #[test]
     fn what_the_stage_shows() {
-        assert_eq!(shown(r#"{"t":"shown","scene":"tunnel","held":true}"#), Some(Shown { scene: Some("tunnel".into()), held: true }));
+        let full = shown(
+            r#"{"t":"shown","scene":"Dancer","held":true,"look":"Dancer · ascii","holds":2,"blackout":false,"freeze":true,"sets":[{"id":"l:1","name":"Club"}],"set":"l:1","said":"Never: x","saidN":3,"undo":true,"wider":false,"screens":[{"name":"HDMI","w":1920,"h":1080}],"screen":"HDMI","full":true}"#,
+        )
+        .unwrap();
+        assert_eq!(full.look.as_deref(), Some("Dancer · ascii"));
+        assert_eq!((full.holds, full.freeze, full.said_n, full.undo, full.full), (2, true, 3, true, true));
+        assert_eq!(full.sets, vec![SetRef { id: "l:1".into(), name: "Club".into() }]);
+        assert_eq!(full.screens[0], Screen { name: "HDMI".into(), w: 1920, h: 1080 });
+        assert_eq!(shown(r#"{"t":"shown","scene":"tunnel","held":true}"#), Some(Shown { scene: Some("tunnel".into()), held: true, ..Default::default() }));
         assert_eq!(shown(r#"{"t":"shown","scene":null,"held":false}"#), Some(Shown::default()));
         assert_eq!(shown(r#"{"t":"now","shots":{}}"#), None);
     }

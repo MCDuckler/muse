@@ -50,6 +50,7 @@ import '../../state/show/show_director.dart' show SceneChange;
 import '../../state/show/show_engine.dart';
 import '../../state/show/show_feed.dart';
 import '../../state/show/show_wire.dart';
+import 'desk_hands.dart';
 import 'scene.dart';
 import 'show_spike.dart';
 import 'stage_audit.dart';
@@ -115,6 +116,9 @@ class _StageWindowState extends State<_StageWindow> {
   // Fed by the WetOwl Desk: the show directed here, over its decks.
   DeskShowSource? _deskSource;
   ShowEngine? _deskShow;
+  /// The Desk's PERFORM hands: the judging, the sets, the screens (desk_hands.dart).
+  DeskHands? _deskHands;
+  Timer? _screens;
   bool _deskStarting = false;
   String? _deskLast;
   /// The Desk's hello: the house it reads from, if signed in.
@@ -376,7 +380,7 @@ class _StageWindowState extends State<_StageWindow> {
         ws.add(encodeStageThumb(image.width, image.height, data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes)));
         // And what is on it that the booth cannot see in the combination.
         ws.add(stageNowJson());
-        if (_deskShow case final show?) ws.add(deskShownJson(show));
+        if (_deskShow case final show?) ws.add(_deskHands?.shownJson() ?? deskShownJson(show));
       }
       image.dispose();
     } catch (_) {
@@ -390,7 +394,7 @@ class _StageWindowState extends State<_StageWindow> {
   /// that directs the show itself, over the Desk's decks. False for a booth's line.
   bool _fromDesk(String line) {
     final source = _deskSource;
-    if (source != null) return deskSaid(line, source, _deskShow);
+    if (source != null) return (_deskHands?.handle(line) ?? false) || deskSaid(line, source, _deskShow);
     final frame = line.startsWith('{"t":"desk"');
     if (!frame && !_deskStarting && !line.startsWith('{"t":"hello","v":1,"from":"desk"')) return false;
     if (frame) _deskLast = line;
@@ -423,7 +427,16 @@ class _StageWindowState extends State<_StageWindow> {
         show.dispose();
         return;
       }
+      final hands = DeskHands(show, kit);
+      unawaited(hands.look());
+      // the screen the Desk keeps the show on: full screen there from the start
+      final sc = widget.args.indexOf('--screen');
+      if (sc >= 0 && sc + 1 < widget.args.length) unawaited(hands.fill(widget.args[sc + 1]));
+      // a screen plugged in or out shows on the Desk's chips
+      _screens?.cancel();
+      _screens = Timer.periodic(const Duration(seconds: 4), (_) => unawaited(hands.look()));
       setState(() {
+        _deskHands = hands;
         _deskSource = source;
         _deskShow = show;
         _feed = show;
@@ -460,6 +473,7 @@ class _StageWindowState extends State<_StageWindow> {
     unawaited(_ws?.close());
     _demo?.dispose();
     _remote?.dispose();
+    _screens?.cancel();
     _deskShow?.dispose();
     _booth?.dispose();
     _focus.dispose();
