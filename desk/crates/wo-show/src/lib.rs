@@ -13,6 +13,7 @@ pub mod json;
 pub mod plan;
 pub mod rig;
 pub mod rng;
+pub mod scenes;
 pub mod scores;
 pub mod state;
 pub mod taste;
