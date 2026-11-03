@@ -15,13 +15,18 @@
 //!    vignette, the film curve, the grain, the strobe and the blackout, and a dither so the
 //!    8 bits out show no bands.
 //!
-//! The stage's own passes (bloom, finish, wash, fitting a picture, particles) are WGSL; the
-//! show's are the .frag files (plan §6.4). Not yet: the datamosh, the treatments and the
-//! transformations (P4).
+//! Between 3 and 4 the looks (looks.rs): the slit-scan as the layer, the kaleidoscope, then the
+//! style (a treatment, or the slit-scan); between 5 and 6 the datamosh, held or a change's.
+//!
+//! The stage's own passes (bloom, finish, wash, fitting a picture, particles, the slit-scan,
+//! the mosh) are WGSL; the show's are the .frag files (plan §6.4).
 use std::borrow::Cow;
 use std::collections::HashMap;
 
 use wo_show::frame::{GroundDraw, StageFrame};
+use wo_show::treat::Style;
+
+use crate::looks::{Ghosts, Mosh, Slit, Treat};
 
 use crate::particles::{Inputs, Particles};
 use crate::{Arena, Gpu, Pass, values_by};
@@ -50,7 +55,7 @@ pub fn scene_values(floats: &[wo_shaders::Float], w: f32, h: f32, common: &[f32;
     })
 }
 
-const VERTEX: &str = "
+pub(crate) const VERTEX: &str = "
 struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
 @vertex fn vs(@builtin(vertex_index) i: u32) -> VOut {
     let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
@@ -179,7 +184,7 @@ struct U { res: vec2<f32>, time: f32, pad: f32, a: vec4<f32>, b: vec4<f32> };
 ";
 
 /// A picture (MilkDrop's, the cover) filled and cropped to the stage where `fit` is its aspect.
-const FIT: &str = "
+pub(crate) const FIT: &str = "
 struct U { res: vec2<f32>, fit: f32, pad: f32 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var src: texture_2d<f32>;
@@ -218,12 +223,12 @@ struct PV { @builtin(position) pos: vec4<f32>, @location(0) local: vec2<f32>, @l
 ";
 
 /// Light added onto what is there; its alpha left alone.
-const ADD: wgpu::BlendState = wgpu::BlendState {
+pub(crate) const ADD: wgpu::BlendState = wgpu::BlendState {
     color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
     alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
 };
 
-fn sampler(gpu: &Gpu) -> wgpu::Sampler {
+pub(crate) fn sampler(gpu: &Gpu) -> wgpu::Sampler {
     gpu.device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("linear, clamped"),
         mag_filter: wgpu::FilterMode::Linear,
@@ -233,6 +238,10 @@ fn sampler(gpu: &Gpu) -> wgpu::Sampler {
 }
 
 fn layout_entries(block: bool, textures: u32, vertex_block: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
+    layout_entries_of(block, &vec![wgpu::TextureViewDimension::D2; textures as usize], vertex_block)
+}
+
+fn layout_entries_of(block: bool, dims: &[wgpu::TextureViewDimension], vertex_block: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
     let mut e = vec![];
     if block {
         e.push(wgpu::BindGroupLayoutEntry {
@@ -242,11 +251,12 @@ fn layout_entries(block: bool, textures: u32, vertex_block: bool) -> Vec<wgpu::B
             count: None,
         });
     }
-    for i in 0..textures {
+    for (i, dim) in dims.iter().enumerate() {
+        let i = i as u32;
         e.push(wgpu::BindGroupLayoutEntry {
             binding: 1 + 2 * i,
             visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+            ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: *dim, multisampled: false },
             count: None,
         });
         e.push(wgpu::BindGroupLayoutEntry { binding: 2 + 2 * i, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None });
@@ -255,7 +265,7 @@ fn layout_entries(block: bool, textures: u32, vertex_block: bool) -> Vec<wgpu::B
 }
 
 /// One of the stage's own full-screen passes (WGSL).
-struct Own {
+pub(crate) struct Own {
     name: &'static str,
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
@@ -263,10 +273,16 @@ struct Own {
 }
 
 impl Own {
-    fn new(gpu: &Gpu, name: &'static str, body: &str, textures: u32, format: wgpu::TextureFormat, blend: Option<wgpu::BlendState>) -> Own {
+    pub(crate) fn new(gpu: &Gpu, name: &'static str, body: &str, textures: u32, format: wgpu::TextureFormat, blend: Option<wgpu::BlendState>) -> Own {
+        Own::with(gpu, name, body, &vec![wgpu::TextureViewDimension::D2; textures as usize], format, blend)
+    }
+
+    /// A pass whose textures are of the dimensions `dims` (a ring of pictures is an array).
+    pub(crate) fn with(gpu: &Gpu, name: &'static str, body: &str, dims: &[wgpu::TextureViewDimension], format: wgpu::TextureFormat, blend: Option<wgpu::BlendState>) -> Own {
+        let textures = dims.len() as u32;
         let d = &gpu.device;
         let module = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(name), source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{VERTEX}{body}"))) });
-        let layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(name), entries: &layout_entries(true, textures, false) });
+        let layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(name), entries: &layout_entries_of(true, dims, false) });
         let pl = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(name), bind_group_layouts: &[Some(&layout)], ..Default::default() });
         let pipeline = d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(name),
@@ -288,7 +304,7 @@ impl Own {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn draw(&self, gpu: &Gpu, enc: &mut wgpu::CommandEncoder, arena: &mut Arena, smp: &wgpu::Sampler, target: &wgpu::TextureView, floats: &[f32], textures: &[&wgpu::TextureView], load: bool) {
+    pub(crate) fn draw(&self, gpu: &Gpu, enc: &mut wgpu::CommandEncoder, arena: &mut Arena, smp: &wgpu::Sampler, target: &wgpu::TextureView, floats: &[f32], textures: &[&wgpu::TextureView], load: bool) {
         debug_assert_eq!(textures.len() as u32, self.textures, "{}", self.name);
         let bytes: Vec<u8> = floats.iter().flat_map(|f| f.to_le_bytes()).collect();
         let Some(binding) = arena.push(&bytes) else { return };
@@ -340,14 +356,28 @@ impl Target {
 }
 
 /// `slot` at `w`×`h` (made afresh at a new size).
-fn sized<'a>(gpu: &Gpu, slot: &'a mut Option<Target>, w: u32, h: u32, label: &str) -> &'a Target {
-    if slot.as_ref().is_none_or(|t| t.w != w || t.h != h) {
-        *slot = Some(Target::new(gpu, w, h, WORK, label));
+pub(crate) fn sized<'a>(gpu: &Gpu, slot: &'a mut Option<Target>, w: u32, h: u32, label: &str) -> &'a Target {
+    sized_as(gpu, slot, w, h, WORK, label)
+}
+
+/// `slot` at `w`×`h` in `format`.
+pub(crate) fn sized_as<'a>(gpu: &Gpu, slot: &'a mut Option<Target>, w: u32, h: u32, format: wgpu::TextureFormat, label: &str) -> &'a Target {
+    if slot.as_ref().is_none_or(|t| t.w != w || t.h != h || t.texture.format() != format) {
+        *slot = Some(Target::new(gpu, w, h, format, label));
     }
     slot.as_ref().unwrap()
 }
 
-fn clear(enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, c: wgpu::Color) {
+/// `from` into `to`: copied where they are alike, else drawn filtered (`fit`, a plain copy).
+pub(crate) fn copy_into(gpu: &Gpu, enc: &mut wgpu::CommandEncoder, arena: &mut Arena, fit: &Own, smp: &wgpu::Sampler, from: &Target, to: &Target) {
+    if from.w == to.w && from.h == to.h && from.texture.format() == to.texture.format() {
+        enc.copy_texture_to_texture(from.texture.as_image_copy(), to.texture.as_image_copy(), from.texture.size());
+    } else {
+        fit.draw(gpu, enc, arena, smp, &to.view, &[to.w as f32, to.h as f32, 0.0, 0.0], &[&from.view], false);
+    }
+}
+
+pub(crate) fn clear(enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, c: wgpu::Color) {
     enc.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("clear"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -367,6 +397,9 @@ pub struct Drawn {
     pub particles: usize,
     /// A shader the frame asked for that the stage does not have.
     pub missing: Option<String>,
+    /// The looks it went through, in order (`slit`, `kaleido4`, `ascii`, `mosh`, `mosh-held`);
+    /// empty: the figure as drawn.
+    pub looks: Vec<String>,
 }
 
 /// The stage's renderer: its passes, its pictures between frames.
@@ -398,6 +431,14 @@ pub struct Stage {
     particle_scene: Option<String>,
     particles: Vec<Particles>,
     held: Option<StageFrame>,
+    treat: Treat,
+    ghosts: Ghosts,
+    slit: Slit,
+    mosh: Mosh,
+    /// The frames drawn, the moshes seen, and which picture the last frame showed.
+    frame_no: i64,
+    mosh_seen: Option<i64>,
+    last_pic: Shown,
     /// The working size as a share of the output's.
     pub scale: f32,
     /// The film curve: AgX (true) or ACES.
@@ -406,6 +447,15 @@ pub struct Stage {
     pub milk: Option<wgpu::TextureView>,
     pub cover: Option<wgpu::TextureView>,
     pub drawn: Drawn,
+}
+
+/// Which of the stage's pictures a frame showed (the datamosh starts from it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Shown {
+    None,
+    Work,
+    Trail,
+    Mosh,
 }
 
 /// The shaders a stage builds as it starts: the scenes it draws and the pulse ground.
@@ -482,6 +532,13 @@ impl Stage {
             particle_scene: None,
             particles: vec![],
             held: None,
+            treat: Treat::new(gpu)?,
+            ghosts: Ghosts::new(gpu)?,
+            slit: Slit::new(gpu),
+            mosh: Mosh::new(gpu),
+            frame_no: 0,
+            mosh_seen: None,
+            last_pic: Shown::None,
             scale: 1.0,
             agx: false,
             milk: None,
@@ -492,6 +549,12 @@ impl Stage {
 
     pub fn out_format(&self) -> wgpu::TextureFormat {
         self.out_format
+    }
+
+    /// The ascii's ramp: `count` glyphs side by side in `rgba` (`w`×`h`), light to dense
+    /// (the shipped one unless told).
+    pub fn set_glyphs(&mut self, gpu: &Gpu, w: u32, h: u32, rgba: &[u8], count: u32) {
+        self.treat.set_glyphs(gpu, w, h, rgba, count);
     }
 
     /// Whether the stage draws `shader`.
@@ -519,6 +582,8 @@ impl Stage {
         let w = ((out_w as f32 * self.scale).round() as u32).max(8);
         let h = ((out_h as f32 * self.scale).round() as u32).max(8);
         self.arena.begin(gpu);
+        self.mosh.poll();
+        self.frame_no += 1;
         self.drawn = Drawn { work: (w, h), ..Default::default() };
         let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("stage") });
         let (wf, hf) = (w as f32, h as f32);
@@ -552,6 +617,26 @@ impl Stage {
                     }
                 }
                 GroundDraw::Black => clear(&mut enc, g, wgpu::Color::BLACK),
+            }
+        }
+
+        // 1b. a change moshed: the last frame's picture, before anything is drawn over it, kept
+        // for the mosh to start from (not the first frame, nor after a pause)
+        if self.mosh_seen != Some(f.mosh) {
+            let first = self.mosh_seen.is_none();
+            self.mosh_seen = Some(f.mosh);
+            let last = match self.last_pic {
+                Shown::Work => self.work.as_ref().map(Some),
+                Shown::Trail => self.trail_a.as_ref().map(Some),
+                Shown::Mosh => Some(None),
+                Shown::None => None,
+            };
+            if let Some(last) = last
+                && !first
+                && dt < 0.25
+            {
+                let (secs, strength) = f.mosh_cut;
+                self.mosh.begin(gpu, &mut enc, &mut self.arena, &self.sampler, last, w, h, secs, strength);
             }
         }
 
@@ -647,6 +732,39 @@ impl Stage {
             }
         }
 
+        // 3b. the transformation, before the style: the slit-scan as the layer (one ring of
+        // frames: not where the style is the slit-scan already), then the kaleidoscope; then
+        // the style over what they made
+        let kick = f.common[22].clamp(0.0, 1.0);
+        let time = f.common[0];
+        let slit_style = matches!(f.style, Some(Style::Slit(_)));
+        if let Some(sl) = &f.slit
+            && !slit_style
+        {
+            let (work, scratch) = (self.work.as_ref().unwrap(), self.scratch.as_ref().unwrap());
+            self.slit.draw(gpu, &mut enc, &mut self.arena, &self.sampler, work, scratch, sl, kick, time, self.frame_no);
+            std::mem::swap(&mut self.work, &mut self.scratch);
+            self.drawn.looks.push("slit".into());
+        }
+        if let Some(k) = &f.kaleido {
+            let (work, scratch) = (self.work.as_ref().unwrap(), self.scratch.as_ref().unwrap());
+            self.ghosts.draw(gpu, &mut enc, &mut self.arena, work, scratch, k);
+            std::mem::swap(&mut self.work, &mut self.scratch);
+            self.drawn.looks.push(format!("kaleido{}", k.count));
+        }
+        if let Some(style) = &f.style {
+            let (work, scratch) = (self.work.as_ref().unwrap(), self.scratch.as_ref().unwrap());
+            match style {
+                Style::Slit(sl) => self.slit.draw(gpu, &mut enc, &mut self.arena, &self.sampler, work, scratch, sl, kick, time, self.frame_no),
+                Style::Fx(d) => self.treat.draw(gpu, &mut enc, &mut self.arena, work, scratch, d, kick, time),
+            }
+            std::mem::swap(&mut self.work, &mut self.scratch);
+            self.drawn.looks.push(match style {
+                Style::Slit(_) => "slit".into(),
+                Style::Fx(d) => ["", "ascii", "dither", "contour", "halftone", "thermal", "lines", "fisheye", "crt"].get(d.mode as usize).copied().unwrap_or("fx").into(),
+            });
+        }
+
         // 4. the blend: the figure over the ground, its backdrop the rig's way
         if let Some(b) = f.blend {
             let v = values_by(self.under.floats(), |name, _| match name {
@@ -699,7 +817,28 @@ impl Stage {
         } else {
             self.trail_scene = None;
         }
-        let current = if current_is_trail { self.trail_a.as_ref().unwrap() } else { self.work.as_ref().unwrap() };
+        // 5b. the datamosh: held on and on, the picture as it was moved by what is drawn now,
+        // healed and taken whole as the clock says; or a change's under way, the picture being
+        // left moved by this one's motion
+        let moshed = {
+            let now = if current_is_trail { self.trail_a.as_ref().unwrap() } else { self.work.as_ref().unwrap() };
+            if f.mosh_hold.on {
+                self.mosh.step_held(gpu, &mut enc, &mut self.arena, &self.sampler, now, dt, kick, &f.mosh_hold);
+                true
+            } else {
+                self.mosh.release();
+                self.mosh.step(gpu, &mut enc, &mut self.arena, &self.sampler, now, dt, kick)
+            }
+        };
+        self.last_pic = if moshed { Shown::Mosh } else if current_is_trail { Shown::Trail } else { Shown::Work };
+        if moshed {
+            self.drawn.looks.push(if self.mosh.held { "mosh-held" } else { "mosh" }.into());
+        }
+        let current = match self.last_pic {
+            Shown::Mosh => self.mosh.picture().unwrap(),
+            Shown::Trail => self.trail_a.as_ref().unwrap(),
+            _ => self.work.as_ref().unwrap(),
+        };
 
         // 6. the bloom: five levels down, back up
         let (mut bw, mut bh) = (w, h);

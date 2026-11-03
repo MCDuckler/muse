@@ -66,6 +66,11 @@ pub struct Track {
     /// "ready" when its audio is on the house.
     #[serde(default)]
     pub state: String,
+    /// Where its cover is (None: it has none), and the cover's colour (`#rrggbb`).
+    #[serde(default)]
+    pub cover_url: Option<String>,
+    #[serde(default)]
+    pub cover_color: Option<String>,
 }
 
 impl Track {
@@ -75,6 +80,12 @@ impl Track {
 
     pub fn artist(&self) -> String {
         self.artists.join(", ")
+    }
+
+    /// The cover's colour as 0xRRGGBB.
+    pub fn cover_rgb(&self) -> Option<u32> {
+        let c = self.cover_color.as_deref()?.trim().trim_start_matches('#');
+        (c.len() == 6).then(|| u32::from_str_radix(c, 16).ok()).flatten()
     }
 }
 
@@ -424,6 +435,12 @@ impl House {
         self.json(&format!("/playlists/{id}"))
     }
 
+    /// A record's cover, as the file is (a JPEG, a PNG…).
+    pub fn cover(&self, id: i64) -> Result<Vec<u8>> {
+        let mut r = self.get(&format!("/tracks/{id}/cover?size=lg")).call()?;
+        Ok(r.body_mut().with_config().limit(16 << 20).read_to_vec()?)
+    }
+
     pub fn analysis(&self, id: i64) -> Result<Analysis> {
         self.json(&format!("/tracks/{id}/analysis?structure=1"))
     }
@@ -528,5 +545,9 @@ mod tests {
         .unwrap();
         assert!(t.ready());
         assert_eq!(t.artist(), "SHVDZ, Ctrl");
+        assert_eq!(t.cover_url.as_deref(), Some("/x"));
+        assert_eq!(t.cover_rgb(), None);
+        let t: Track = serde_json::from_str(r##"{"id": 8, "title": "x", "cover_color": "#3060C0"}"##).unwrap();
+        assert_eq!(t.cover_rgb(), Some(0x3060c0));
     }
 }

@@ -85,7 +85,7 @@ pub(crate) fn facts_of(r: &Record, t: &Timing) -> RecordFacts {
         camelot: t.camelot.clone().or_else(|| Some(r.key.clone()).filter(|k| !k.is_empty())),
         vocal_bars: None,
         hook_ms: vec![],
-        cover_rgb: None,
+        cover_rgb: r.cover_rgb,
     }
 }
 
@@ -146,6 +146,8 @@ pub enum MilkHand {
 pub(crate) struct Show {
     pub(crate) direct: Direct,
     facts: [Option<RecordFacts>; 2],
+    /// Which decks' records have their cover on the stage.
+    covers: [bool; 2],
     last: Option<Instant>,
     said: String,
     /// MilkDrop's library folder, and when its notes were last written.
@@ -165,7 +167,7 @@ impl Show {
         let book = SceneBook::shipped().only(DRAWN);
         let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_secs());
         let mut direct = Direct::new(&book, v1_doc(), ComboScores::shipped(), seed);
-        direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(false));
+        direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(false, false));
         // MilkDrop's library: the shipped presets out where the helper reads them
         if let Some(home) = &milk_home {
             if let Err(e) = crate::milk::write_shipped(home) {
@@ -175,7 +177,12 @@ impl Show {
             m.set_textures(Some(home.join("textures").to_string_lossy().into_owned()));
             direct.milk = Some(m);
         }
-        Show { direct, facts: [None, None], last: None, said: String::new(), milk_home, notes_saved: Instant::now() }
+        Show { direct, facts: [None, None], covers: [false; 2], last: None, said: String::new(), milk_home, notes_saved: Instant::now() }
+    }
+
+    /// Whether a deck's record has its cover on the stage (the cover ground's say).
+    pub(crate) fn set_cover(&mut self, deck: usize, has: bool) {
+        self.covers[deck] = has;
     }
 
     /// A deck's record as facts: the line to say when they changed.
@@ -195,8 +202,11 @@ impl Show {
         self.last = Some(now);
         let room = wo_wire::v2::room(frame, [self.facts[0].as_ref(), self.facts[1].as_ref()], 0.0);
         let ok = milk.is_some_and(|m| m.ok) && self.direct.milk.as_ref().is_some_and(|m| !m.library.presets.is_empty());
-        if self.direct.director.grounds_here.as_ref().is_none_or(|g| g.contains("milk") != ok) {
-            self.direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(ok));
+        // a cover ground where a deck's record has its cover (the stage shows the master's,
+        // else the other's)
+        let cover = self.covers.iter().any(|&c| c);
+        if self.direct.director.grounds_here.as_ref().is_none_or(|g| g.contains("milk") != ok || g.contains("cover") != cover) {
+            self.direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(ok, cover));
         }
         if let (Some(m), Some(d)) = (milk, self.direct.milk.as_mut()) {
             for p in &m.crashed {
@@ -327,7 +337,7 @@ mod tests {
         let beats: Vec<f64> = (0..256).map(|i| 0.1 + i as f64 * spb).collect();
         let mut t = Timing::from_grid(Grid::new(beats, 1), 120.0);
         t.sections = vec![wo_booth::mix::Section { label: "drop".into(), start: 0.0, end: 60.0 }, wo_booth::mix::Section { label: "breakdown".into(), start: 60.0, end: 120.0 }];
-        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 128.0, key: "8A".into(), seconds: 120, audio: Audio::Synth { seed: 1 } };
+        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 128.0, key: "8A".into(), seconds: 120, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None };
         let f = facts_of(&r, &t);
         assert_eq!(f.track_id, None);
         let (origin, period) = f.steady.unwrap();
@@ -345,7 +355,7 @@ mod tests {
         let mut show = Show::new_in(Some(home.clone()));
         assert!(show.direct.milk.as_ref().is_some_and(|m| m.library.presets.len() > 500), "the shipped presets");
         let spb = 0.5;
-        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 120.0, key: String::new(), seconds: 200, audio: Audio::Synth { seed: 1 } };
+        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 120.0, key: String::new(), seconds: 200, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None };
         let t = Timing::from_grid(Grid::new((0..400).map(|i| i as f64 * spb).collect(), 0), 200.0);
         let line = show.record(0, Some(facts_of(&r, &t))).expect("the record said");
         assert!(line.starts_with(r#"{"t":"record","deck":"A""#), "{line}");

@@ -352,6 +352,15 @@ impl Desk {
         deck.set_bar_one(bar_one);
         let mut analyser = Analyser::new(RATE);
         let wave = analyser.wave();
+        // the record's cover for the stage's cover ground: none until it comes
+        self.stage.cover(slot, record.id, None);
+        if let (Audio::House { id }, true, Some(house)) = (&record.audio, record.cover, self.house.clone()) {
+            let (id, tx) = (*id, self.done_tx.clone());
+            thread::spawn(move || {
+                let cover = library::cover(&house, id).map_err(|e| eprintln!("cover of {id}: {e}")).ok();
+                let _ = tx.send(library::Done::Cover { slot, turn, id, cover });
+            });
+        }
         let audio = record.audio.clone();
         let bpm = record.bpm;
         let (house, tx) = (self.house.clone(), self.done_tx.clone());
@@ -987,6 +996,8 @@ impl Desk {
                 Err(e) => self.library.error = Some(format!("{}: {e}", self.slots[slot].record.title)),
             },
             Done::Analysed { .. } => {}
+            Done::Cover { slot, turn, id, cover } if turn == self.load_gen[slot] => self.stage.cover(slot, id, cover),
+            Done::Cover { .. } => {}
             Done::LoadFailed { slot, turn, why } if turn == self.load_gen[slot] => {
                 self.library.error = Some(format!("{}: {why}", self.slots[slot].record.title));
             }

@@ -16,12 +16,15 @@ include!(concat!(env!("OUT_DIR"), "/scenes.rs"));
 /// [IN_SCOPE] come with their phases (the sims P5, the dancers P6, the 3D type P8).
 pub const DRAWN: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift", "milk"];
 
-/// The backgrounds the Rust stage draws (not yet the camera, nor the record's cover); MilkDrop's
-/// where the stage has it.
-pub fn grounds_drawn(milk: bool) -> std::collections::BTreeSet<String> {
+/// The backgrounds the Rust stage draws (not the camera): MilkDrop's where the stage has it,
+/// the record's cover where there is one.
+pub fn grounds_drawn(milk: bool, cover: bool) -> std::collections::BTreeSet<String> {
     let mut g: std::collections::BTreeSet<String> = ["black", "white", "wash", "pulse.grid", "pulse.rays", "pulse.smoke", "pulse.stars", "field.drift"].iter().map(|s| s.to_string()).collect();
     if milk {
         g.insert("milk".into());
+    }
+    if cover {
+        g.insert("cover".into());
     }
     g
 }

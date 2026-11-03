@@ -5,9 +5,11 @@
 //! wo-render draws a [StageFrame]; a test or a replay can make one without a GPU.
 use crate::combos::{Mask, Mix};
 use crate::json::Named;
+use crate::mosh::{MoshDrive, mosh_cut};
 use crate::rig::{Ground, ShowRig, pulse_variant};
 use crate::scenes::{Scene, SceneBook, SceneLayer};
 use crate::state::{ShowState, common_block, layer_knob};
+use crate::treat::{Kaleido, SlitDraw, Style, style_of, transform_of};
 
 /// A scene shader to draw (shaders/show/<shader>.frag) with its four knobs (uM1..uM4).
 #[derive(Clone, Debug, PartialEq)]
@@ -82,8 +84,18 @@ pub struct StageFrame {
     pub white: f32,
     pub black: f32,
     pub freeze: bool,
-    /// The datamoshes so far (a new count: a mosh from the picture on).
+    /// The datamoshes so far (a new count: a mosh from the picture on), and how long and how
+    /// hard the next one is.
     pub mosh: i64,
+    pub mosh_cut: (f32, f32),
+    /// The datamosh held over the whole picture (the stage's clock plays it: Play::mosh).
+    pub mosh_hold: MoshDrive,
+    /// The transformation between the figure and its style: the slit-scan as the layer, then
+    /// the kaleidoscope.
+    pub slit: Option<SlitDraw>,
+    pub kaleido: Option<Kaleido>,
+    /// The style over the figure: a treatment, or the slit-scan.
+    pub style: Option<Style>,
 }
 
 impl StageFrame {
@@ -199,6 +211,7 @@ pub fn stage_frame(st: &ShowState, book: &SceneBook, time: f64) -> StageFrame {
     let samples_milk = figure.as_ref().is_some_and(|f| f.milk);
     let blend = (!samples_milk && b.strength > 0.0 && !plain).then_some(Blend { mix: b.mix, mask: b.mask, coverage: coverage_of(scene), strength: b.strength as f32 });
     let pal = st.palette;
+    let (slit, kaleido) = transform_of(rig, st);
     StageFrame {
         scene: st.scene.clone(),
         figure,
@@ -223,6 +236,11 @@ pub fn stage_frame(st: &ShowState, book: &SceneBook, time: f64) -> StageFrame {
         black: if st.macros.blackout { 1.0 } else { 0.0 },
         freeze: st.macros.freeze,
         mosh: st.mosh,
+        mosh_cut: mosh_cut(st),
+        mosh_hold: MoshDrive::default(),
+        slit,
+        kaleido,
+        style: style_of(rig, st),
     }
 }
 

@@ -34,7 +34,7 @@ fn a_stage_reads_the_desk() {
     let heard_a = |f: &serde_json::Value| f["d"]["a"]["heard"]["low"].as_f64().unwrap_or(0.0) > 0.0;
     let mut frames = vec![];
     let mut sound = 0usize;
-    let (mut records, mut cues) = (0usize, 0usize);
+    let (mut records, mut cues, mut covers) = (0usize, 0usize, 0usize);
     let t0 = Instant::now();
     while (frames.len() < 20 || !frames.iter().any(heard) || !frames.iter().any(heard_a) || sound == 0) && t0.elapsed() < Duration::from_secs(10) {
         d.tick();
@@ -50,6 +50,12 @@ fn a_stage_reads_the_desk() {
                 assert!(t.starts_with(r#"{"t":"desk""#), "{t}");
                 frames.push(serde_json::from_str::<serde_json::Value>(&t).unwrap());
             }
+            // each deck's record cover, for the cover ground: none for a made-up record
+            Ok(Message::Binary(b)) if b.starts_with(b"COV1") => {
+                let c = wo_wire::Cover::read(&b).expect("a cover as the wire writes it");
+                assert_eq!((c.w, c.h), (0, 0), "a synth record has no cover");
+                covers += 1;
+            }
             // the room's sound beside each frame, for MilkDrop
             Ok(Message::Binary(b)) => {
                 assert_eq!(&b[..4], b"PCM1");
@@ -62,7 +68,7 @@ fn a_stage_reads_the_desk() {
         sleep(Duration::from_millis(5));
     }
     assert!(frames.len() >= 20, "{} frames", frames.len());
-    assert!(records >= 1 && cues >= 1, "{records} records, {cues} cues");
+    assert!(records >= 1 && cues >= 1 && covers >= 1, "{records} records, {cues} cues, {covers} covers");
     assert_eq!(d.stage().stages, 1);
     let a = |f: &serde_json::Value| f["d"]["a"].clone();
     let (first, last) = (a(&frames[0]), a(&frames[frames.len() - 1]));

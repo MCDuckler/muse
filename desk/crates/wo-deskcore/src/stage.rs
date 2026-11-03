@@ -37,6 +37,8 @@ pub(crate) struct Stage {
     show: Option<crate::show::Show>,
     /// What each deck's facts were made from, to make them again only on a change.
     facts_key: [Option<FactsKey>; 2],
+    /// Each deck's cover as the wire carries it (wo_wire::cover), for stages now and to come.
+    covers: [Option<Vec<u8>>; 2],
 }
 
 /// A deck's record and how much of its timing is known.
@@ -142,6 +144,11 @@ impl Stage {
                 Ok(s) => {
                     if let Some(h) = &self.hello {
                         s.set_hello(h.clone());
+                    }
+                    for (i, c) in self.covers.iter().enumerate() {
+                        if let Some(c) = c {
+                            s.keep_binary(["cover.A", "cover.B"][i], c.clone());
+                        }
                     }
                     self.wire = Some(s)
                 }
@@ -275,6 +282,23 @@ impl Stage {
         if let (Some(line), Some(w)) = (line, &self.wire) {
             w.keep(["record.A", "record.B"][deck], line);
         }
+    }
+
+    /// A deck's record cover (None: it has none, or not yet), for the cover ground: to the
+    /// stages, and to the director (a cover ground only where there is a cover).
+    pub(crate) fn cover(&mut self, deck: usize, track_id: i64, cover: Option<crate::library::Picture>) {
+        let bytes = match &cover {
+            Some((w, h, rgba)) => wo_wire::cover(deck, track_id, *w, *h, rgba),
+            None => wo_wire::cover(deck, track_id, 0, 0, &[]),
+        };
+        if self.covers[deck].as_ref() == Some(&bytes) {
+            return;
+        }
+        if let Some(w) = &self.wire {
+            w.keep_binary(["cover.A", "cover.B"][deck], bytes.clone());
+        }
+        self.covers[deck] = Some(bytes);
+        self.show().set_cover(deck, cover.is_some());
     }
 
     /// The director's frame: its cue to the stages when it changed.

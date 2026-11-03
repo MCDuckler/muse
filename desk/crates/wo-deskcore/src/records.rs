@@ -13,6 +13,9 @@ pub struct Record {
     pub key: String,
     pub seconds: u32,
     pub audio: Audio,
+    /// The house has a cover for it; the cover's colour (0xRRGGBB).
+    pub cover: bool,
+    pub cover_rgb: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,6 +41,8 @@ impl Record {
             key: String::new(),
             seconds: (t.duration_ms.unwrap_or(0).max(0) / 1000) as u32,
             audio: if t.ready() { Audio::House { id: t.id } } else { Audio::None },
+            cover: t.cover_url.is_some(),
+            cover_rgb: t.cover_rgb(),
         }
     }
 
@@ -88,6 +93,8 @@ pub fn synth_rows() -> Vec<Record> {
             key: key.into(),
             seconds: crate::synth::seconds(bpm) as u32,
             audio: Audio::Synth { seed },
+            cover: false,
+            cover_rgb: None,
         })
         .collect()
 }
@@ -122,6 +129,8 @@ fn parse_fixture() -> Vec<Record> {
                 key: fields[4].clone(),
                 seconds: fields[5].parse().unwrap_or(0),
                 audio: Audio::None,
+                cover: false,
+                cover_rgb: None,
             });
         }
     }

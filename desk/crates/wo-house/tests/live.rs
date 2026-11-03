@@ -27,4 +27,10 @@ fn reads_the_house() {
     eprintln!("analysis of {id}: {} beats, {:.2} bpm, {:?}, pads {:?}", g.beats.len(), 60.0 / g.spb().unwrap_or(1.0), a.camelot, a.auto_pads());
     assert!(g.beats.len() > 16);
     eprintln!("hand pads: {:?}", house.hand_pads(id).expect("pads"));
+    // a cover, as the Desk sends the stage's cover ground
+    if let Some(t) = page.items.iter().find(|t| t.cover_url.is_some()) {
+        let bytes = house.cover(t.id).expect("a cover");
+        eprintln!("cover of {}: {} bytes ({:02x?}…), colour {:?}", t.id, bytes.len(), &bytes[..4], t.cover_rgb().map(|c| format!("{c:06x}")));
+        assert!(bytes.len() > 1000);
+    }
 }

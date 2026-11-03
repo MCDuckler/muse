@@ -60,7 +60,7 @@ struct Heard {
     hello: Option<String>,
     /// Lines a stage connecting later is told after the hello, newest by key (v2: each
     /// deck's record, the cue).
-    kept: std::collections::BTreeMap<String, String>,
+    kept: std::collections::BTreeMap<String, Message>,
     /// Stages that said they are v2 (the Rust stage).
     v2: usize,
 }
@@ -149,8 +149,15 @@ impl Server {
     /// A line to every stage, and to every stage that connects from now on (the newest of
     /// its `key`).
     pub fn keep(&self, key: &str, line: String) {
-        self.heard.lock().unwrap().kept.insert(key.to_owned(), line.clone());
+        self.heard.lock().unwrap().kept.insert(key.to_owned(), Message::text(line.clone()));
         self.say(&line);
+    }
+
+    /// Binary to every stage and to every stage that connects from now on (a deck's cover).
+    pub fn keep_binary(&self, key: &str, bytes: Vec<u8>) {
+        let m = Message::binary(bytes);
+        self.heard.lock().unwrap().kept.insert(key.to_owned(), m.clone());
+        self.send(m);
     }
 
     /// Whether a v2 stage (one the Desk directs) is reading.
@@ -202,7 +209,7 @@ fn serve(stream: TcpStream, token: &str, heard: Arc<Mutex<Heard>>) {
     };
     let _ = ws.send(Message::text(hello));
     for k in kept {
-        let _ = ws.send(Message::text(k));
+        let _ = ws.send(k);
     }
     let mut v2 = false;
     run(&mut ws, &rx, &alive, &heard, &mut v2);

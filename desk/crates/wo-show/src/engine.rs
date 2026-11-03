@@ -228,9 +228,15 @@ pub struct Play {
     genome: Genome,
     genome_track: Option<i64>,
     master: String,
+    mosh: crate::mosh::MoshClock,
 }
 
 impl Play {
+    /// The datamosh held this frame, played by the music (the stage's clock: once a frame).
+    pub fn mosh(&mut self, st: &ShowState) -> crate::mosh::MoshDrive {
+        self.mosh.frame(st, &st.rig.transform)
+    }
+
     /// One frame `dt` seconds after the last, from the decks (the stage carries them on
     /// between the Desk's frames), the room's sound (`heard`: the engine's own measure) and
     /// the Desk's Cue.

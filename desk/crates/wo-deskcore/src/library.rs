@@ -54,6 +54,8 @@ pub(crate) enum Done {
     Shelf { turn: u64, rows: Result<(Vec<Record>, i64), String> },
     Playlists(Result<Vec<PlaylistSummary>, String>),
     Analysed { slot: usize, turn: u64, result: Result<Box<Analysed>, String> },
+    /// A record's cover, as the stage's cover ground takes it (None: none to be had).
+    Cover { slot: usize, turn: u64, id: i64, cover: Option<Picture> },
     LoadFailed { slot: usize, turn: u64, why: String },
 }
 
@@ -96,6 +98,22 @@ pub(crate) fn fetch_playlists(tx: &Sender<Done>, house: &House) {
         }
         let _ = tx.send(Done::Playlists(lists));
     });
+}
+
+/// A picture, RGBA8 rows top first.
+pub(crate) type Picture = (u32, u32, Vec<u8>);
+
+/// The longest side of a cover sent to the stage: a ground behind the figure, filled and
+/// cropped to the screen, half-dimmed (half a megabyte up the wire per record).
+const COVER_SIDE: u32 = 512;
+
+/// A house record's cover, decoded and made small enough for the stage.
+pub(crate) fn cover(house: &House, id: i64) -> Result<Picture, String> {
+    let bytes = house.cover(id).map_err(|e| e.to_string())?;
+    let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+    let img = if img.width().max(img.height()) > COVER_SIDE { img.resize(COVER_SIDE, COVER_SIDE, image::imageops::FilterType::Triangle) } else { img };
+    let rgba = img.to_rgba8();
+    Ok((rgba.width(), rgba.height(), rgba.into_raw()))
 }
 
 /// A house record's analysis and hand pads (the audio follows in the deck's loader).

@@ -13,6 +13,8 @@ pub enum In {
     Said(Said),
     /// The room's sound (wo_wire::pcm), for MilkDrop.
     Pcm(Vec<u8>),
+    /// A deck's record cover (wo_wire::cover), for the cover ground.
+    Cover(wo_wire::Cover),
     Lost,
 }
 
@@ -56,6 +58,13 @@ impl Link {
                             }
                             Ok(Message::Binary(b)) if b.starts_with(b"PCM1") => {
                                 if tx.send(In::Pcm(b.to_vec())).is_err() {
+                                    return;
+                                }
+                            }
+                            Ok(Message::Binary(b)) if b.starts_with(b"COV1") => {
+                                if let Some(c) = wo_wire::Cover::read(&b)
+                                    && tx.send(In::Cover(c)).is_err()
+                                {
                                     return;
                                 }
                             }

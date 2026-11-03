@@ -13,6 +13,7 @@ pub mod frame;
 pub mod faves;
 pub mod json;
 pub mod milk;
+pub mod mosh;
 pub mod plan;
 pub mod rig;
 pub mod rng;
@@ -20,6 +21,7 @@ pub mod scenes;
 pub mod scores;
 pub mod state;
 pub mod taste;
+pub mod treat;
 
 pub use combos::{Combo, Fx, Mask, Mix};
 pub use rig::{Figure, Ground, Look, SceneMeta, ShowRig};

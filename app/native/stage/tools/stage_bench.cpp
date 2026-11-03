@@ -298,6 +298,11 @@ int main(int argc, char** argv) {
       for (auto [i, x] : qs) if (i >= 0 && i < 160) q[i] = x;
       ws_words(q.data(), 66);
     }
+    if (treat > 0) {
+      // As the stage hears it from Dart each frame: the kick's swell and the clock.
+      const float tq[WS_TREAT] = {(float)treat, (cell > 0 ? cell : 8.0f) / H, 0.965f, 0.86f, 1.0f, 0.027f, 0.008f, 0.06f, 0.2f, 4, kick, 0.5f, 0.5f, (float)t, 1, 1, 1, 1, 1};
+      ws_treat(tq, WS_TREAT);
+    }
     if (slit >= 0) {
       float tq[WS_TREAT] = {};
       tq[0] = 9; tq[1] = (float)slit; tq[10] = kick; tq[13] = (float)t; tq[14] = 1; tq[15] = 1;

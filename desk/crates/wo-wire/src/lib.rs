@@ -159,6 +159,45 @@ pub fn pcm(rate: u32, samples: &[f32]) -> Vec<u8> {
     b
 }
 
+/// A deck's record cover for the v2 stage (its cover ground): `COV1`, the deck (`A`/`B`),
+/// three bytes of nothing, the record (i64), the width and height (u32), then RGBA8 rows
+/// top first; 0×0 where the record has none. Little-endian. A v1 stage reads only `PCM1`.
+pub fn cover(deck: usize, track_id: i64, w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(24 + rgba.len());
+    b.extend_from_slice(b"COV1");
+    b.extend_from_slice(&[if deck == 1 { b'B' } else { b'A' }, 0, 0, 0]);
+    b.extend_from_slice(&track_id.to_le_bytes());
+    b.extend_from_slice(&w.to_le_bytes());
+    b.extend_from_slice(&h.to_le_bytes());
+    b.extend_from_slice(rgba);
+    b
+}
+
+/// A cover as [cover] wrote it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cover {
+    pub deck: usize,
+    pub track_id: i64,
+    pub w: u32,
+    pub h: u32,
+    pub rgba: Vec<u8>,
+}
+
+impl Cover {
+    pub fn read(b: &[u8]) -> Option<Cover> {
+        if b.len() < 24 || &b[..4] != b"COV1" {
+            return None;
+        }
+        let u32_at = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+        let (w, h) = (u32_at(16), u32_at(20));
+        let rgba = &b[24..];
+        if rgba.len() != (w as usize) * (h as usize) * 4 {
+            return None;
+        }
+        Some(Cover { deck: if b[4] == b'B' { 1 } else { 0 }, track_id: i64::from_le_bytes(b[8..16].try_into().unwrap()), w, h, rgba: rgba.to_vec() })
+    }
+}
+
 pub fn frame(f: &Frame) -> String {
     format!(r#"{{"t":"desk","d":{}}}"#, serde_json::to_string(f).expect("a frame is JSON"))
 }
@@ -284,6 +323,10 @@ mod tests {
     fn the_sound_is_sixteen_bit_after_its_header() {
         let b = pcm(48000, &[0.0, 1.0, -1.0, 2.0]);
         assert_eq!(&b[..4], b"PCM1");
+        let c = cover(1, 77, 2, 1, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(Cover::read(&c), Some(Cover { deck: 1, track_id: 77, w: 2, h: 1, rgba: vec![1, 2, 3, 4, 5, 6, 7, 8] }));
+        assert_eq!(Cover::read(&cover(0, 5, 0, 0, &[])).map(|c| (c.deck, c.w)), Some((0, 0)), "none: 0×0");
+        assert_eq!(Cover::read(&c[..c.len() - 1]), None, "short");
         assert_eq!(u32::from_le_bytes(b[4..8].try_into().unwrap()), 48000);
         let s: Vec<i16> = b[8..].chunks(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
         assert_eq!(s, vec![0, 32767, -32767, 32767]);

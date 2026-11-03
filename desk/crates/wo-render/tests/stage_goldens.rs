@@ -12,6 +12,8 @@ use std::path::PathBuf;
 
 use wo_render::{Gpu, Stage};
 use wo_show::combos::{Mask, Mix};
+use wo_show::mosh::MoshClock;
+use wo_show::rig::{RigTransform, Treatment};
 use wo_show::deck::{Channel, RecordFacts, ShowAudio, ShowDeck};
 use wo_show::frame::stage_frame;
 use wo_show::rig::{Ground, RigBlend, RigGround};
@@ -45,6 +47,7 @@ fn state(scene: &str, t: f64, dyns: &mut Dynamics) -> ShowState {
     let a = ShowDeck::derive("A", Some(&r), true, 30_000.0 + t * 1000.0, Channel::default(), audio);
     let dyn_ = dyns.frame(&audio, &a, 1.0 / 60.0, true);
     ShowState {
+        dt: 1.0 / 60.0,
         genome: Genome::of(42, Some("8A"), Some(128.0), Some(0x3060c0)),
         palette: ShowPalette::HOUSE,
         audio,
@@ -58,11 +61,17 @@ fn state(scene: &str, t: f64, dyns: &mut Dynamics) -> ShowState {
 struct Case {
     name: String,
     scene: &'static str,
-    edit: fn(&mut ShowState, &SceneBook),
+    /// The state changed for this case, at frame `i` of the second drawn.
+    edit: fn(&mut ShowState, &SceneBook, usize),
+}
+
+/// The scene's own look (its figure), as the director would put it on.
+fn own_rig(st: &mut ShowState, b: &SceneBook) {
+    st.rig = b.scenes[st.scene.as_deref().unwrap()].rig();
 }
 
 fn cases() -> Vec<Case> {
-    let mut v: Vec<Case> = DRAWN.iter().map(|s| Case { name: (*s).into(), scene: s, edit: |_, _| {} }).collect();
+    let mut v: Vec<Case> = DRAWN.iter().map(|s| Case { name: (*s).into(), scene: s, edit: |_, _, _| {} }).collect();
     fn rig(st: &mut ShowState, b: &SceneBook, ground: RigGround, blend: RigBlend) {
         let mut r = b.scenes[st.scene.as_deref().unwrap()].rig();
         r.ground = ground;
@@ -72,27 +81,27 @@ fn cases() -> Vec<Case> {
     v.push(Case {
         name: "glide-on-drift-keyhole-screen".into(),
         scene: "glide",
-        edit: |st, b| rig(st, b, RigGround { kind: Ground::Field, field: Some("drift".into()), dim: 0.8, knobs: vec![] }, RigBlend { mask: Mask::Keyhole, mix: Mix::Screen, strength: 1.0 }),
+        edit: |st, b, _| rig(st, b, RigGround { kind: Ground::Field, field: Some("drift".into()), dim: 0.8, knobs: vec![] }, RigBlend { mask: Mask::Keyhole, mix: Mix::Screen, strength: 1.0 }),
     });
     v.push(Case {
         name: "glide-on-milk-inverted-screen".into(),
         scene: "glide",
-        edit: |st, b| rig(st, b, RigGround { kind: Ground::Milk, ..Default::default() }, RigBlend { mask: Mask::Inverted, mix: Mix::Screen, strength: 1.0 }),
+        edit: |st, b, _| rig(st, b, RigGround { kind: Ground::Milk, ..Default::default() }, RigBlend { mask: Mask::Inverted, mix: Mix::Screen, strength: 1.0 }),
     });
     v.push(Case {
         name: "blocks-on-wash-add".into(),
         scene: "blocks",
-        edit: |st, b| rig(st, b, RigGround { kind: Ground::Wash, ..Default::default() }, RigBlend { mask: Mask::None, mix: Mix::Add, strength: 1.0 }),
+        edit: |st, b, _| rig(st, b, RigGround { kind: Ground::Wash, ..Default::default() }, RigBlend { mask: Mask::None, mix: Mix::Add, strength: 1.0 }),
     });
     v.push(Case {
         name: "flash-on-pulse-rays-contrast".into(),
         scene: "flash",
-        edit: |st, b| rig(st, b, RigGround { kind: Ground::Pulse, field: Some("rays".into()), dim: 1.0, knobs: vec![] }, RigBlend { mask: Mask::Inverted, mix: Mix::Contrast, strength: 0.9 }),
+        edit: |st, b, _| rig(st, b, RigGround { kind: Ground::Pulse, field: Some("rays".into()), dim: 1.0, knobs: vec![] }, RigBlend { mask: Mask::Inverted, mix: Mix::Contrast, strength: 0.9 }),
     });
     v.push(Case {
         name: "kinetic-from-drift-half".into(),
         scene: "kinetic",
-        edit: |st, _| {
+        edit: |st, _, _| {
             st.scene_from = Some("drift".into());
             st.scene_k = 0.5;
         },
@@ -100,9 +109,65 @@ fn cases() -> Vec<Case> {
     v.push(Case {
         name: "blocks-strobe".into(),
         scene: "blocks",
-        edit: |st, _| {
+        edit: |st, _, _| {
             st.macros = ShowMacros { strobe: 0.6, ..Default::default() };
             st.a.beat_phase = 0.1;
+        },
+    });
+    // the looks (P4): each treatment over a scene, the transformations, the moshes
+    macro_rules! treated {
+        ($name:literal, $scene:literal, $t:expr) => {
+            v.push(Case {
+                name: $name.into(),
+                scene: $scene,
+                edit: |st, b, _| {
+                    own_rig(st, b);
+                    st.rig.figure.treatment = $t;
+                },
+            })
+        };
+    }
+    treated!("kinetic-ascii", "kinetic", Treatment::Ascii);
+    treated!("glide-dither", "glide", Treatment::Dither);
+    treated!("drift-contour", "drift", Treatment::Contour);
+    treated!("blocks-halftone", "blocks", Treatment::Halftone);
+    treated!("kinetic-thermal", "kinetic", Treatment::Thermal);
+    treated!("glide-lines", "glide", Treatment::Lines);
+    treated!("flash-crt", "flash", Treatment::Crt);
+    treated!("kinetic-slit", "kinetic", Treatment::Slit);
+    v.push(Case {
+        name: "kinetic-kaleidoscope-4".into(),
+        scene: "kinetic",
+        edit: |st, b, _| {
+            own_rig(st, b);
+            st.rig.transform = RigTransform { count: 4, differ: 0.4, turn: 0.1, line: 0.5, ..Default::default() };
+        },
+    });
+    v.push(Case {
+        name: "glide-slit-then-kaleidoscope-screen-ascii".into(),
+        scene: "glide",
+        edit: |st, b, _| {
+            own_rig(st, b);
+            st.rig.transform = RigTransform { count: 3, slit: true, blend: Mix::Screen, ..Default::default() };
+            st.rig.figure.treatment = Treatment::Ascii;
+        },
+    });
+    v.push(Case {
+        name: "kinetic-mosh-held".into(),
+        scene: "kinetic",
+        edit: |st, b, _| {
+            own_rig(st, b);
+            st.rig.transform = RigTransform { mosh: true, ..Default::default() };
+        },
+    });
+    v.push(Case {
+        name: "kinetic-moshed-into-glide".into(),
+        scene: "kinetic",
+        edit: |st, _, i| {
+            if i >= 30 {
+                st.scene = Some("glide".into());
+                st.mosh = 1;
+            }
         },
     });
     v
@@ -167,15 +232,21 @@ fn every_scene_and_way_of_blending_draws_as_its_golden() {
         let target = wo_render::target(&gpu, W, H);
         let view = target.create_view(&Default::default());
         let mut dyns = Dynamics::default();
+        let mut mosh = MoshClock::new();
         // a second of frames: the trails and the particles settle as they would
         let frames = 60;
         for i in 0..frames {
             let t = i as f64 / 60.0;
             let mut st = state(case.scene, t, &mut dyns);
-            (case.edit)(&mut st, &book);
-            let f = stage_frame(&st, &book, 10.0 + t);
+            (case.edit)(&mut st, &book, i);
+            let mut f = stage_frame(&st, &book, 10.0 + t);
+            // the stage's clock plays the held mosh (wo_show::engine::Play::mosh)
+            f.mosh_hold = mosh.frame(&st, &st.rig.transform);
             let cmd = stage.draw(&gpu, &f, 1.0 / 60.0, Some(&view), W, H, None);
             gpu.queue.submit([cmd]);
+            // each frame waited for: the held mosh's look at its picture (read back without
+            // waiting) then lands on the same frame every run
+            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
             assert_eq!(stage.drawn.missing, None, "{}", case.name);
         }
         let px = wo_render::read(&gpu, &target);

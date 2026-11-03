@@ -296,7 +296,11 @@ struct App {
     /// The made-up record's bass, where it is.
     phase: f64,
     milk: milk::MilkRun,
+    /// Each deck's record cover as the Desk sent it, and once on the GPU its picture.
+    covers: [Option<(wo_wire::Cover, Option<wgpu::TextureView>)>; 2],
     missing: Option<String>,
+    /// The ground under the figure last frame, as the log names it.
+    ground: Option<String>,
 }
 
 impl App {
@@ -310,7 +314,7 @@ impl App {
         let screen = d.window.current_monitor().map(|m| m.name().unwrap_or_default()).unwrap_or_default();
         let (ww, wh) = d.stage.drawn.work;
         println!(
-            "STAGE fps={:.1} size={}x{} screen={} full={} gpu={} ({:?}) scene={} work={}x{} ms={:.1} heard={} cues={} pictures={} black={} milk={:.0}fps/{}",
+            "STAGE fps={:.1} size={}x{} screen={} full={} gpu={} ({:?}) scene={} look={} ground={} work={}x{} ms={:.1} heard={} cues={} pictures={} black={} milk={:.0}fps/{}",
             self.frames as f64 / secs,
             size.width,
             size.height,
@@ -319,6 +323,8 @@ impl App {
             d.gpu.info.name,
             d.gpu.info.backend,
             self.play_scene().unwrap_or("-"),
+            if d.stage.drawn.looks.is_empty() { "-".to_owned() } else { d.stage.drawn.looks.join("+") },
+            self.ground.as_deref().unwrap_or("-"),
             ww,
             wh,
             d.took.load(Ordering::Relaxed) as f64 / 1000.0,
@@ -388,6 +394,10 @@ impl App {
                     In::Said(Said::Hand(h)) => hands.push(h),
                     In::Said(Said::Other) => {}
                     In::Pcm(b) => self.milk.pcm(&b),
+                    In::Cover(c) => {
+                        let deck = c.deck.min(1);
+                        self.covers[deck] = Some((c, None));
+                    }
                 }
             }
             // the Desk gone for good (it closes its stage as it goes): so does this
@@ -472,7 +482,9 @@ impl App {
         self.last = now;
         let (room, cue, heard) = self.source.room(dt);
         let st = self.play.frame(dt, room, &cue, heard);
-        let f = stage_frame(&st, &self.book, self.started.elapsed().as_secs_f64());
+        let mut f = stage_frame(&st, &self.book, self.started.elapsed().as_secs_f64());
+        // the held datamosh, played by the music on the stage's own clock
+        f.mosh_hold = self.play.mosh(&st);
         self.black = f.black;
         // on its own, MilkDrop hears the made-up record: a kick and a bass on the beat, hats
         if let Source::Own { t0, .. } = &self.source {
@@ -486,6 +498,19 @@ impl App {
             || f.from.as_ref().is_some_and(|l| l.milk)
             || (f.blend.is_some() && f.ground == wo_show::frame::GroundDraw::Milk);
         d.stage.milk = self.milk.frame(&d.gpu, &st, &cue.milk, wants_milk, dt).cloned();
+        // the cover ground: the master's record's cover, else the other deck's
+        for (c, view) in self.covers.iter_mut().flatten() {
+            if view.is_none() && c.w > 0 && c.h > 0 {
+                *view = Some(wo_render::upload(&d.gpu, c.w, c.h, &c.rgba).create_view(&Default::default()));
+            }
+        }
+        self.ground = f.blend.is_some().then(|| match &f.ground {
+            wo_show::frame::GroundDraw::Field(l) => l.shader.clone(),
+            g => format!("{g:?}").to_lowercase(),
+        });
+        let master = usize::from(st.master_name == "B");
+        let view_of = |i: usize| self.covers[i].as_ref().and_then(|(_, v)| v.clone());
+        d.stage.cover = view_of(master).or_else(|| view_of(1 - master));
         if present {
             // the working size, let down while frames come late
             let budget = 1.0 / d.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()).map_or(60.0, |r| r as f64 / 1000.0).max(30.0);
@@ -555,7 +580,8 @@ impl App {
         let Some(file) = self.args.shot.clone() else { return };
         let (room, cue, heard) = self.source.room(0.0);
         let st = self.play.frame(0.0, room, &cue, heard);
-        let f = stage_frame(&st, &self.book, self.started.elapsed().as_secs_f64());
+        let mut f = stage_frame(&st, &self.book, self.started.elapsed().as_secs_f64());
+        f.mosh_hold = self.play.mosh(&st);
         let Some(d) = &mut self.win else { return };
         let (w, h) = (960u32, ((960.0 * d.config.height as f32 / d.config.width.max(1) as f32).round() as u32).max(2));
         let t = wo_render::target(&d.gpu, w, h);
@@ -712,7 +738,7 @@ fn main() {
                 let lib = wo_show::milk::MilkLibrary::new(presets, Default::default());
                 direct.milk = Some(wo_show::milk::MilkDirector::new(lib, wo_show::scores::MilkScores::shipped(), 11));
             }
-            direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(milk_ok));
+            direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(milk_ok, false));
             if let Some(s) = &args.scene {
                 direct.director.choose(s, wo_show::director::SceneChange::Cut);
                 direct.hold(true);
@@ -723,7 +749,7 @@ fn main() {
     let el = EventLoop::new().expect("an event loop");
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(el.owned_display_handle())));
     let now = Instant::now();
-    let mut app = App { args, instance, book, source, play: Play::default(), win: None, started: now, last: now, frames: 0, since: now, shown_due: now, pictures: 0, heard: 0, cues: 0, black: 0.0, presented: now, missing: None, milk, paced: false, due: now, phase: 0.0 };
+    let mut app = App { args, instance, book, source, play: Play::default(), win: None, started: now, last: now, frames: 0, since: now, shown_due: now, pictures: 0, heard: 0, cues: 0, black: 0.0, presented: now, missing: None, milk, covers: [None, None], ground: None, paced: false, due: now, phase: 0.0 };
     el.run_app(&mut app).expect("the stage ran");
 }
 
