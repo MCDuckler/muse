@@ -1,6 +1,6 @@
 //! P0 spike: a dancer drawn on wgpu — the scan skinned on the CPU into one move's pose at
 //! four beats, lit, its skin on, side by side in one picture.
-//!   cargo run --release -p wo-dance --example dancer_shot -- <dancer dir> <move id> <out.png>
+//!   cargo run --release -p wo-render --example dancer_shot -- <dancer dir> <move id> <out.png>
 use std::path::PathBuf;
 
 use wgpu::util::DeviceExt;

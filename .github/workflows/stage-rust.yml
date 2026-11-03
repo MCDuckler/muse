@@ -52,7 +52,7 @@ jobs:
           WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}
         run: |
           cargo test --release -p wo-dance
-          cargo run --release -p wo-dance --example dancer_shot -- ../app/assets/show/dance/chris long22 "$GITHUB_WORKSPACE/shots-${{ runner.os }}/dancer.png"
+          cargo run --release -p wo-render --example dancer_shot -- ../app/assets/show/dance/chris long22 "$GITHUB_WORKSPACE/shots-${{ runner.os }}/dancer.png"
       - name: The stage window, full screen on a screen chosen by name
         env:
           WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}

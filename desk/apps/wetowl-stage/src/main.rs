@@ -301,6 +301,40 @@ struct App {
     missing: Option<String>,
     /// The ground under the figure last frame, as the log names it.
     ground: Option<String>,
+    /// The dancers (their rigs, where this stage has them) and their choreography.
+    dance: Option<(wo_dance::sim::Company, wo_dance::sim::DanceSim)>,
+    picture_cam: wo_dance::clock::PictureCam,
+}
+
+/// Where the dancers are: WETOWL_DANCE, `dance/` beside this program (the Desk's installs),
+/// the Mac bundle's Resources, the repo's assets (a build in the repo), the WetOwl app's.
+fn dance_dir() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let ok = |p: &PathBuf| p.join("chris").join("dancer.json").is_file() || p.join("joe").join("dancer.json").is_file();
+    if let Some(p) = std::env::var_os("WETOWL_DANCE").map(PathBuf::from) {
+        return ok(&p).then_some(p);
+    }
+    let exe = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from));
+    let mut c = vec![];
+    if let Some(d) = &exe {
+        c.push(d.join("dance"));
+        if let Some(contents) = d.parent() {
+            c.push(contents.join("Resources").join("dance"));
+        }
+        // a build in the repo: desk/target/release
+        c.push(d.join("../../../app/assets/show/dance"));
+        c.push(d.join("stage/data/flutter_assets/assets/show/dance"));
+        c.push(d.join("data/flutter_assets/assets/show/dance"));
+    }
+    if let Some(h) = std::env::var_os("HOME").map(PathBuf::from).filter(|_| cfg!(target_os = "linux")) {
+        c.push(h.join(".local/opt/wetowl/data/flutter_assets/assets/show/dance"));
+    }
+    c.into_iter().find(ok)
+}
+
+/// Whether `scene` (by id) is one the dancers draw.
+fn dancers(book: &SceneBook, scene: Option<&str>) -> bool {
+    scene.and_then(|s| book.scenes.get(s)).is_some_and(|s| s.layers.iter().any(|l| l.sim.as_deref().is_some_and(|k| k.starts_with("dance."))))
 }
 
 impl App {
@@ -483,8 +517,10 @@ impl App {
         let (room, cue, heard) = self.source.room(dt);
         let st = self.play.frame(dt, room, &cue, heard);
         let mut f = stage_frame(&st, &self.book, self.started.elapsed().as_secs_f64());
-        // the held datamosh, played by the music on the stage's own clock
+        // the held datamosh, played by the music on the stage's own clock; a 3D figure's
+        // picture moved as a camera would
         f.mosh_hold = self.play.mosh(&st);
+        f.camera = self.picture_cam.frame(&st, dt);
         self.black = f.black;
         // on its own, MilkDrop hears the made-up record: a kick and a bass on the beat, hats
         if let Source::Own { t0, .. } = &self.source {
@@ -526,6 +562,15 @@ impl App {
             d.picture = Some(Picture::new(&d.gpu, ww, wh));
         }
         let pic = if picture_now { d.picture.as_ref() } else { None };
+        // the dancers, where the scene is theirs: posed and painted at the working size
+        if let Some((co, sim)) = &mut self.dance
+            && f.figure.is_none()
+            && dancers(&self.book, f.scene.as_deref())
+        {
+            let (ww, wh) = d.stage.work_size(w, h);
+            let scene = sim.frame(co, &st, dt, ww as f64, wh as f64);
+            d.stage.dance_cmds = sim.paint(co, &scene, &st, dt);
+        }
         let began = Instant::now();
         let cmd = d.stage.draw(&d.gpu, &f, dt, view.as_ref(), w, h, pic.map(|p| &p.view));
         let mut cmds = vec![cmd];
@@ -586,6 +631,14 @@ impl App {
         let (w, h) = (960u32, ((960.0 * d.config.height as f32 / d.config.width.max(1) as f32).round() as u32).max(2));
         let t = wo_render::target(&d.gpu, w, h);
         let v = t.create_view(&Default::default());
+        if let Some((co, sim)) = &mut self.dance
+            && f.figure.is_none()
+            && dancers(&self.book, f.scene.as_deref())
+        {
+            let (ww, wh) = d.stage.work_size(w, h);
+            let scene = sim.frame(co, &st, 0.0, ww as f64, wh as f64);
+            d.stage.dance_cmds = sim.paint(co, &scene, &st, 0.0);
+        }
         let cmd = d.stage.draw(&d.gpu, &f, 0.0, None, w, h, Some(&v));
         d.gpu.queue.submit([cmd]);
         let px = wo_render::read(&d.gpu, &t);
@@ -668,6 +721,11 @@ impl ApplicationHandler for App {
         let t0 = Instant::now();
         let mut stage = Stage::new(&gpu, format).unwrap_or_else(|e| panic!("the stage's shaders: {e}"));
         stage.scale = self.args.scale;
+        if let Some((co, _)) = &self.dance {
+            let t = Instant::now();
+            stage.set_dancers(&gpu, co);
+            eprintln!("stage: {} dancers up in {:.0} ms", co.rigs.len(), t.elapsed().as_secs_f64() * 1000.0);
+        }
         eprintln!("stage: {} shaders ready in {:.0} ms on {} ({:?})", wo_render::stage::stage_shaders().len() + 2, t0.elapsed().as_secs_f64() * 1000.0, gpu.info.name, gpu.info.backend);
         window.request_redraw();
         self.paced = present_mode != wgpu::PresentMode::Fifo;
@@ -749,7 +807,19 @@ fn main() {
     let el = EventLoop::new().expect("an event loop");
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(el.owned_display_handle())));
     let now = Instant::now();
-    let mut app = App { args, instance, book, source, play: Play::default(), win: None, started: now, last: now, frames: 0, since: now, shown_due: now, pictures: 0, heard: 0, cues: 0, black: 0.0, presented: now, missing: None, milk, covers: [None, None], ground: None, paced: false, due: now, phase: 0.0 };
+    let dance = match dance_dir() {
+        Some(dir) => {
+            let t = Instant::now();
+            let co = wo_dance::sim::Company::load(&dir);
+            eprintln!("stage: dancers from {} ({} in {:.0} ms)", dir.display(), co.as_ref().map_or(0, |c| c.rigs.len()), t.elapsed().as_secs_f64() * 1000.0);
+            co.map(|c| (c, wo_dance::sim::DanceSim::from_env()))
+        }
+        None => {
+            eprintln!("stage: no dancers here (WETOWL_DANCE, dance/ beside the stage)");
+            None
+        }
+    };
+    let mut app = App { args, instance, book, source, play: Play::default(), win: None, started: now, last: now, frames: 0, since: now, shown_due: now, pictures: 0, heard: 0, cues: 0, black: 0.0, presented: now, missing: None, milk, covers: [None, None], ground: None, dance, picture_cam: Default::default(), paced: false, due: now, phase: 0.0 };
     el.run_app(&mut app).expect("the stage ran");
 }
 

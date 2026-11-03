@@ -12,7 +12,9 @@ use std::path::Path;
 use serde::Deserialize;
 
 pub mod carry;
+pub mod cmd;
 pub mod clock;
+pub mod paint;
 pub mod sim;
 
 pub type M34 = [f64; 12];

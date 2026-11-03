@@ -34,14 +34,14 @@ impl Company {
 }
 
 /// How much bigger a model is drawn, so every dancer stands about a person's height.
-fn scale_of(rig: &Rig) -> f64 {
+pub(crate) fn scale_of(rig: &Rig) -> f64 {
     if rig.height > 0.3 { (1.75 / rig.height).clamp(0.8, 1.2) } else { 1.0 }
 }
 
 /// One line of dancing: a move playing from an anchor, the one before it (danced on by anyone
 /// a beat or so behind), and what is left of the pose it was in when it changed.
 #[derive(Clone, Debug)]
-struct Track {
+pub(crate) struct Track {
     mv: Option<usize>,
     prev: Option<usize>,
     at: f64,
@@ -90,7 +90,7 @@ impl Track {
     }
 
     /// The pose at track beat `beats`: the lead's half, or with `partner` the partner's.
-    fn pose(&self, rig: &Rig, beats: f64, partner: bool) -> Option<Pose> {
+    pub(crate) fn pose(&self, rig: &Rig, beats: f64, partner: bool) -> Option<Pose> {
         let m0 = self.mv?;
         let pick = |m: usize| {
             let m = m.min(rig.moves.len() - 1);
@@ -226,13 +226,14 @@ struct Booked {
 
 /// The dancers' choreography, frame by frame.
 pub struct DanceSim {
+    pub(crate) paint: crate::paint::PaintState,
     t: f64,
     drop_at: Option<f64>,
     away_was: Option<f64>,
     section_was: Option<String>,
     slot: i64,
     cut: i64,
-    lead: Track,
+    pub(crate) lead: Track,
     alt: Track,
     recent: Vec<String>,
     troupe: Troupe,
@@ -261,6 +262,7 @@ pub struct DanceSim {
 impl Default for DanceSim {
     fn default() -> Self {
         DanceSim {
+            paint: Default::default(),
             t: 0.0,
             drop_at: None,
             away_was: None,

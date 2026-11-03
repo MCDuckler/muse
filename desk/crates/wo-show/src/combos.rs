@@ -59,7 +59,8 @@ pub const TREATMENT_STYLES: &[&str] = &["ascii", "dither", "halftone", "thermal"
 /// A figure's styles: its own where it has them, else the scene as drawn and the treatments.
 pub fn styles_of_figure(f: Figure) -> Vec<&'static str> {
     match f {
-        Figure::Dancers => vec!["plain", "mono", "trails", "ascii", "dither", "chrono", "contour", "halftone", "thermal", "lines", "fluid", "viewports", "disco", "crt", "slit", "dust"],
+        // (not v1's fluid: the Rust stage has no fluid sim, P5)
+        Figure::Dancers => vec!["plain", "mono", "trails", "ascii", "dither", "chrono", "contour", "halftone", "thermal", "lines", "viewports", "disco", "crt", "slit", "dust"],
         Figure::Birds => vec!["ink", "sky", "embers", "neon", "wire", "chrono", "ascii", "dither", "contour", "halftone", "thermal", "lines", "radar", "crt"],
         Figure::Words => vec!["poster", "serif", "grotesk", "wide", "mono", "marker", "light"],
         Figure::None | Figure::Meme => vec!["raw"],

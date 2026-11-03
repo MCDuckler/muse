@@ -12,6 +12,7 @@ use std::borrow::Cow;
 pub use wgpu;
 pub use wo_shaders::{self, Fitted};
 
+pub mod dance;
 pub mod looks;
 pub mod particles;
 pub mod stage;

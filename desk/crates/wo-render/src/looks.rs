@@ -62,25 +62,34 @@ impl Treat {
     /// `time` seconds of the stage's clock.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(&self, gpu: &Gpu, enc: &mut wgpu::CommandEncoder, arena: &mut Arena, src: &Target, dst: &Target, d: &FxDraw, pop: f32, time: f32) {
+        let p = wo_dance::cmd::Post { mode: d.mode, cell: d.cell(src.h as f32), ink: d.ink, paper: d.paper, tint: d.tint, glyphs: self.count, pop, pop_at: [0.5, 0.5], time, knobs: d.knobs };
+        // the alpha stays 1, as a scene's is (the blend reads its own coverage)
+        self.draw_post(gpu, enc, arena, src, dst, &p, 1.0, 0.0);
+    }
+
+    /// `src` through a finish into `dst`: `p`'s cell in pixels of `src` times `cell_k`, the
+    /// alpha out the coverage where `coverage_out` is 1 (the dancers': the glyphs, the dots,
+    /// the lines are the figure), else 1.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_post(&self, gpu: &Gpu, enc: &mut wgpu::CommandEncoder, arena: &mut Arena, src: &Target, dst: &Target, p: &wo_dance::cmd::Post, cell_k: f32, coverage_out: f32) {
         let (w, h) = (src.w as f32, src.h as f32);
         let v = values_by(self.pass.floats(), |name, _| match name {
             "uResolution" => vec![w, h],
-            "uMode" => vec![d.mode as f32],
-            "uCell" => vec![d.cell(h)],
-            "uInk" => d.ink.to_vec(),
-            "uPaper" => d.paper.to_vec(),
-            "uTint" => vec![d.tint],
-            "uGlyphs" => vec![self.count as f32],
-            "uPop" => vec![pop],
-            "uPopAt" => vec![0.5, 0.5],
-            "uTime" => vec![time],
-            // the alpha stays 1, as a scene's is (the blend reads its own coverage)
-            "uCoverageOut" => vec![0.0],
-            "uWeight" => vec![d.knobs[0]],
-            "uSpacing" => vec![d.knobs[1]],
-            "uHeight" => vec![d.knobs[2]],
-            "uGain" => vec![d.knobs[3]],
-            "uSize" => vec![d.knobs[4]],
+            "uMode" => vec![p.mode as f32],
+            "uCell" => vec![p.cell * cell_k],
+            "uInk" => p.ink.to_vec(),
+            "uPaper" => p.paper.to_vec(),
+            "uTint" => vec![p.tint],
+            "uGlyphs" => vec![if p.glyphs > 0 { p.glyphs as f32 } else { self.count as f32 }],
+            "uPop" => vec![p.pop],
+            "uPopAt" => p.pop_at.to_vec(),
+            "uTime" => vec![p.time],
+            "uCoverageOut" => vec![coverage_out],
+            "uWeight" => vec![p.knobs[0]],
+            "uSpacing" => vec![p.knobs[1]],
+            "uHeight" => vec![p.knobs[2]],
+            "uGain" => vec![p.knobs[3]],
+            "uSize" => vec![p.knobs[4]],
             _ => vec![],
         });
         self.pass.draw_in(gpu, enc, arena, &dst.view, &v, &[&src.view, &self.glyphs]);

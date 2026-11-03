@@ -848,6 +848,69 @@ impl Sweep {
     }
 }
 
+/// The camera's hand on a 3D figure's finished picture (v1: stage_camera.dart StageCamera):
+/// only as much as the record is intense — on the drop a punch and a shake settling over a few
+/// beats, through a build a slow push in; the picture scaled to cover what the shake and the
+/// tilt would bare. (v1 reads the kick and the snare by the names `kick` and `snare`, which
+/// nothing in the show's state sets: they are naught there, so here too — the punch on the kick
+/// and the snare's tick of the horizon do not move v1's picture either.)
+#[derive(Clone, Debug, Default)]
+pub struct PictureCam {
+    drop_at: Option<f64>,
+    away_was: Option<f64>,
+    push: f64,
+}
+
+/// A move of the finished picture: a scale about the middle, a shift (a share of the picture's
+/// size), a roll (radians).
+pub const STILL: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
+
+impl PictureCam {
+    /// This frame's move for `st`, `dt` seconds on: still for a figure that is not a camera's.
+    pub fn frame(&mut self, st: &wo_show::state::ShowState, dt: f64) -> [f32; 4] {
+        use wo_show::rig::Figure;
+        if !matches!(st.rig.figure.kind, Figure::Dancers | Figure::Birds | Figure::Turntable | Figure::Type3d) {
+            self.drop_at = None;
+            self.push = 0.0;
+            return STILL;
+        }
+        let m = st.master();
+        let Some(beat_index) = m.beat_index.filter(|_| m.playing) else { return STILL };
+        let beats = beat_index as f64 + m.beat_phase;
+        let drive = wo_show::director::drive(m);
+        let kick = st.num("kick").clamp(0.0, 1.0);
+        let snare = st.num("snare").clamp(0.0, 1.0);
+        // the drop: when it lands, remembered a few beats
+        let away = m.drop_beats_away;
+        if let Some(a) = away
+            && a <= 0.0
+            && a > -2.5
+            && self.away_was.is_none_or(|w| w > 0.0)
+        {
+            self.drop_at = Some(beats + a);
+        }
+        self.away_was = away;
+        if self.drop_at.is_some_and(|d| beats - d > 12.0 || beats < d - 1.0) {
+            self.drop_at = None;
+        }
+        let burst = self.drop_at.map_or(0.0, |d| (-(beats - d) / 2.2).exp());
+        // a build: in slowly as it climbs; let go of at once on the drop
+        let building = !m.breakdown && (m.section.as_deref() == Some("build") || away.is_some_and(|a| a > 0.0 && a < 32.0));
+        let want = if building { m.build_k.clamp(0.0, 1.0) } else { 0.0 };
+        self.push = if burst > 0.5 { 0.0 } else { self.push + (want - self.push) * (dt * if want > self.push { 0.8 } else { 3.0 }).min(1.0) };
+        // the shake: two drifting sines a few times a beat, settling with the burst
+        let s = beats * std::f64::consts::TAU;
+        let shake = burst * 0.012;
+        let dx = shake * ((s * 1.7).sin() + 0.6 * (s * 4.3 + 1.1).sin());
+        let dy = shake * ((s * 2.1).cos() + 0.5 * (s * 3.7 + 2.3).sin());
+        let side = if beat_index % 2 == 0 { 1.0 } else { -1.0 };
+        let roll = 0.014 * snare * drive * side + 0.02 * burst * (s * 1.3).sin();
+        let zoom = 1.0 + 0.045 * kick * drive + 0.1 * burst + 0.07 * self.push;
+        let cover = 1.0 + 1.9 * roll.abs() + 2.2 * dx.abs().max(dy.abs());
+        [(zoom * cover) as f32, dx as f32, dy as f32, roll as f32]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -957,6 +1020,29 @@ mod tests {
         }
         assert_eq!(lead(Some("chris"), 7, &off), "chris");
         assert_eq!(models_on(&MODELS.iter().map(|s| s.to_string()).collect::<Vec<_>>()), MODELS.to_vec());
+    }
+
+    #[test]
+    fn the_picture_punches_in_on_the_drop_and_settles() {
+        let mut c = PictureCam::default();
+        let mut st = wo_show::state::ShowState::default();
+        st.rig.figure.kind = wo_show::rig::Figure::Dancers;
+        st.a.playing = true;
+        st.a.section = Some("drop".into());
+        st.a.energy = 1.0;
+        let at = |c: &mut PictureCam, st: &mut wo_show::state::ShowState, beat: f64, away: f64| {
+            st.a.beat_index = Some(beat.floor() as i64);
+            st.a.beat_phase = beat.fract();
+            st.a.drop_beats_away = Some(away);
+            c.frame(st, 1.0 / 60.0)
+        };
+        assert_eq!(at(&mut c, &mut st, 10.0, 2.0), STILL.map(|v| if v == 1.0 { 1.0 } else { v }).map(|v| v), "before the drop: still but for the build");
+        let hit = at(&mut c, &mut st, 12.0, 0.0);
+        assert!(hit[0] > 1.09, "a punch in on the drop: {hit:?}");
+        let later = at(&mut c, &mut st, 22.0, -10.0);
+        assert!(later[0] < 1.02, "settled: {later:?}");
+        st.rig.figure.kind = wo_show::rig::Figure::Kinetic;
+        assert_eq!(at(&mut c, &mut st, 23.0, -11.0), STILL, "a shader scene's picture is its own");
     }
 
     #[test]

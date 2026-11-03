@@ -23,6 +23,10 @@ mv -f "$dest/wetowl-desk.new" "$dest/wetowl-desk"
 # the Rust stage (the Desk directing; chosen on the Show page)
 install -m 755 target/release/wetowl-stage "$dest/wetowl-stage.new"
 mv -f "$dest/wetowl-stage.new" "$dest/wetowl-stage"
+# the dancers the Rust stage draws (their scans, skeletons, moves)
+mkdir -p "$dest/dance"
+rsync -a --delete --include='*/' --include='dancer.json' --include='dancer.bin' --include='moves.bin' --include='skin.webp' --include='*.md' --exclude='*' \
+  ../app/assets/show/dance/ "$dest/dance/"
 printf '%s %s\n' "$(git rev-parse --short HEAD)" "$(date -u +%Y%m%d%H%M)" > "$dest/build.txt"
 if [ "${1:-}" = "--stage" ]; then
   (cd ../app && flutter build linux --release --dart-define=MUSE_SERVER="${MUSE_SERVER:-https://89-58-49-140.nip.io}" \

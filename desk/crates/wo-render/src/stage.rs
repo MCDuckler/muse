@@ -108,7 +108,7 @@ fn s(uv: vec2<f32>, o: vec2<f32>) -> vec3<f32> { return textureSampleLevel(src, 
 /// the film curve (ACES, or AgX), the grain, a dither, the strobe's white and the blackout.
 const FINISH: &str = "
 struct U { res: vec2<f32>, bloom: f32, vignette: f32, grain: f32, tone: f32, fringe: f32, time: f32,
-           curve: f32, mixk: f32, white: f32, black: f32 };
+           curve: f32, mixk: f32, white: f32, black: f32, cam: vec4<f32> };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var base_t: texture_2d<f32>;
 @group(0) @binding(2) var s0: sampler;
@@ -145,7 +145,12 @@ fn agx(v0: vec3<f32>) -> vec3<f32> {
     return clamp(mi * v, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 @fragment fn fs(v: VOut) -> @location(0) vec4<f32> {
-    let uv = v.uv;
+    // the picture moved as a camera would: scaled about the middle, shifted, rolled (the
+    // point of the picture this pixel shows)
+    let s = (v.uv - 0.5) * u.res - u.cam.yz * u.res;
+    let cr = cos(-u.cam.w);
+    let sr = sin(-u.cam.w);
+    let uv = vec2<f32>(cr * s.x - sr * s.y, sr * s.x + cr * s.y) / u.cam.x / u.res + 0.5;
     let c = uv - 0.5;
     let r2 = dot(c, c);
     let off = c * u.fringe * r2 * 4.0;
@@ -447,6 +452,10 @@ pub struct Stage {
     pub milk: Option<wgpu::TextureView>,
     pub cover: Option<wgpu::TextureView>,
     pub drawn: Drawn,
+    /// The dancers' renderer (where the stage has the dancers), and this frame's commands
+    /// (wo_dance::sim::DanceSim::paint), drawn as the figure where the frame has no shader.
+    pub dance: Option<crate::dance::Dance>,
+    pub dance_cmds: Vec<wo_dance::cmd::Cmd>,
 }
 
 /// Which of the stage's pictures a frame showed (the datamosh starts from it).
@@ -460,7 +469,8 @@ enum Shown {
 
 /// The shaders a stage builds as it starts: the scenes it draws and the pulse ground.
 pub fn stage_shaders() -> Vec<&'static str> {
-    let mut v: Vec<&str> = wo_show::scenes::DRAWN.to_vec();
+    // the scenes drawn by a shader (not the dancers: their painter's commands)
+    let mut v: Vec<&str> = wo_show::scenes::DRAWN.iter().copied().filter(|s| wo_shaders::shipped(&format!("{s}.frag")).is_some()).collect();
     v.push("pulse");
     v
 }
@@ -544,11 +554,23 @@ impl Stage {
             milk: None,
             cover: None,
             drawn: Drawn::default(),
+            dance: None,
+            dance_cmds: vec![],
         })
     }
 
     pub fn out_format(&self) -> wgpu::TextureFormat {
         self.out_format
+    }
+
+    /// The dancers, their meshes and skins up to the GPU.
+    pub fn set_dancers(&mut self, gpu: &Gpu, co: &wo_dance::sim::Company) {
+        self.dance = Some(crate::dance::Dance::new(gpu, co));
+    }
+
+    /// The working size for an output `w`×`h` (what the dancers' painter draws at).
+    pub fn work_size(&self, w: u32, h: u32) -> (u32, u32) {
+        (((w as f32 * self.scale).round() as u32).max(8), ((h as f32 * self.scale).round() as u32).max(8))
     }
 
     /// The ascii's ramp: `count` glyphs side by side in `rgba` (`w`×`h`), light to dense
@@ -651,6 +673,12 @@ impl Stage {
                     let milk = self.milk.as_ref().unwrap_or(&self.black);
                     let tex: Vec<&wgpu::TextureView> = if l.milk { vec![milk] } else { vec![] };
                     p.draw_in(gpu, &mut enc, &mut self.arena, work, &v, &tex);
+                }
+                None if f.figure.is_none() && self.dance.is_some() && !self.dance_cmds.is_empty() => {
+                    // the dancers (wo_dance's painter's commands): their alpha the coverage
+                    let (work, scratch) = (self.work.as_ref().unwrap(), self.scratch.as_ref().unwrap());
+                    let cmds = std::mem::take(&mut self.dance_cmds);
+                    self.dance.as_mut().unwrap().draw(gpu, &mut enc, &mut self.arena, &self.treat, &cmds, work, scratch);
                 }
                 None => {
                     if let Some(l) = &f.figure {
@@ -864,7 +892,8 @@ impl Stage {
         let from = if leaving { &self.leaving.as_ref().unwrap().view } else { &self.black };
         let mixk = if leaving { f.k } else { 1.0 };
         let bloom0 = &self.bloom[0].as_ref().unwrap().view;
-        let fl = [out_w as f32, out_h as f32, p.bloom, p.vignette, p.grain, p.tone, p.fringe, f.common[0], if self.agx { 1.0 } else { 0.0 }, mixk, f.white, f.black];
+        let cam = f.camera;
+        let fl = [out_w as f32, out_h as f32, p.bloom, p.vignette, p.grain, p.tone, p.fringe, f.common[0], if self.agx { 1.0 } else { 0.0 }, mixk, f.white, f.black, cam[0].max(0.01), cam[1], cam[2], cam[3]];
         if let Some(out) = out {
             self.finish.draw(gpu, &mut enc, &mut self.arena, &self.sampler, out, &fl, &[&current.view, bloom0, from], false);
         }

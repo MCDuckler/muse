@@ -123,6 +123,7 @@ fn main() {
             slit: None,
             kaleido: None,
             style,
+            camera: [1.0, 0.0, 0.0, 0.0],
         };
         let cmd = stage.draw(&gpu, &frame, 1.0 / 60.0, Some(&view), w, h, None);
         gpu.queue.submit([cmd]);

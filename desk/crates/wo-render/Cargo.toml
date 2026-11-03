@@ -10,6 +10,7 @@ description = "The stage's renderer on wgpu (Vulkan, Direct3D 12, Metal): the sh
 wgpu = { version = "30.0.1", features = ["naga-ir"] }
 wo-shaders = { path = "../wo-shaders" }
 wo-show = { path = "../wo-show" }
+wo-dance = { path = "../wo-dance" }
 pollster = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 

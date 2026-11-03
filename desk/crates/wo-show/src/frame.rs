@@ -96,6 +96,9 @@ pub struct StageFrame {
     pub kaleido: Option<Kaleido>,
     /// The style over the figure: a treatment, or the slit-scan.
     pub style: Option<Style>,
+    /// The finished picture moved as a camera would (a 3D figure's: the stage's clock plays
+    /// it, wo_dance::clock::PictureCam): its scale, its shift (a share of the size), its roll.
+    pub camera: [f32; 4],
 }
 
 impl StageFrame {
@@ -241,6 +244,7 @@ pub fn stage_frame(st: &ShowState, book: &SceneBook, time: f64) -> StageFrame {
         slit,
         kaleido,
         style: style_of(rig, st),
+        camera: [1.0, 0.0, 0.0, 0.0],
     }
 }
 

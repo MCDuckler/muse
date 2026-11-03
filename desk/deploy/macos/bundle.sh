@@ -36,6 +36,14 @@ lipo -archs "$app/Contents/MacOS/wetowl-desk"
 # the Rust stage beside it (the Desk directing; chosen on the Show page)
 lipo -create -output "$app/Contents/MacOS/wetowl-stage" \
   "target/aarch64-apple-darwin/release/wetowl-stage" "target/x86_64-apple-darwin/release/wetowl-stage"
+# the dancers the Rust stage draws (their scans, skeletons, moves)
+rm -rf "$app/Contents/Resources/dance"
+mkdir -p "$app/Contents/Resources/dance"
+for d in ../app/assets/show/dance/*/; do
+  m=$(basename "$d")
+  mkdir -p "$app/Contents/Resources/dance/$m"
+  cp "$d"dancer.json "$d"dancer.bin "$d"moves.bin "$d"skin.webp "$app/Contents/Resources/dance/$m/"
+done
 
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' apps/wetowl-desk/Cargo.toml | head -1)
 build="$(date -u +%Y%m%d%H%M)"

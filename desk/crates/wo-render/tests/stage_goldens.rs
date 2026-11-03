@@ -12,6 +12,8 @@ use std::path::PathBuf;
 
 use wo_render::{Gpu, Stage};
 use wo_show::combos::{Mask, Mix};
+use wo_dance::clock::{Art, Troupe};
+use wo_dance::sim::{Company, DanceSim};
 use wo_show::mosh::MoshClock;
 use wo_show::rig::{RigTransform, Treatment};
 use wo_show::deck::{Channel, RecordFacts, ShowAudio, ShowDeck};
@@ -61,6 +63,8 @@ fn state(scene: &str, t: f64, dyns: &mut Dynamics) -> ShowState {
 struct Case {
     name: String,
     scene: &'static str,
+    /// The dancers in this rendering and company (the dancer scene).
+    dance: Option<(Art, Option<Troupe>)>,
     /// The state changed for this case, at frame `i` of the second drawn.
     edit: fn(&mut ShowState, &SceneBook, usize),
 }
@@ -71,7 +75,7 @@ fn own_rig(st: &mut ShowState, b: &SceneBook) {
 }
 
 fn cases() -> Vec<Case> {
-    let mut v: Vec<Case> = DRAWN.iter().map(|s| Case { name: (*s).into(), scene: s, edit: |_, _, _| {} }).collect();
+    let mut v: Vec<Case> = DRAWN.iter().filter(|s| **s != "dance-art").map(|s| Case { name: (*s).into(), scene: s, dance: None, edit: |_, _, _| {} }).collect();
     fn rig(st: &mut ShowState, b: &SceneBook, ground: RigGround, blend: RigBlend) {
         let mut r = b.scenes[st.scene.as_deref().unwrap()].rig();
         r.ground = ground;
@@ -81,26 +85,31 @@ fn cases() -> Vec<Case> {
     v.push(Case {
         name: "glide-on-drift-keyhole-screen".into(),
         scene: "glide",
+        dance: None,
         edit: |st, b, _| rig(st, b, RigGround { kind: Ground::Field, field: Some("drift".into()), dim: 0.8, knobs: vec![] }, RigBlend { mask: Mask::Keyhole, mix: Mix::Screen, strength: 1.0 }),
     });
     v.push(Case {
         name: "glide-on-milk-inverted-screen".into(),
         scene: "glide",
+        dance: None,
         edit: |st, b, _| rig(st, b, RigGround { kind: Ground::Milk, ..Default::default() }, RigBlend { mask: Mask::Inverted, mix: Mix::Screen, strength: 1.0 }),
     });
     v.push(Case {
         name: "blocks-on-wash-add".into(),
         scene: "blocks",
+        dance: None,
         edit: |st, b, _| rig(st, b, RigGround { kind: Ground::Wash, ..Default::default() }, RigBlend { mask: Mask::None, mix: Mix::Add, strength: 1.0 }),
     });
     v.push(Case {
         name: "flash-on-pulse-rays-contrast".into(),
         scene: "flash",
+        dance: None,
         edit: |st, b, _| rig(st, b, RigGround { kind: Ground::Pulse, field: Some("rays".into()), dim: 1.0, knobs: vec![] }, RigBlend { mask: Mask::Inverted, mix: Mix::Contrast, strength: 0.9 }),
     });
     v.push(Case {
         name: "kinetic-from-drift-half".into(),
         scene: "kinetic",
+        dance: None,
         edit: |st, _, _| {
             st.scene_from = Some("drift".into());
             st.scene_k = 0.5;
@@ -109,6 +118,7 @@ fn cases() -> Vec<Case> {
     v.push(Case {
         name: "blocks-strobe".into(),
         scene: "blocks",
+        dance: None,
         edit: |st, _, _| {
             st.macros = ShowMacros { strobe: 0.6, ..Default::default() };
             st.a.beat_phase = 0.1;
@@ -120,6 +130,7 @@ fn cases() -> Vec<Case> {
             v.push(Case {
                 name: $name.into(),
                 scene: $scene,
+                dance: None,
                 edit: |st, b, _| {
                     own_rig(st, b);
                     st.rig.figure.treatment = $t;
@@ -138,6 +149,7 @@ fn cases() -> Vec<Case> {
     v.push(Case {
         name: "kinetic-kaleidoscope-4".into(),
         scene: "kinetic",
+        dance: None,
         edit: |st, b, _| {
             own_rig(st, b);
             st.rig.transform = RigTransform { count: 4, differ: 0.4, turn: 0.1, line: 0.5, ..Default::default() };
@@ -146,6 +158,7 @@ fn cases() -> Vec<Case> {
     v.push(Case {
         name: "glide-slit-then-kaleidoscope-screen-ascii".into(),
         scene: "glide",
+        dance: None,
         edit: |st, b, _| {
             own_rig(st, b);
             st.rig.transform = RigTransform { count: 3, slit: true, blend: Mix::Screen, ..Default::default() };
@@ -155,14 +168,30 @@ fn cases() -> Vec<Case> {
     v.push(Case {
         name: "kinetic-mosh-held".into(),
         scene: "kinetic",
+        dance: None,
         edit: |st, b, _| {
             own_rig(st, b);
             st.rig.transform = RigTransform { mosh: true, ..Default::default() };
         },
     });
+    // the dancers (P6): a rendering each, the lead alone or with company
+    for (art, troupe) in [
+        (Art::Plain, Some(Troupe::Solo)),
+        (Art::Mono, Some(Troupe::Line)),
+        (Art::Trails, Some(Troupe::Solo)),
+        (Art::Chrono, Some(Troupe::Solo)),
+        (Art::Ascii, Some(Troupe::Trio)),
+        (Art::Disco, Some(Troupe::Duo)),
+        (Art::Viewports, Some(Troupe::Solo)),
+        (Art::Dust, Some(Troupe::Solo)),
+        (Art::Crt, Some(Troupe::Grid)),
+    ] {
+        v.push(Case { name: format!("dancers-{}", art.name()), scene: "dance-art", dance: Some((art, troupe)), edit: |st, b, _| own_rig(st, b) });
+    }
     v.push(Case {
         name: "kinetic-moshed-into-glide".into(),
         scene: "kinetic",
+        dance: None,
         edit: |st, _, i| {
             if i >= 30 {
                 st.scene = Some("glide".into());
@@ -233,6 +262,14 @@ fn every_scene_and_way_of_blending_draws_as_its_golden() {
         let view = target.create_view(&Default::default());
         let mut dyns = Dynamics::default();
         let mut mosh = MoshClock::new();
+        let mut dance = case.dance.map(|(art, troupe)| {
+            let co = Company::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../app/assets/show/dance")).expect("the shipped dancers");
+            stage.set_dancers(&gpu, &co);
+            let mut sim = DanceSim::default();
+            sim.forced_art = Some(art);
+            sim.forced_troupe = troupe;
+            (co, sim)
+        });
         // a second of frames: the trails and the particles settle as they would
         let frames = 60;
         for i in 0..frames {
@@ -242,6 +279,11 @@ fn every_scene_and_way_of_blending_draws_as_its_golden() {
             let mut f = stage_frame(&st, &book, 10.0 + t);
             // the stage's clock plays the held mosh (wo_show::engine::Play::mosh)
             f.mosh_hold = mosh.frame(&st, &st.rig.transform);
+            if let Some((co, sim)) = &mut dance {
+                let (ww, wh) = stage.work_size(W, H);
+                let scene = sim.frame(co, &st, 1.0 / 60.0, ww as f64, wh as f64);
+                stage.dance_cmds = sim.paint(co, &scene, &st, 1.0 / 60.0);
+            }
             let cmd = stage.draw(&gpu, &f, 1.0 / 60.0, Some(&view), W, H, None);
             gpu.queue.submit([cmd]);
             // each frame waited for: the held mosh's look at its picture (read back without

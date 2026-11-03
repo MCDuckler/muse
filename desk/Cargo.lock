@@ -4655,6 +4655,7 @@ dependencies = [
  "serde_json",
  "tungstenite",
  "winit",
+ "wo-dance",
  "wo-milk",
  "wo-render",
  "wo-show",
@@ -5314,8 +5315,6 @@ dependencies = [
  "image",
  "serde",
  "serde_json",
- "wgpu",
- "wo-render",
  "wo-show",
 ]
 
@@ -5400,6 +5399,7 @@ dependencies = [
  "pollster",
  "serde_json",
  "wgpu",
+ "wo-dance",
  "wo-shaders",
  "wo-show",
 ]
