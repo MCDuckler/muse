@@ -37,6 +37,8 @@ pub struct Cue {
     pub macros: ShowMacros,
     /// Why the scene on is on, in words.
     pub why: String,
+    /// The MilkDrop preset on (where the stage draws MilkDrop).
+    pub milk: crate::milk::MilkCue,
 }
 
 impl Cue {
@@ -57,6 +59,7 @@ impl Cue {
             "mosh": self.mosh,
             "macros": serde_json::to_value(&self.macros).unwrap_or_default(),
             "why": self.why,
+            "milk": serde_json::to_value(&self.milk).unwrap_or_default(),
         })
     }
 
@@ -72,13 +75,14 @@ impl Cue {
             mosh: j.get("mosh").and_then(serde_json::Value::as_i64).unwrap_or(0),
             macros: j.get("macros").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default(),
             why: s("why").unwrap_or_default(),
+            milk: j.get("milk").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default(),
         }
     }
 }
 
 impl Default for Cue {
     fn default() -> Self {
-        Cue { scene: None, rig: ShowRig::default(), from: None, rig_from: None, k: 1.0, mosh: 0, macros: ShowMacros::default(), why: String::new() }
+        Cue { scene: None, rig: ShowRig::default(), from: None, rig_from: None, k: 1.0, mosh: 0, macros: ShowMacros::default(), why: String::new(), milk: Default::default() }
     }
 }
 
@@ -106,6 +110,8 @@ pub struct Direct {
     /// An effect the hands hold over whatever the combination says.
     pub held_fx: Option<Fx>,
     pub macros: ShowMacros,
+    /// MilkDrop's director, where the Desk has a library of presets.
+    pub milk: Option<crate::milk::MilkDirector>,
     master: String,
     prev: Option<ShowState>,
     hit_at: Option<f64>,
@@ -122,7 +128,7 @@ impl Direct {
         director.set_plan(doc.plan());
         director.mosh_share = doc.mosh();
         director.bias = doc.bias();
-        Direct { director, looks: book.looks(), doc, held_fx: None, macros: ShowMacros::default(), master: "A".into(), prev: None, hit_at: None, clock: 0.0, last: Cue::default() }
+        Direct { director, looks: book.looks(), doc, held_fx: None, macros: ShowMacros::default(), milk: None, master: "A".into(), prev: None, hit_at: None, clock: 0.0, last: Cue::default() }
     }
 
     /// The effect on: the hands' held, or the combination's.
@@ -192,7 +198,17 @@ impl Direct {
         if dark && !macros.blackout {
             macros.blackout = true;
         }
-        let cue = Cue { scene, rig, from, rig_from, k, mosh: self.director.moshes, macros, why: self.director.why.clone() };
+        // MilkDrop's preset, while the stage has MilkDrop to draw
+        let mut moshes = self.director.moshes;
+        let mut milk_cue = crate::milk::MilkCue::default();
+        if let Some(mk) = &mut self.milk {
+            if state.num("milk.ok") >= 0.5 {
+                mk.frame(&state, &said, scene.as_deref() == Some("milk"));
+            }
+            moshes += mk.moshes;
+            milk_cue = mk.cue().clone();
+        }
+        let cue = Cue { scene, rig, from, rig_from, k, mosh: moshes, macros, why: self.director.why.clone(), milk: milk_cue };
         self.prev = Some(state);
         self.last = cue.clone();
         (cue, said)

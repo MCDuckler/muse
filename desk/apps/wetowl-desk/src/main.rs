@@ -52,6 +52,9 @@ pub(crate) struct App {
     pub(crate) said: (u32, Option<Instant>),
     /// The strobe held down on the page.
     pub(crate) strobe: bool,
+    /// MilkDrop's library open on the Show page, and what is searched for in it.
+    pub(crate) milk_list: bool,
+    pub(crate) milk_query: String,
 }
 
 impl App {
@@ -89,6 +92,8 @@ impl App {
             page: if std::env::args().collect::<Vec<_>>().windows(2).any(|w| w[0] == "--page" && w[1] == "show") { show::Page::Show } else { show::Page::Booth },
             said: (0, None),
             strobe: false,
+            milk_list: false,
+            milk_query: String::new(),
         }
     }
 

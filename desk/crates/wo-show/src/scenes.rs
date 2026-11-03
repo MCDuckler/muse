@@ -12,9 +12,19 @@ use crate::rig::{Figure, Ground, Look, RigFigure, RigFinish, RigGround, SceneMet
 
 include!(concat!(env!("OUT_DIR"), "/scenes.rs"));
 
-/// The scenes the Rust stage draws as shaders now (P2); the rest of [IN_SCOPE] come with
-/// their phases (MilkDrop P3, the sims P5, the dancers P6, the 3D type P8).
-pub const DRAWN: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift"];
+/// The scenes the Rust stage draws now: the shader scenes (P2) and MilkDrop (P3); the rest of
+/// [IN_SCOPE] come with their phases (the sims P5, the dancers P6, the 3D type P8).
+pub const DRAWN: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift", "milk"];
+
+/// The backgrounds the Rust stage draws (not yet the camera, nor the record's cover); MilkDrop's
+/// where the stage has it.
+pub fn grounds_drawn(milk: bool) -> std::collections::BTreeSet<String> {
+    let mut g: std::collections::BTreeSet<String> = ["black", "white", "wash", "pulse.grid", "pulse.rays", "pulse.smoke", "pulse.stars", "field.drift"].iter().map(|s| s.to_string()).collect();
+    if milk {
+        g.insert("milk".into());
+    }
+    g
+}
 
 /// The scenes the Rust stage draws (plan §1): the rest stay v1's until they are ported, or not.
 pub const IN_SCOPE: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift", "milk", "fluid", "veins", "dance-art", "type3d"];

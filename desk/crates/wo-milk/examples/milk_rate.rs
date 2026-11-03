@@ -28,8 +28,11 @@ fn main() {
             *s = ((phase * std::f32::consts::TAU).sin() * env * 20000.0) as i16;
         }
         let _ = milk.pcm(&pcm);
-        if let Some(f) = milk.take() {
-            if f.width == w && f.height == h {
+        if let Some(f) = milk.take()
+            && f.width == w
+            && f.height == h
+        {
+            {
                 let u = Instant::now();
                 gpu.queue.write_texture(
                     wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },

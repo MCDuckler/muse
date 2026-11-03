@@ -96,6 +96,11 @@ pub struct MilkScores {
 }
 
 impl MilkScores {
+    /// The audit's table as the app ships it.
+    pub fn shipped() -> Option<MilkScores> {
+        MilkScores::parse(include_str!("../../../../app/assets/show/milk_scores.json"))
+    }
+
     pub fn parse(text: &str) -> Option<MilkScores> {
         let j: Value = serde_json::from_str(text).ok()?;
         let presets = j.get("presets")?.as_object()?.iter().map(|(k, v)| (k.clone(), crate::json::text(Some(v)).unwrap_or_default())).collect();

@@ -7,7 +7,7 @@ name: Stage (Rust)
 on:
   push:
     branches: [desk]
-    paths: ["desk/crates/wo-shaders/**", "desk/crates/wo-render/**", "desk/crates/wo-dance/**", "desk/crates/wo-milk/**", "desk/crates/wo-show/**", "app/assets/show/scenes/**", "desk/apps/wetowl-stage/**", "desk/crates/wo-wire/**", "app/assets/show/combo_scores.json", "app/shaders/**", "app/assets/show/dance/**", ".github/workflows/stage-rust.yml"]
+    paths: ["desk/crates/wo-shaders/**", "desk/crates/wo-render/**", "desk/crates/wo-dance/**", "desk/crates/wo-milk/**", "desk/crates/wo-show/**", "app/assets/show/scenes/**", "desk/apps/wetowl-stage/**", "desk/crates/wo-wire/**", "desk/crates/wo-deskcore/**", "app/native/milk/**", "app/assets/milk/**", "app/assets/show/combo_scores.json", "app/shaders/**", "app/assets/show/dance/**", ".github/workflows/stage-rust.yml"]
   workflow_dispatch:
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
           key: stage-rust
       - name: "A Vulkan driver (Linux: Mesa's lavapipe, on the CPU)"
         if: runner.os == 'Linux'
-        run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers xvfb libxkbcommon-x11-0 libasound2-dev libudev-dev
+        run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers xvfb libxkbcommon-x11-0 libasound2-dev libudev-dev libegl-dev libgl-dev libglvnd-dev
       - name: The shaders fitted, read and written for Metal, Direct3D and Vulkan
         run: cargo test --release -p wo-shaders
       - name: The show's rules (wo-show), v1's tests among them; the wire
@@ -66,11 +66,24 @@ jobs:
           screen=$(head -1 screens.txt | sed -E 's/^SCREEN (.*) [0-9]+x[0-9]+$/\1/')
           run --scene blocks --screen "$screen" --seconds 6 | tee stage.txt
           grep -qF "screen=$screen full=1" stage.txt || { echo "not full screen on $screen"; exit 1; }
-      - name: The Desk directs the Rust stage (Linux, X11 under Xvfb)
+      - name: MilkDrop's helper, kept between runs (projectM patched, built once)
         if: runner.os == 'Linux'
-        timeout-minutes: 10
+        uses: actions/cache@v4
+        with:
+          path: app/native/milk/build
+          key: milk-linux-${{ hashFiles('app/native/milk/**') }}
+      - name: MilkDrop's helper (Linux, EGL with no window)
+        if: runner.os == 'Linux'
+        working-directory: app/native/milk
+        run: |
+          [ -x build/wetowl-milk ] || { cmake -S . -B build -DCMAKE_BUILD_TYPE=Release > /dev/null && cmake --build build -j4 > /dev/null; }
+          ls -l build/wetowl-milk
+      - name: The Desk directs the Rust stage, MilkDrop too (Linux, X11 under Xvfb)
+        if: runner.os == 'Linux'
+        timeout-minutes: 12
         run: |
           cargo build --release -p wetowl-stage
+          WETOWL_MILK="$GITHUB_WORKSPACE/app/native/milk/build/wetowl-milk" \
           WGPU_BACKEND=vulkan WO_STAGE_RUST="$PWD/target/release/wetowl-stage" xvfb-run -a -s "-screen 0 1920x1080x24" \
             cargo test --release -p wo-deskcore --test stage_rust_live -- --ignored --nocapture
       - uses: actions/upload-artifact@v4

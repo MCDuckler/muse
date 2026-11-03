@@ -436,7 +436,7 @@ mod tests {
             // standing: the head well above the feet
             assert!(head[11] - foot[11] > 1.0, "beat {beat}: head {} feet {}", head[11], foot[11]);
             let (pos, _) = r.deform(0, &r.skinning(&world));
-            let zs: Vec<f32> = pos.chunks_exact(3).map(|p| p[2]).collect();
+            let zs: Vec<f32> = pos.as_chunks::<3>().0.iter().map(|p| p[2]).collect();
             let span = zs.iter().cloned().fold(f32::MIN, f32::max) - zs.iter().cloned().fold(f32::MAX, f32::min);
             assert!((1.2..2.2).contains(&span), "beat {beat}: body {span} m tall");
         }

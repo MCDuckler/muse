@@ -42,6 +42,7 @@ fn the_desk_performs_a_real_stage() {
         std::env::set_var("XDG_CONFIG_HOME", home.join("config"));
         std::env::set_var("XDG_DATA_HOME", home.join("data"));
         std::env::set_var("XDG_CACHE_HOME", home.join("cache"));
+        std::env::set_var("WETOWL_MILK_HOME", home.join("milk"));
     }
     let mut d = Desk::open(true);
     d.open_stage();

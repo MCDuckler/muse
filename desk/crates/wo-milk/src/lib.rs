@@ -23,6 +23,8 @@ struct Shared {
     newest: Mutex<Option<Frame>>,
     said: Mutex<Vec<String>>,
     frames: AtomicU64,
+    /// Times the reader lost step with the frames.
+    resyncs: AtomicU64,
     alive: AtomicBool,
 }
 
@@ -54,25 +56,26 @@ impl Milk {
                 if stdout.read_exact(&mut head).is_err() {
                     break;
                 }
-                let word = |i: usize| u32::from_le_bytes(head[i..i + 4].try_into().unwrap());
-                if word(0) != 0x4b4c_494d {
-                    // out of step: look for the next header a byte at a time
+                if head[..4] != *b"MILK" {
+                    // out of step: look for the next header a byte at a time, and take the
+                    // header found whole (its size and number follow the four letters)
+                    s.resyncs.fetch_add(1, Ordering::Relaxed);
                     let mut b = [0u8; 1];
-                    let mut tail = head[1..].to_vec();
-                    loop {
+                    let mut tail: Vec<u8> = head[1..].to_vec();
+                    while tail[..4] != *b"MILK" {
                         if stdout.read_exact(&mut b).is_err() {
+                            s.alive.store(false, Ordering::Relaxed);
                             return;
                         }
+                        tail.remove(0);
                         tail.push(b[0]);
-                        if tail.len() > 15 {
-                            tail.remove(0);
-                        }
-                        if tail.len() == 15 && tail[..3] == *b"MIL" && tail[3] == b'K' {
-                            break;
-                        }
                     }
-                    continue;
+                    head[..15].copy_from_slice(&tail);
+                    if stdout.read_exact(&mut head[15..]).is_err() {
+                        break;
+                    }
                 }
+                let word = |i: usize| u32::from_le_bytes(head[i..i + 4].try_into().unwrap());
                 let (w, h, seq) = (word(4), word(8), word(12));
                 if w == 0 || h == 0 || w > 8192 || h > 8192 {
                     break;
@@ -127,6 +130,11 @@ impl Milk {
         self.shared.frames.load(Ordering::Relaxed)
     }
 
+    /// Times the reader lost step with the frames (and found it again).
+    pub fn resyncs(&self) -> u64 {
+        self.shared.resyncs.load(Ordering::Relaxed)
+    }
+
     pub fn alive(&self) -> bool {
         self.shared.alive.load(Ordering::Relaxed)
     }
@@ -142,5 +150,44 @@ impl Drop for Milk {
         let _ = self.say("quit");
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[cfg(unix)]
+    fn noise_between_frames_is_skipped_and_the_frames_go_on() {
+        // a stand-in helper: three frames with noise before and between them
+        let dir = std::env::temp_dir().join(format!("wo-milk-noise-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let frame = |seq: u8| {
+            let mut b = b"MILK".to_vec();
+            b.extend(2u32.to_le_bytes());
+            b.extend(1u32.to_le_bytes());
+            b.extend((seq as u32).to_le_bytes());
+            b.extend([seq; 8]);
+            b
+        };
+        let mut bytes = b"noise MIL".to_vec();
+        bytes.extend(frame(1));
+        bytes.extend(b"xyz");
+        bytes.extend(frame(2));
+        bytes.extend(frame(3));
+        let data = dir.join("frames.bin");
+        std::fs::write(&data, &bytes).unwrap();
+        let script = dir.join("helper.sh");
+        std::fs::write(&script, format!("#!/bin/sh\ncat '{}'\nsleep 2\n", data.display())).unwrap();
+        std::process::Command::new("chmod").arg("+x").arg(&script).status().unwrap();
+        let m = super::Milk::start(&script, 2, 1, 60, None).unwrap();
+        let t0 = std::time::Instant::now();
+        while m.frames() < 3 && t0.elapsed().as_secs() < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(m.frames(), 3, "every frame read");
+        assert_eq!(m.resyncs(), 2, "found again twice");
+        let f = m.take().unwrap();
+        assert_eq!((f.width, f.height, f.seq, f.rgba[0]), (2, 1, 3, 3));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

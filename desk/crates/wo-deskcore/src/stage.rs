@@ -279,10 +279,28 @@ impl Stage {
 
     /// The director's frame: its cue to the stages when it changed.
     pub(crate) fn direct(&mut self, frame: &wo_wire::Frame) {
-        let line = self.show.get_or_insert_with(crate::show::Show::new).tick(frame);
+        let milk = self.wire.as_ref().and_then(wo_wire::Server::shown).and_then(|s| s.milk);
+        let line = self.show.get_or_insert_with(crate::show::Show::new).tick(frame, milk.as_ref());
         if let (Some(line), Some(w)) = (line, &self.wire) {
             w.keep("cue", line);
         }
+    }
+
+    fn show(&mut self) -> &mut crate::show::Show {
+        self.show.get_or_insert_with(crate::show::Show::new)
+    }
+
+    pub(crate) fn milk(&mut self) -> crate::show::MilkView {
+        let told = self.wire.as_ref().and_then(wo_wire::Server::shown).and_then(|s| s.milk);
+        self.show().milk(told.as_ref())
+    }
+
+    pub(crate) fn milk_hand(&mut self, h: crate::show::MilkHand) {
+        self.show().milk_hand(h);
+    }
+
+    pub(crate) fn milk_search(&mut self, query: &str, most: usize) -> Vec<crate::show::MilkRow> {
+        self.show().milk_search(query, most)
     }
 
     /// The Rust stage, or the WetOwl app's, from the next window on (one open now starts

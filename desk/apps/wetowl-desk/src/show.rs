@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Painter, Rect, Stroke, StrokeKind, pos2, vec2};
 use wo_deskcore::theme;
-use wo_deskcore::{Desk, ShowHand, Snapshot, StageView};
+use wo_deskcore::{Desk, MilkHand, ShowHand, Snapshot, StageView};
 
 use crate::App;
 use crate::paint::*;
@@ -257,7 +257,7 @@ impl App {
         if v.rust_here {
             y += 14.0;
             label(p, pos2(inner.left(), y + 10.0), Align2::LEFT_CENTER, "Stage", col(theme::SOFT));
-            let kinds = [("app".to_owned(), "WetOwl app".to_owned()), ("rust".to_owned(), "Rust · 5 scenes".to_owned())];
+            let kinds = [("app".to_owned(), "WetOwl app".to_owned()), ("rust".to_owned(), format!("Rust · {} scenes", wo_deskcore::RUST_SCENES.len()))];
             let picked;
             (y, picked) = chips(ui, p, Rect::from_min_max(pos2(inner.left() + 70.0, y - 4.0), pos2(inner.right(), inner.bottom())), true, &kinds, if v.rust { "rust" } else { "app" }, "stage-kind");
             if let Some(k) = picked {
@@ -265,7 +265,98 @@ impl App {
             }
             if v.rust && let Some(why) = &v.why {
                 clip_text(p, pos2(inner.left() + 70.0, y + 14.0), why, 12.0, col(theme::FAINT_ON_GLASS), inner.width() - 70.0);
+                y += 18.0;
             }
+        }
+        if v.rust {
+            self.milk_row(desk, ui, p, Rect::from_min_max(pos2(inner.left(), y + 16.0), inner.max));
+        }
+    }
+
+    /// MilkDrop on the Rust stage: the preset on, and the hands on it — back, next, another,
+    /// favourite, switch off, hold it (lock), the beat on it (accents), the library.
+    fn milk_row(&mut self, desk: &mut Desk, ui: &mut egui::Ui, p: &Painter, r: Rect) {
+        let m = desk.milk();
+        let (x, mut y) = (r.left(), r.top());
+        label(p, pos2(x, y + 10.0), Align2::LEFT_CENTER, "MilkDrop", col(theme::SOFT));
+        let room = r.width() - 80.0;
+        let words = if m.presets == 0 {
+            "no presets here".to_owned()
+        } else if !m.ok {
+            "the stage has no MilkDrop helper (wetowl-milk)".to_owned()
+        } else {
+            let mut w = m.preset.clone().unwrap_or_else(|| "—".into());
+            if m.favourite {
+                w = format!("{w}  · favourite");
+            }
+            if let Some(t) = &m.trouble {
+                w = format!("{w}  · {t}");
+            } else if m.on {
+                w = format!("{w}  · {:.0} fps", m.fps);
+            }
+            w
+        };
+        clip_text(p, pos2(x + 80.0, y + 10.0), &words, 13.0, col(if m.ok { theme::MUTED } else { theme::FAINT }), room);
+        if m.presets == 0 || !m.ok {
+            return;
+        }
+        y += 26.0;
+        let hands: [(&str, MilkHand, bool); 8] = [
+            ("Back", MilkHand::Previous, false),
+            ("Next", MilkHand::Next, false),
+            ("Other", MilkHand::Another, false),
+            ("Fave", MilkHand::Favourite, m.favourite),
+            ("Off", MilkHand::Off, false),
+            ("Lock", MilkHand::Lock(!m.locked), m.locked),
+            ("Beat", MilkHand::Accents(!m.accents), m.accents),
+            ("List", MilkHand::Release, self.milk_list),
+        ];
+        let w = (r.width() - 80.0 - 7.0 * 6.0) / 8.0;
+        for (i, (word, hand, lit)) in hands.into_iter().enumerate() {
+            let br = Rect::from_min_size(pos2(x + 80.0 + i as f32 * (w + 6.0), y), vec2(w, 26.0));
+            if button(ui, p, br, word, if lit { Lit::Ok } else { Lit::No }, ("milk", i)).clicked() {
+                if word == "List" {
+                    self.milk_list = !self.milk_list;
+                } else {
+                    desk.milk_hand(hand);
+                }
+            }
+        }
+        if self.milk_list {
+            self.milk_library(desk, ui);
+        }
+    }
+
+    /// MilkDrop's library: searched, a preset put on (and held), a favourite or switched off.
+    fn milk_library(&mut self, desk: &mut Desk, ui: &mut egui::Ui) {
+        let mut open = true;
+        egui::Window::new("MilkDrop presets").open(&mut open).default_size(vec2(460.0, 520.0)).collapsible(false).show(ui.ctx(), |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Search");
+                ui.text_edit_singleline(&mut self.milk_query);
+            });
+            let rows = desk.milk_search(&self.milk_query, 1000);
+            ui.label(format!("{} presets", rows.len()));
+            ui.separator();
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, 22.0, rows.len(), |ui, range| {
+                for row in &rows[range] {
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(row.favourite, if row.favourite { "♥" } else { "♡" }).on_hover_text("a favourite: comes more often").clicked() {
+                            desk.milk_hand(MilkHand::FavouriteOf(row.path.clone()));
+                        }
+                        if ui.selectable_label(row.off, "off").on_hover_text("never put on by the director").clicked() {
+                            desk.milk_hand(MilkHand::OffOf(row.path.clone()));
+                        }
+                        let name = if row.off { egui::RichText::new(&row.name).weak() } else { egui::RichText::new(&row.name) };
+                        if ui.selectable_label(row.on, name).on_hover_text("put on now, held until a drop").clicked() {
+                            desk.milk_hand(MilkHand::Pick(row.path.clone()));
+                        }
+                    });
+                }
+            });
+        });
+        if !open {
+            self.milk_list = false;
         }
     }
 }

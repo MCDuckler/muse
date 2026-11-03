@@ -12,6 +12,7 @@ pub mod events;
 pub mod frame;
 pub mod faves;
 pub mod json;
+pub mod milk;
 pub mod plan;
 pub mod rig;
 pub mod rng;

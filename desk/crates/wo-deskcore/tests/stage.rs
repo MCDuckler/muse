@@ -16,6 +16,7 @@ fn a_stage_reads_the_desk() {
         std::env::set_var("WO_AUDIO", "off");
         std::env::set_var("WO_CONTROLLERS", "off");
         std::env::set_var("WO_RECORDS", &empty);
+        std::env::set_var("WETOWL_MILK_HOME", empty.join("milk"));
     }
     let mut d = Desk::open(true);
     assert_eq!(d.stage().stages, 0);

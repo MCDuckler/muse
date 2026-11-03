@@ -75,6 +75,11 @@ fn cases() -> Vec<Case> {
         edit: |st, b| rig(st, b, RigGround { kind: Ground::Field, field: Some("drift".into()), dim: 0.8, knobs: vec![] }, RigBlend { mask: Mask::Keyhole, mix: Mix::Screen, strength: 1.0 }),
     });
     v.push(Case {
+        name: "glide-on-milk-inverted-screen".into(),
+        scene: "glide",
+        edit: |st, b| rig(st, b, RigGround { kind: Ground::Milk, ..Default::default() }, RigBlend { mask: Mask::Inverted, mix: Mix::Screen, strength: 1.0 }),
+    });
+    v.push(Case {
         name: "blocks-on-wash-add".into(),
         scene: "blocks",
         edit: |st, b| rig(st, b, RigGround { kind: Ground::Wash, ..Default::default() }, RigBlend { mask: Mask::None, mix: Mix::Add, strength: 1.0 }),
@@ -101,6 +106,20 @@ fn cases() -> Vec<Case> {
         },
     });
     v
+}
+
+/// A stand-in for MilkDrop's frame: rings of colour on a gradient.
+fn milk_picture(gpu: &Gpu) -> wgpu::TextureView {
+    let (w, h) = (960u32, 540u32);
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            let d = ((x as f32 - 480.0).hypot(y as f32 - 270.0) / 22.0).sin() * 0.5 + 0.5;
+            rgba[i..i + 4].copy_from_slice(&[(255.0 * d) as u8, (x * 200 / w) as u8, (y * 255 / h) as u8, 255]);
+        }
+    }
+    wo_render::upload(gpu, w, h, &rgba).create_view(&Default::default())
 }
 
 /// RGBA → RGB box-filtered down to SMALL.
@@ -143,6 +162,8 @@ fn every_scene_and_way_of_blending_draws_as_its_golden() {
     let mut bad = vec![];
     for case in cases() {
         let mut stage = Stage::new(&gpu, wgpu::TextureFormat::Rgba8Unorm).unwrap();
+        // MilkDrop's picture as it comes up its pipe (960×540 RGBA): a fixed stand-in
+        stage.milk = Some(milk_picture(&gpu));
         let target = wo_render::target(&gpu, W, H);
         let view = target.create_view(&Default::default());
         let mut dyns = Dynamics::default();

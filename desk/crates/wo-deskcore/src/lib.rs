@@ -13,8 +13,9 @@ use wo_wave::{Analyser, Tee, Wave};
 pub mod backdrop;
 pub mod bench;
 pub mod library;
+pub mod milk;
 pub mod records;
-mod show;
+pub mod show;
 pub mod stage;
 pub mod synth;
 pub mod theme;
@@ -22,6 +23,9 @@ pub mod theme;
 pub use backdrop::Backdrop;
 pub use library::{Library, Shelf};
 pub use records::{Audio, Record};
+pub use show::{MilkHand, MilkRow, MilkView};
+/// The scenes the Rust stage draws so far.
+pub use wo_show::scenes::DRAWN as RUST_SCENES;
 pub use stage::{Hand as ShowHand, StageView, Thumb};
 pub use wo_booth::{Grid, Hands, Moves, Pad, PadKind, RANGES, Style, Timing, Transition, Transport};
 pub use wo_engine::Load;
@@ -1185,6 +1189,21 @@ impl Desk {
     /// kept for the next time; a window open now starts again as the other.
     pub fn set_rust_stage(&mut self, on: bool) {
         self.stage.set_rust(on);
+    }
+
+    /// MilkDrop as the Desk's director has it (the Rust stage's), with what the stage said.
+    pub fn milk(&mut self) -> MilkView {
+        self.stage.milk()
+    }
+
+    /// The hands on MilkDrop.
+    pub fn milk_hand(&mut self, h: MilkHand) {
+        self.stage.milk_hand(h);
+    }
+
+    /// The library's presets whose names have `query` in them, up to `most`.
+    pub fn milk_search(&mut self, query: &str, most: usize) -> Vec<MilkRow> {
+        self.stage.milk_search(query, most)
     }
 
     /// Where a stage window started by hand connects (`wetowl --stage <url>`).

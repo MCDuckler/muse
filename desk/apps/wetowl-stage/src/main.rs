@@ -6,6 +6,8 @@
 //!     [--scene <id>]                 that scene held (on its own)
 //!     [--screen <name>]              full screen there from the start
 //!     [--scale <0.5..1>]             the working size's share of the window's (it adapts)
+//!     [--milk-dir <dir>]             MilkDrop's presets (on its own: the Desk says otherwise)
+//!     [--shot <file.png>]            with --seconds: the last frame written out (960 wide)
 //!     [--seconds N] [--list-screens]
 //!
 //! From the Desk it reads the decks as the ear hears them (`desk`), each deck's record
@@ -15,6 +17,7 @@
 //!
 //! Every second it says `STAGE fps=… size=WxH screen=<name> full=0|1 gpu=… scene=… work=WxH`.
 mod link;
+mod milk;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -45,6 +48,8 @@ struct Args {
     scale: f32,
     seconds: Option<f64>,
     list: bool,
+    milk_dir: Option<String>,
+    shot: Option<String>,
 }
 
 fn args() -> Args {
@@ -57,6 +62,8 @@ fn args() -> Args {
         scale: after("--scale").and_then(|s| s.parse().ok()).unwrap_or(1.0f32).clamp(0.25, 2.0),
         seconds: after("--seconds").and_then(|s| s.parse().ok()),
         list: a.iter().any(|x| x == "--list-screens"),
+        milk_dir: after("--milk-dir"),
+        shot: after("--shot"),
     }
 }
 
@@ -105,6 +112,42 @@ fn own_record() -> RecordFacts {
     }
 }
 
+/// The presets in a folder (and its folders), for a stage on its own.
+fn own_presets(dir: &str) -> Vec<wo_show::milk::MilkPreset> {
+    fn walk(d: &std::path::Path, out: &mut Vec<wo_show::milk::MilkPreset>) {
+        for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("milk")) {
+                out.push(wo_show::milk::MilkPreset::of(&p.to_string_lossy(), "shipped", 3.0));
+            }
+        }
+    }
+    let mut out = vec![];
+    walk(std::path::Path::new(dir), &mut out);
+    out
+}
+
+/// `dt` seconds of the made-up record's sound from `t` (44.1 kHz): a kick on each beat at 128
+/// BPM, a bass under it, hats on the offbeat.
+fn own_sound(t: f64, dt: f64, phase: &mut f64) -> Vec<i16> {
+    let n = (dt.clamp(0.0, 0.1) * 44_100.0) as usize;
+    let beat = 60.0 / 128.0;
+    (0..n)
+        .map(|i| {
+            let at = t - dt + i as f64 / 44_100.0;
+            let b = (at / beat).fract();
+            let kick = (-b * 18.0).exp() * (std::f64::consts::TAU * (50.0 + 90.0 * (-b * 30.0).exp()) * b * beat).sin();
+            *phase += 55.0 / 44_100.0;
+            let bass = 0.4 * (std::f64::consts::TAU * *phase).sin() * (1.0 - (-b * 6.0).exp());
+            let h = ((at / beat + 0.5).fract() * beat * 40.0).min(1.0);
+            let hat = 0.15 * (1.0 - h) * (((i as f64 * 12.9898).sin() * 43758.5453).fract() - 0.5);
+            ((kick + bass + hat) * 12_000.0).clamp(-32_000.0, 32_000.0) as i16
+        })
+        .collect()
+}
+
 /// What the stage draws from: the Desk's word, or its own.
 enum Source {
     Desk {
@@ -119,6 +162,7 @@ enum Source {
         direct: Box<Direct>,
         facts: RecordFacts,
         t0: Instant,
+        milk_ok: bool,
     },
 }
 
@@ -130,7 +174,7 @@ impl Source {
                 Some((f, at)) => (wo_wire::v2::room(f, [facts[0].as_ref(), facts[1].as_ref()], at.elapsed().as_secs_f64()), (**cue).clone(), f.heard.is_some()),
                 None => (Room::default(), (**cue).clone(), false),
             },
-            Source::Own { direct, facts, t0 } => {
+            Source::Own { direct, facts, t0, milk_ok } => {
                 let len = 96.0 * 4.0 * 60_000.0 / 128.0;
                 let ms = (t0.elapsed().as_secs_f64() * 1000.0) % len;
                 let beat = (ms / (60_000.0 / 128.0)).fract();
@@ -139,7 +183,9 @@ impl Source {
                 let audio = ShowAudio { sub: 0.5 * loud, low: 0.3 + 0.5 * kick, mid: 0.4 * loud, high: 0.2 + 0.3 * (beat * 8.0).fract() * loud, air: 0.2, kick, onset: kick, ..Default::default() };
                 let a = ShowDeck::derive("A", Some(facts), true, ms, Channel::default(), audio);
                 let room = Room { a, b: ShowDeck { name: "B".into(), ..Default::default() }, audio, ..Default::default() };
-                let (cue, _) = direct.tick(dt, room.clone(), Default::default());
+                let mut extra = wo_show::deck::Flat::new();
+                extra.insert("milk.ok".into(), if *milk_ok { 1.0 } else { 0.0 });
+                let (cue, _) = direct.tick(dt, room.clone(), extra);
                 (room, cue, true)
             }
         }
@@ -244,6 +290,12 @@ struct App {
     black: f32,
     /// When a frame last went to the window.
     presented: Instant,
+    /// Not FIFO: the stage paces its frames to the screen's rate, the next one due then.
+    paced: bool,
+    due: Instant,
+    /// The made-up record's bass, where it is.
+    phase: f64,
+    milk: milk::MilkRun,
     missing: Option<String>,
 }
 
@@ -258,7 +310,7 @@ impl App {
         let screen = d.window.current_monitor().map(|m| m.name().unwrap_or_default()).unwrap_or_default();
         let (ww, wh) = d.stage.drawn.work;
         println!(
-            "STAGE fps={:.1} size={}x{} screen={} full={} gpu={} ({:?}) scene={} work={}x{} ms={:.1} heard={} cues={} pictures={} black={}",
+            "STAGE fps={:.1} size={}x{} screen={} full={} gpu={} ({:?}) scene={} work={}x{} ms={:.1} heard={} cues={} pictures={} black={} milk={:.0}fps/{}",
             self.frames as f64 / secs,
             size.width,
             size.height,
@@ -274,6 +326,8 @@ impl App {
             self.cues,
             self.pictures,
             self.black,
+            self.milk.shown().fps,
+            self.milk.shown().preset.unwrap_or_else(|| "-".into()),
         );
         self.frames = 0;
         self.since = Instant::now();
@@ -333,6 +387,7 @@ impl App {
                     In::Said(Said::Cue(c)) => *cue = c,
                     In::Said(Said::Hand(h)) => hands.push(h),
                     In::Said(Said::Other) => {}
+                    In::Pcm(b) => self.milk.pcm(&b),
                 }
             }
             // the Desk gone for good (it closes its stage as it goes): so does this
@@ -369,7 +424,7 @@ impl App {
         let full = d.window.fullscreen().is_some();
         let here = d.window.current_monitor();
         let screen = full.then(|| monitors.iter().find(|(_, m)| Some(m) == here.as_ref()).map(|(n, _)| n.clone())).flatten();
-        let v = serde_json::json!({"scene": self.play_scene(), "screens": list, "screen": screen, "full": full});
+        let v = serde_json::json!({"scene": self.play_scene(), "screens": list, "screen": screen, "full": full, "milk": self.milk.shown()});
         link.send(Message::text(t_first("shown", &v)));
     }
 
@@ -379,6 +434,7 @@ impl App {
     fn draw(&mut self, el: &ActiveEventLoop, present: bool) {
         if self.args.seconds.is_some_and(|s| self.started.elapsed() > Duration::from_secs_f64(s)) {
             self.report();
+            self.shoot();
             el.exit();
             return;
         }
@@ -418,7 +474,18 @@ impl App {
         let st = self.play.frame(dt, room, &cue, heard);
         let f = stage_frame(&st, &self.book, self.started.elapsed().as_secs_f64());
         self.black = f.black;
+        // on its own, MilkDrop hears the made-up record: a kick and a bass on the beat, hats
+        if let Source::Own { t0, .. } = &self.source {
+            let samples = own_sound(t0.elapsed().as_secs_f64(), dt, &mut self.phase);
+            self.milk.pcm_44k(&samples);
+        }
         let Some(d) = &mut self.win else { return };
+        // MilkDrop, where the frame draws it: the figure's (the milk scene), the scene being
+        // left, or the ground under a blend
+        let wants_milk = f.figure.as_ref().is_some_and(|l| l.milk)
+            || f.from.as_ref().is_some_and(|l| l.milk)
+            || (f.blend.is_some() && f.ground == wo_show::frame::GroundDraw::Milk);
+        d.stage.milk = self.milk.frame(&d.gpu, &st, &cue.milk, wants_milk, dt).cloned();
         if present {
             // the working size, let down while frames come late
             let budget = 1.0 / d.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()).map_or(60.0, |r| r as f64 / 1000.0).max(30.0);
@@ -473,7 +540,32 @@ impl App {
         }
         self.report();
         if let Some(d) = &self.win {
-            d.window.request_redraw();
+            if !self.paced || !present {
+                d.window.request_redraw();
+            } else {
+                // the next frame at the screen's rate (asked for between events)
+                let rate = d.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()).map_or(60.0, |r| r as f64 / 1000.0).clamp(30.0, 240.0);
+                self.due = (self.due + Duration::from_secs_f64(1.0 / rate)).max(now);
+            }
+        }
+    }
+
+    /// The frame as it is now, written to --shot's file (960 wide).
+    fn shoot(&mut self) {
+        let Some(file) = self.args.shot.clone() else { return };
+        let (room, cue, heard) = self.source.room(0.0);
+        let st = self.play.frame(0.0, room, &cue, heard);
+        let f = stage_frame(&st, &self.book, self.started.elapsed().as_secs_f64());
+        let Some(d) = &mut self.win else { return };
+        let (w, h) = (960u32, ((960.0 * d.config.height as f32 / d.config.width.max(1) as f32).round() as u32).max(2));
+        let t = wo_render::target(&d.gpu, w, h);
+        let v = t.create_view(&Default::default());
+        let cmd = d.stage.draw(&d.gpu, &f, 0.0, None, w, h, Some(&v));
+        d.gpu.queue.submit([cmd]);
+        let px = wo_render::read(&d.gpu, &t);
+        match image::save_buffer(&file, &px, w, h, image::ExtendedColorType::Rgba8) {
+            Ok(()) => println!("STAGE shot {file}"),
+            Err(e) => eprintln!("stage: the shot: {e}"),
         }
     }
 
@@ -525,13 +617,23 @@ impl ApplicationHandler for App {
         // the shaders write display values, as Flutter's canvas does: not an sRGB format
         let format = caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(caps.formats[0]);
         let size = window.inner_size();
+        // Mailbox where there is one, paced by the stage to the screen's rate: a stage held in
+        // FIFO's wait on Wayland held up its MilkDrop helper with it (a frame a second, the
+        // helper drawn by a stage presenting in FIFO; sixty with mailbox). FIFO where there
+        // is nothing else (a Mac), or WO_PRESENT=fifo.
+        let present_mode = match std::env::var("WO_PRESENT").as_deref() {
+            Ok("fifo") => wgpu::PresentMode::Fifo,
+            Ok("immediate") if caps.present_modes.contains(&wgpu::PresentMode::Immediate) => wgpu::PresentMode::Immediate,
+            _ if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) => wgpu::PresentMode::Mailbox,
+            _ => wgpu::PresentMode::Fifo,
+        };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode,
             desired_maximum_frame_latency: 2,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
@@ -542,6 +644,8 @@ impl ApplicationHandler for App {
         stage.scale = self.args.scale;
         eprintln!("stage: {} shaders ready in {:.0} ms on {} ({:?})", wo_render::stage::stage_shaders().len() + 2, t0.elapsed().as_secs_f64() * 1000.0, gpu.info.name, gpu.info.backend);
         window.request_redraw();
+        self.paced = present_mode != wgpu::PresentMode::Fifo;
+        eprintln!("stage: presenting {present_mode:?}");
         let took = Arc::new(AtomicU64::new(0));
         let timer = timer(gpu.device.clone(), took.clone());
         self.win = Some(Window_ { window, surface, config, gpu, stage, picture: None, adapt: Adapt::new(self.args.scale), took, timer });
@@ -578,28 +682,48 @@ impl ApplicationHandler for App {
         if self.win.is_some() && self.presented.elapsed() > Duration::from_millis(150) {
             self.draw(el, false);
         }
-        el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(30)));
+        let now = Instant::now();
+        let mut wake = now + Duration::from_millis(30);
+        if self.paced
+            && let Some(d) = &self.win
+        {
+            if now >= self.due {
+                d.window.request_redraw();
+            } else {
+                wake = wake.min(self.due);
+            }
+        }
+        el.set_control_flow(ControlFlow::WaitUntil(wake));
     }
 }
 
 fn main() {
     let args = args();
     let book = SceneBook::shipped().only(DRAWN);
+    let milk = milk::MilkRun::new();
     let source = match &args.url {
         Some(url) => Source::Desk { link: Link::open(url.clone()), frame: None, facts: Box::new([None, None]), cue: Box::default(), joined: false, lost_since: None },
         None => {
             let mut direct = Direct::new(&book, ShowDoc::default(), wo_show::scores::ComboScores::shipped(), 11);
+            // MilkDrop's presets from a folder (the Desk keeps the library otherwise)
+            let presets = args.milk_dir.as_deref().map(own_presets).unwrap_or_default();
+            let milk_ok = milk.ok() && !presets.is_empty();
+            if milk_ok {
+                let lib = wo_show::milk::MilkLibrary::new(presets, Default::default());
+                direct.milk = Some(wo_show::milk::MilkDirector::new(lib, wo_show::scores::MilkScores::shipped(), 11));
+            }
+            direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(milk_ok));
             if let Some(s) = &args.scene {
                 direct.director.choose(s, wo_show::director::SceneChange::Cut);
                 direct.hold(true);
             }
-            Source::Own { direct: Box::new(direct), facts: own_record(), t0: Instant::now() }
+            Source::Own { direct: Box::new(direct), facts: own_record(), t0: Instant::now(), milk_ok }
         }
     };
     let el = EventLoop::new().expect("an event loop");
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(el.owned_display_handle())));
     let now = Instant::now();
-    let mut app = App { args, instance, book, source, play: Play::default(), win: None, started: now, last: now, frames: 0, since: now, shown_due: now, pictures: 0, heard: 0, cues: 0, black: 0.0, presented: now, missing: None };
+    let mut app = App { args, instance, book, source, play: Play::default(), win: None, started: now, last: now, frames: 0, since: now, shown_due: now, pictures: 0, heard: 0, cues: 0, black: 0.0, presented: now, missing: None, milk, paced: false, due: now, phase: 0.0 };
     el.run_app(&mut app).expect("the stage ran");
 }
 

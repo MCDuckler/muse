@@ -11,6 +11,8 @@ use wo_wire::v2::{self, Said};
 pub enum In {
     Joined,
     Said(Said),
+    /// The room's sound (wo_wire::pcm), for MilkDrop.
+    Pcm(Vec<u8>),
     Lost,
 }
 
@@ -49,6 +51,11 @@ impl Link {
                             Ok(Message::Text(t)) => {
                                 let said = v2::said(&t);
                                 if said != Said::Other && tx.send(In::Said(said)).is_err() {
+                                    return;
+                                }
+                            }
+                            Ok(Message::Binary(b)) if b.starts_with(b"PCM1") => {
+                                if tx.send(In::Pcm(b.to_vec())).is_err() {
                                     return;
                                 }
                             }

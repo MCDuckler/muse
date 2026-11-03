@@ -46,6 +46,7 @@ fn the_desk_directs_the_rust_stage() {
         std::env::set_var("XDG_CONFIG_HOME", home.join("config"));
         std::env::set_var("XDG_DATA_HOME", home.join("data"));
         std::env::set_var("XDG_CACHE_HOME", home.join("cache"));
+        std::env::set_var("WETOWL_MILK_HOME", home.join("milk"));
     }
     let mut d = Desk::open(true);
     d.set_rust_stage(true);
@@ -76,6 +77,34 @@ fn the_desk_directs_the_rust_stage() {
     until(&mut d, "full screen there", 10, |_, v| v.told.full && v.told.screen.as_deref() == Some(name.as_str()));
     d.show(ShowHand::Full(false));
     until(&mut d, "a window again", 10, |_, v| !v.told.full);
+    // MilkDrop, where there is a helper (WETOWL_MILK): the Desk's preset on the stage's
+    // MilkDrop scene, confirmed by the helper; NEXT puts on another
+    if std::env::var_os("WETOWL_MILK").is_some() {
+        until(&mut d, "the stage has MilkDrop", 10, |d, _| d.milk().ok && d.milk().presets > 500 && d.milk().preset.is_some());
+        for _ in 0..8 {
+            if d.stage().scene.as_deref() == Some("MilkDrop") {
+                break;
+            }
+            d.show(ShowHand::Next);
+            until(&mut d, "the next scene", 5, |_, _| true);
+            sleep(Duration::from_millis(300));
+        }
+        assert_eq!(d.stage().scene.as_deref(), Some("MilkDrop"), "NEXT reaches MilkDrop");
+        until(&mut d, "MilkDrop draws the Desk's preset", 40, |d, _| {
+            let m = d.milk();
+            m.on && m.confirmed.is_some() && m.confirmed == m.preset
+        });
+        let m = d.milk();
+        println!("milk: {:?} at {:.0} fps", m.preset, m.fps);
+        d.milk_hand(wo_deskcore::MilkHand::Next);
+        assert_ne!(d.milk().preset, m.preset, "NEXT changed the preset");
+        // on the stage (or the one the director cut to since, on a drop)
+        until(&mut d, "the next preset on", 20, |d, _| {
+            let n = d.milk();
+            n.confirmed.is_some() && n.confirmed != m.preset && n.confirmed == n.preset
+        });
+        until(&mut d, "MilkDrop's picture", 10, |d, _| light(d).is_some_and(|(_, l)| l > 2.0));
+    }
     d.close_stage();
     let _ = std::fs::remove_dir_all(&home);
 }

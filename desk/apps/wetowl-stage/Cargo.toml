@@ -13,3 +13,5 @@ wo-show = { path = "../../crates/wo-show" }
 wo-wire = { path = "../../crates/wo-wire" }
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 serde_json = "1.0.154"
+wo-milk = { path = "../../crates/wo-milk" }
+image = { version = "0.25", default-features = false, features = ["png"] }

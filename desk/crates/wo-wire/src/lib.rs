@@ -217,6 +217,26 @@ pub struct Shown {
     /// The screen the window is full screen on, by name.
     pub screen: Option<String>,
     pub full: bool,
+    /// MilkDrop on a Rust stage.
+    pub milk: Option<MilkShown>,
+}
+
+/// MilkDrop as the Rust stage has it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MilkShown {
+    /// There is a helper to run.
+    pub ok: bool,
+    /// It is running, and has drawn.
+    pub on: bool,
+    /// The preset on, as the helper confirmed it.
+    pub preset: Option<String>,
+    /// The presets it died on (paths), this run.
+    pub crashed: Vec<String>,
+    /// Why it cannot draw, where it said.
+    pub trouble: Option<String>,
+    /// Frames a second it draws.
+    pub fps: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
