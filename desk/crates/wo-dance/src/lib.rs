@@ -11,6 +11,10 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+pub mod carry;
+pub mod clock;
+pub mod sim;
+
 pub type M34 = [f64; 12];
 
 /// A move as the bank lists it.
@@ -90,6 +94,33 @@ impl Mesh {
     pub fn corners(&self) -> usize {
         self.uv.len() / 2
     }
+
+    /// The rest normals evened out with their neighbours' twice (v1's DanceRig._smooth): a
+    /// scan's surface is lumpy, and lumps catch the light.
+    fn smooth(&mut self) {
+        let n = self.positions();
+        let at: Vec<usize> = self.tris.iter().map(|&c| self.src[c as usize] as usize).collect();
+        let mut acc = vec![0f32; n * 3];
+        for _ in 0..2 {
+            acc.copy_from_slice(&self.nrm);
+            for t in at.as_chunks::<3>().0 {
+                let (a, b, c) = (t[0], t[1], t[2]);
+                for j in 0..3 {
+                    let s = self.nrm[a * 3 + j] + self.nrm[b * 3 + j] + self.nrm[c * 3 + j];
+                    acc[a * 3 + j] += s * 0.25;
+                    acc[b * 3 + j] += s * 0.25;
+                    acc[c * 3 + j] += s * 0.25;
+                }
+            }
+            for v in 0..n {
+                let (x, y, z) = (acc[v * 3] as f64, acc[v * 3 + 1] as f64, acc[v * 3 + 2] as f64);
+                let l = 1.0 / (x * x + y * y + z * z + 1e-12).sqrt();
+                self.nrm[v * 3] = (x * l) as f32;
+                self.nrm[v * 3 + 1] = (y * l) as f32;
+                self.nrm[v * 3 + 2] = (z * l) as f32;
+            }
+        }
+    }
 }
 
 /// A body's pose: per bone a quaternion (w, x, y, z), and the hips' place.
@@ -97,6 +128,59 @@ impl Mesh {
 pub struct Pose {
     pub q: Vec<[f64; 4]>,
     pub hips: [f64; 3],
+}
+
+impl Pose {
+    /// A pose of `bones` bones, all naught (filled by a sample before it is used).
+    pub fn new(bones: usize) -> Pose {
+        Pose { q: vec![[0.0; 4]; bones], hips: [0.0; 3] }
+    }
+
+    /// This pose eased toward `o` by `w`, bone by bone (normalised lerp, the short way).
+    pub fn blend_toward(&mut self, o: &Pose, w: f64) {
+        if w <= 0.0 {
+            return;
+        }
+        if w >= 1.0 {
+            self.clone_from(o);
+            return;
+        }
+        for (q, r) in self.q.iter_mut().zip(&o.q) {
+            let dot: f64 = q.iter().zip(r).map(|(a, b)| a * b).sum();
+            let s = if dot < 0.0 { -1.0 } else { 1.0 };
+            let mut n = 0.0;
+            for k in 0..4 {
+                q[k] = q[k] * (1.0 - w) + r[k] * s * w;
+                n += q[k] * q[k];
+            }
+            let n = 1.0 / n.sqrt();
+            for v in q.iter_mut() {
+                *v *= n;
+            }
+        }
+        for k in 0..3 {
+            self.hips[k] = self.hips[k] * (1.0 - w) + o.hips[k] * w;
+        }
+    }
+}
+
+/// What kind of dancing a move is, from its capture.
+pub fn style_ix(style: &str) -> usize {
+    STYLES.iter().position(|s| *s == style).unwrap_or(0)
+}
+
+/// The styles, in v1's order (DanceStyle).
+pub const STYLES: &[&str] = &["groove", "party", "toon", "swing", "latin", "folk", "calm"];
+
+impl Move {
+    /// Its tier: 0 low, 1 mid, 2 high.
+    pub fn tier_ix(&self) -> usize {
+        match self.tier.as_str() {
+            "low" => 0,
+            "high" => 2,
+            _ => 1,
+        }
+    }
 }
 
 pub struct Rig {
@@ -227,7 +311,9 @@ impl Rig {
             let uv = c.f32s(m.verts * 2)?;
             let src = c.u16s(m.verts)?;
             let tris = c.u16s(m.tris * 3)?;
-            meshes.push(Mesh { pos, nrm, bone, weight, uv, src, tris });
+            let mut mesh = Mesh { pos, nrm, bone, weight, uv, src, tris };
+            mesh.smooth();
+            meshes.push(mesh);
         }
         let parent: Vec<i64> = j.bones.iter().map(|b| b.parent).collect();
         let inv: Vec<M34> = rest.iter().map(invert).collect();
@@ -269,6 +355,60 @@ impl Rig {
 
     pub fn move_by_id(&self, id: &str) -> Option<usize> {
         self.moves.iter().position(|m| m.id == id)
+    }
+
+    /// The other half of move `i`'s duet (itself when it is not one).
+    pub fn partner_of(&self, i: usize) -> usize {
+        let m = &self.moves[i];
+        let Some(d) = &m.duo else { return i };
+        let want = 1 - m.part.clamp(0, 1);
+        self.moves.iter().position(|o| o.duo.as_deref() == Some(d) && o.part.clamp(0, 1) == want).unwrap_or(i)
+    }
+
+    pub fn has_duets(&self) -> bool {
+        self.moves.iter().any(|m| m.duo.is_some())
+    }
+
+    /// The skin as RGBA8, top row first (decoded from its webp).
+    pub fn skin_rgba(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let img = image::load_from_memory_with_format(&self.skin, image::ImageFormat::WebP).ok()?.to_rgba8();
+        Some((img.width(), img.height(), img.into_raw()))
+    }
+
+    /// Where bone `bone` of `world` (from [Rig::solve]) is, `tip` metres along it from its
+    /// head (a hand's fingertips, the top of the head).
+    pub fn joint_at(world: &[M34], bone: usize, tip: f64) -> [f64; 3] {
+        let w = &world[bone];
+        [w[3] + w[1] * tip, w[7] + w[5] * tip, w[11] + w[9] * tip]
+    }
+
+    /// The joints that read a pose, against the hips: the head, hands, elbows, feet, knees
+    /// (for matching one pose to another).
+    pub fn key_joints(&self, pose: &Pose) -> Vec<[f64; 3]> {
+        let w = self.solve(pose);
+        let h = self.bone("Hips").unwrap_or(0);
+        ["Head", "Hand_L", "Hand_R", "LowerArm_L", "LowerArm_R", "Foot_L", "Foot_R", "LowerLeg_L", "LowerLeg_R"]
+            .iter()
+            .filter_map(|n| self.bone(n))
+            .map(|b| [w[b][3] - w[h][3], w[b][7] - w[h][7], w[b][11] - w[h][11]])
+            .collect()
+    }
+
+    /// How far apart two poses look: the mean distance of their key joints, metres.
+    pub fn pose_distance(a: &[[f64; 3]], b: &[[f64; 3]]) -> f64 {
+        let s: f64 = a.iter().zip(b).map(|(p, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()).sum();
+        s / a.len().max(1) as f64
+    }
+
+    /// How differently two poses' key joints are moving: `a` and `a_was` a moment apart,
+    /// `b` and `b_was` the same moment apart (the mean distance between the displacements).
+    pub fn motion_distance(a: &[[f64; 3]], a_was: &[[f64; 3]], b: &[[f64; 3]], b_was: &[[f64; 3]]) -> f64 {
+        let mut s = 0.0;
+        for i in 0..a.len() {
+            let d = [0, 1, 2].map(|k| (a[i][k] - a_was[i][k]) - (b[i][k] - b_was[i][k]));
+            s += (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        }
+        s / a.len().max(1) as f64
     }
 
     fn i16_at(&self, at: usize) -> f64 {
@@ -450,6 +590,73 @@ mod tests {
         let (pos, _) = r.deform(0, &skin);
         let worst = pos.iter().zip(&r.meshes[0].pos).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
         assert!(worst < 1e-4, "{worst}");
+    }
+
+    #[test]
+    fn a_move_loops_without_a_jump_and_a_blend_is_between() {
+        let Some(r) = chris() else { return };
+        for (i, m) in r.moves.iter().enumerate() {
+            let (a, b) = (r.sample(i, m.beats as f64 - 0.001), r.sample(i, 0.0));
+            assert!(Rig::pose_distance(&r.key_joints(&a), &r.key_joints(&b)) < 0.03, "{}", m.id);
+        }
+        let (a, b) = (r.sample(0, 0.0), r.sample(r.moves.len() - 1, 1.0));
+        let mut c = a.clone();
+        c.blend_toward(&b, 0.5);
+        let (ja, jb, jc) = (r.key_joints(&a), r.key_joints(&b), r.key_joints(&c));
+        let ab = Rig::pose_distance(&ja, &jb);
+        assert!(Rig::pose_distance(&ja, &jc) < ab && Rig::pose_distance(&jb, &jc) < ab);
+        let mut c = a.clone();
+        c.blend_toward(&b, 1.0);
+        assert!(Rig::pose_distance(&jb, &r.key_joints(&c)) < 1e-9);
+    }
+
+    #[test]
+    fn a_step_starts_in_the_old_pose_carries_its_motion_and_ends_in_the_new_move() {
+        let Some(r) = chris() else { return };
+        let (a, b) = (0, r.moves.len() / 2);
+        let (from, from_was) = (r.sample(a, 3.0), r.sample(a, 3.0 - 1.0 / 16.0));
+        let (to, to_was) = (r.sample(b, 0.0), r.sample(b, -1.0 / 16.0));
+        let mut carry = carry::Carry::new(r.bones());
+        carry.start(&from, &from_was, &to, &to_was, 1.0 / 16.0, 1.5);
+        let at = |t: f64| {
+            let mut p = r.sample(b, t);
+            carry.apply(&mut p, t);
+            r.key_joints(&p)
+        };
+        assert!(Rig::pose_distance(&at(0.0), &r.key_joints(&from)) < 1e-6);
+        assert!(Rig::pose_distance(&at(0.02), &r.key_joints(&r.sample(a, 3.02))) < 0.02, "moves the way the old move moved");
+        let end = r.key_joints(&r.sample(b, 1.5));
+        assert!(Rig::pose_distance(&at(1.5), &end) < 1e-9);
+        assert!(Rig::pose_distance(&at(1.499), &end) < 0.01);
+        let mut last = at(0.0);
+        let mut t = 0.05;
+        while t <= 1.5 {
+            let j = at(t);
+            assert!(Rig::pose_distance(&j, &last) < 0.12, "a jolt at {t}");
+            last = j;
+            t += 0.05;
+        }
+    }
+
+    #[test]
+    fn duets_are_two_halves_standing_apart() {
+        let Some(r) = chris() else { return };
+        assert!(r.has_duets());
+        for (i, m) in r.moves.iter().enumerate().filter(|(_, m)| m.duo.is_some() && m.part == 0) {
+            let p = r.partner_of(i);
+            assert_eq!((r.moves[p].duo.as_deref(), r.moves[p].part), (m.duo.as_deref(), 1));
+            assert_eq!(r.partner_of(p), i);
+            let mut apart: f64 = 0.0;
+            let mut t = 0.0;
+            while t < m.beats as f64 {
+                let (a, b) = (r.sample(i, t), r.sample(p, t));
+                apart = apart.max(((a.hips[0] - b.hips[0]).powi(2) + (a.hips[1] - b.hips[1]).powi(2)).sqrt());
+                t += 0.5;
+            }
+            assert!((0.25..=2.2).contains(&apart), "{}: {apart}", m.id);
+        }
+        let solo = r.moves.iter().position(|m| m.duo.is_none()).unwrap();
+        assert_eq!(r.partner_of(solo), solo);
     }
 
     #[test]

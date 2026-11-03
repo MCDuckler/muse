@@ -9,8 +9,9 @@ description = "The dancers for the Rust stage: scanned bodies, their skeleton, t
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+image = { version = "0.25", default-features = false, features = ["png", "webp"] }
+wo-show = { path = "../wo-show" }
 
 [dev-dependencies]
 wo-render = { path = "../wo-render" }
 wgpu = "30.0.1"
-image = { version = "0.25", default-features = false, features = ["png", "webp"] }
