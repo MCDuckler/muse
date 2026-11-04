@@ -40,12 +40,17 @@ fn a_roll_planned_made_and_handed_over() {
     assert!(until(&mut d, 4.0, |d| d.snapshot().mix.is_some_and(|m| m.mixing)), "Mix now did not start it on the bar");
     assert!(until(&mut d, 1.0, |d| d.snapshot().decks[1].playing && d.snapshot().decks[1].synced), "the incoming is not playing in step");
 
-    // half way through: the outgoing is caught in a 2-beat loop
-    assert!(until(&mut d, 12.0, |d| d.snapshot().mix.is_some_and(|m| m.bar >= 4.5)));
-    let a = d.snapshot().decks[0].clone();
+    // v1's roll: caught in a two-bar loop half way, halved at three quarters
     let beat = 60.0 / 128.0;
-    let (la, lb) = a.looped.expect("the outgoing rolls");
-    assert!(((lb - la) - 2.0 * beat).abs() < 1e-6, "a 2-beat loop at bar 5 of 8, not {:.3} s", lb - la);
+    let loop_at = |d: &mut Desk, bar: f64| {
+        assert!(until(d, 12.0, |d| d.snapshot().mix.is_some_and(|m| m.bar >= bar)));
+        let (la, lb) = d.snapshot().decks[0].looped.expect("the outgoing rolls");
+        (lb - la) / beat
+    };
+    let beats = loop_at(&mut d, 4.5);
+    assert!((beats - 8.0).abs() < 1e-3, "two bars at bar 4.5 of 8, not {beats:.2} beats");
+    let beats = loop_at(&mut d, 6.5);
+    assert!((beats - 4.0).abs() < 1e-3, "one bar at bar 6.5 of 8, not {beats:.2} beats");
 
     // handed over: B is the master, A stopped and loaded with the next record
     assert!(until(&mut d, 15.0, |d| d.snapshot().mix.is_none() || d.snapshot().decks[1].master), "the roll never finished");

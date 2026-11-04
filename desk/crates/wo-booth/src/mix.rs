@@ -32,11 +32,65 @@ pub enum Transition {
     Sweep,
     /// The outgoing caught in a loop that halves as it goes, let go as the new one lands.
     Roll,
-    /// The incoming comes up; on the last beat the outgoing brakes to a stop.
+    /// The incoming comes up; then the outgoing brakes to a stop.
     Brake,
+    /// The drums change hands, the new record's first, the old record's gone half way.
+    Swap,
+    /// The new record's voice alone over the old record's beat, then its band.
+    Announce,
+    /// The old record goes out singing over the new record's intro.
+    AcapellaOut,
+    /// The stems change hands one at a time; nothing ever doubles.
+    StemBlend,
+    /// The old record builds through the filter in a tightening loop; the new drops on the one.
+    DropSwap,
+    /// The old record goes out into its echo, the tail left under the new one.
+    EchoOut,
+    /// Four bars, two, one, climbing through the filter: the new record drops on the one.
+    LoopBuild,
+    /// The old record's breakdown is the transition; the new drops where the old would have.
+    BreakSwap,
+    /// Long, both ways: the old climbs out through the high-pass as the new opens up.
+    FilterRide,
+    /// An uplifter of the booth's own under the move; a hit on the one.
+    Riser,
+    /// A short blend with a noise sweep rising into the change and falling away after.
+    NoiseSweep,
+    /// Both records' tops under a wash of noise that arches over the change.
+    Hydrant,
+    /// The old record evaporates into its echo through a closing low-pass.
+    Dissolve,
+    /// The same, falling: pulled five semitones down into its echo.
+    LunarEcho,
+    /// The old record chopped in time with its own beat until it is gone.
+    Tremolo,
 }
 
 impl Transition {
+    pub const ALL: [Transition; 21] = [
+        Transition::Blend,
+        Transition::Cut,
+        Transition::Fade,
+        Transition::Sweep,
+        Transition::Roll,
+        Transition::Brake,
+        Transition::Swap,
+        Transition::Announce,
+        Transition::AcapellaOut,
+        Transition::StemBlend,
+        Transition::DropSwap,
+        Transition::EchoOut,
+        Transition::LoopBuild,
+        Transition::BreakSwap,
+        Transition::FilterRide,
+        Transition::Riser,
+        Transition::NoiseSweep,
+        Transition::Hydrant,
+        Transition::Dissolve,
+        Transition::LunarEcho,
+        Transition::Tremolo,
+    ];
+
     pub fn word(self) -> &'static str {
         match self {
             Transition::Blend => "Blend",
@@ -45,7 +99,53 @@ impl Transition {
             Transition::Sweep => "Sweep",
             Transition::Roll => "Roll",
             Transition::Brake => "Brake",
+            Transition::Swap => "Drum swap",
+            Transition::Announce => "Announce",
+            Transition::AcapellaOut => "A cappella out",
+            Transition::StemBlend => "Stem blend",
+            Transition::DropSwap => "Drop swap",
+            Transition::EchoOut => "Echo out",
+            Transition::LoopBuild => "Loop build",
+            Transition::BreakSwap => "Break swap",
+            Transition::FilterRide => "Filter ride",
+            Transition::Riser => "Riser",
+            Transition::NoiseSweep => "Noise sweep",
+            Transition::Hydrant => "Hydrant",
+            Transition::Dissolve => "Dissolve",
+            Transition::LunarEcho => "Lunar echo",
+            Transition::Tremolo => "Tremolo",
         }
+    }
+
+    /// v1's name for it (kept moves, the house's mix feedback).
+    pub fn name(self) -> &'static str {
+        match self {
+            Transition::Blend => "blend",
+            Transition::Cut => "cut",
+            Transition::Fade => "fade",
+            Transition::Sweep => "sweep",
+            Transition::Roll => "roll",
+            Transition::Brake => "brake",
+            Transition::Swap => "swap",
+            Transition::Announce => "announce",
+            Transition::AcapellaOut => "acapellaOut",
+            Transition::StemBlend => "stemBlend",
+            Transition::DropSwap => "dropSwap",
+            Transition::EchoOut => "echoOut",
+            Transition::LoopBuild => "loopBuild",
+            Transition::BreakSwap => "breakSwap",
+            Transition::FilterRide => "filterRide",
+            Transition::Riser => "riser",
+            Transition::NoiseSweep => "noiseSweep",
+            Transition::Hydrant => "hydrant",
+            Transition::Dissolve => "dissolve",
+            Transition::LunarEcho => "lunarEcho",
+            Transition::Tremolo => "tremolo",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Transition> {
+        Transition::ALL.into_iter().find(|t| t.name() == s)
     }
 }
 
@@ -340,65 +440,6 @@ pub fn in_point(to: &Timing, bars: u32, on_the_drop: bool) -> f64 {
     }
 }
 
-/// What a transition does at `p` (0..1 through its bars), with the outgoing on the
-/// crossfader's left: the crossfader, each side's EQ knobs (low, mid, high: 0 kill,
-/// 0.5 flat), the outgoing's filter knob (0.5 off, 1 all high-pass), a loop on the
-/// outgoing (beats), and whether it brakes now.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Moves {
-    pub crossfader: f32,
-    pub from_eq: [f32; 3],
-    pub to_eq: [f32; 3],
-    pub from_filter: f32,
-    pub from_loop: Option<f64>,
-    pub from_brake: bool,
-}
-
-/// The transition `kind` at `p` (clamped to 0..1).
-pub fn moves(kind: Transition, p: f64) -> Moves {
-    let p = p.clamp(0.0, 1.0) as f32;
-    let flat = [0.5f32; 3];
-    let killed_low = [0.0, 0.5, 0.5];
-    let ramp = |a: f32, b: f32| ((p - a) / (b - a)).clamp(0.0, 1.0);
-    // The crossfader law gives each side full level from the centre in: rising from
-    // 0 to 0.5 brings the incoming up, from 0.5 to 1 takes the outgoing away.
-    let up_then_out = |up_by: f32, out_from: f32| 0.5 * ramp(0.0, up_by) + 0.5 * ramp(out_from, 1.0);
-    let mut m = Moves { crossfader: 0.0, from_eq: flat, to_eq: flat, from_filter: 0.5, from_loop: None, from_brake: false };
-    match kind {
-        Transition::Blend => {
-            m.crossfader = up_then_out(0.5, 0.75);
-            let swapped = p >= 0.5;
-            m.to_eq = if swapped { flat } else { killed_low };
-            m.from_eq = if swapped { [0.0, 0.5, 0.5 - 0.5 * ramp(0.8, 1.0)] } else { flat };
-        }
-        Transition::Cut => m.crossfader = 1.0,
-        Transition::Fade => m.crossfader = p,
-        Transition::Sweep => {
-            m.crossfader = up_then_out(0.6, 0.8);
-            m.to_eq = if p >= 0.5 { flat } else { killed_low };
-            m.from_filter = 0.5 + 0.45 * ramp(0.0, 1.0);
-        }
-        Transition::Roll => {
-            m.crossfader = up_then_out(0.5, 0.875);
-            m.to_eq = if p >= 0.5 { flat } else { killed_low };
-            // two bars, one, half, a quarter — then let go
-            m.from_loop = match p {
-                p if p < 0.25 => Some(8.0),
-                p if p < 0.5 => Some(4.0),
-                p if p < 0.75 => Some(2.0),
-                p if p < 0.875 => Some(1.0),
-                _ => None,
-            };
-        }
-        Transition::Brake => {
-            m.crossfader = 0.5 * ramp(0.0, 0.875) + 0.5 * ramp(0.97, 1.0);
-            m.to_eq = if p >= 0.5 { flat } else { killed_low };
-            m.from_brake = p >= 0.875;
-        }
-    }
-    m
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,26 +526,5 @@ mod tests {
         let mut all = timing("9A");
         all.bars_db = (0..112).map(|n| (bar(n as f64), if n < 16 { -30.0 } else { -8.0 })).collect();
         assert!((in_point(&all, 16, false) - bar(16.0)).abs() < 1e-9, "all 16 quiet: in on the intro's end itself");
-    }
-
-    #[test]
-    fn a_blend_swaps_the_bass_half_way() {
-        let start = moves(Transition::Blend, 0.0);
-        assert_eq!(start.crossfader, 0.0);
-        assert_eq!(start.to_eq[0], 0.0, "the incoming's bass killed");
-        let quarter = moves(Transition::Blend, 0.25);
-        assert!((quarter.crossfader - 0.25).abs() < 1e-6, "coming up");
-        let half = moves(Transition::Blend, 0.5);
-        assert_eq!((half.crossfader, half.to_eq[0], half.from_eq[0]), (0.5, 0.5, 0.0), "both full, the bass swapped");
-        let end = moves(Transition::Blend, 1.0);
-        assert_eq!((end.crossfader, end.from_eq[2]), (1.0, 0.0), "the outgoing gone, its top rolled off");
-    }
-
-    #[test]
-    fn a_roll_halves_and_a_brake_stops() {
-        let loops: Vec<Option<f64>> = [0.1, 0.3, 0.6, 0.8, 0.95].iter().map(|&p| moves(Transition::Roll, p).from_loop).collect();
-        assert_eq!(loops, vec![Some(8.0), Some(4.0), Some(2.0), Some(1.0), None]);
-        assert!(!moves(Transition::Brake, 0.8).from_brake && moves(Transition::Brake, 0.9).from_brake);
-        assert_eq!(moves(Transition::Cut, 0.0).crossfader, 1.0);
     }
 }

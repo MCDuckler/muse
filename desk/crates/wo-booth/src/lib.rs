@@ -4,7 +4,9 @@
 pub mod grid;
 pub mod hands;
 pub mod mix;
+pub mod steps;
 
 pub use grid::Grid;
 pub use hands::{Hands, NUDGE, Pad, PadKind, RANGES, Transport};
-pub use mix::{Moves, Style, Timing, Transition};
+pub use mix::{Style, Timing, Transition};
+pub use steps::{EqSet, Levels, Part, Side, Step};

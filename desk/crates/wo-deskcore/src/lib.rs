@@ -15,6 +15,8 @@ pub mod bench;
 pub mod covers;
 pub mod library;
 pub mod milk;
+mod fx;
+mod transition;
 pub mod parts;
 pub mod prefs;
 pub mod records;
@@ -32,8 +34,8 @@ pub use show::{MilkHand, MilkRow, MilkView, ShowBoard};
 /// The scenes the Rust stage draws so far.
 pub use wo_show::scenes::DRAWN as RUST_SCENES;
 pub use stage::{Hand as ShowHand, StageView, Thumb};
-pub use wo_booth::mix::moves as mix_moves;
-pub use wo_booth::{Grid, Hands, Moves, Pad, PadKind, RANGES, Style, Timing, Transition, Transport};
+pub use transition::{bass_swap_bar, law, levels_at as mix_levels_at};
+pub use wo_booth::{Grid, Hands, Pad, PadKind, RANGES, Style, Timing, Transition, Transport};
 pub use wo_engine::Load;
 
 const RATE: u32 = 48_000;
@@ -142,6 +144,11 @@ struct Slot {
     keylock: bool,
     /// The record's stems and the part playing (parts.rs).
     stems: parts::DeckStems,
+    /// What a transition has the deck's effects at: the echo (send, dry), the chop
+    /// (depth, chops to a beat), the pitch shift in semitones.
+    echo: (f32, f32),
+    gate: (f32, u32),
+    shift: f32,
 }
 
 /// A transition the Auto DJ has planned (and, once `started`, is making).
@@ -163,7 +170,8 @@ struct Plan {
     begun: Option<(f64, f64)>,
     /// 0..1 through the move.
     progress: f64,
-    applied: Option<Moves>,
+    /// Its steps and how far through them (transition.rs).
+    run: transition::Running,
 }
 
 pub struct Desk {
@@ -204,6 +212,11 @@ pub struct Desk {
     changes: u64,
     /// Records' covers for the sleeves.
     covers: covers::Covers,
+    /// The crossfader's law: equal power, or "full" (both whole at the middle) while a
+    /// move that shares one record's worth of sound between the decks runs.
+    full_law: bool,
+    /// The booth's own sounds.
+    fx: fx::Fx,
 }
 
 /// An offline engine rendered in real time on its own thread: a computer with no
@@ -272,6 +285,9 @@ impl Desk {
             fader: 0.85,
             keylock: true,
             stems: Default::default(),
+            echo: (0.0, 1.0),
+            gate: (0.0, 2),
+            shift: 0.0,
         };
         let (done_tx, done_rx) = mpsc::channel();
         let mut desk = Desk {
@@ -303,6 +319,8 @@ impl Desk {
             stage: stage::Stage::default(),
             changes: 0,
             covers: Default::default(),
+            full_law: false,
+            fx: Default::default(),
         };
         // the Desk's own saved sign-in; WO_APP_SIGN_IN=1 borrows the WetOwl app's for
         // this run only (development, screenshots)
@@ -508,15 +526,15 @@ impl Desk {
                 if let Some(m) = self.mix.as_mut() {
                     m.begun = Some(b);
                 }
+                self.begin_move();
                 b
             }
             None => return,
         };
         let p = (now - begun.0) * begun.1 / length.max(0.01);
-        let moves = wo_booth::mix::moves(kind, p);
-        self.apply_moves(from, to, &moves);
+        let _ = kind;
+        self.run_move(p.min(1.0));
         if let Some(m) = self.mix.as_mut() {
-            m.applied = Some(moves);
             m.progress = p.min(1.0);
         }
         if p >= 1.0 {
@@ -558,44 +576,11 @@ impl Desk {
         td.play(false);
         td.unsync();
         td.seek(park);
-        self.mix = Some(Plan { from, to, kind, bars, out, length, in_step, turn: self.load_gen[to], started: false, begun: None, progress: 0.0, applied: None });
-        // the incoming waits silent, its bass already out where the move wants it so —
-        // levels only: nothing happens to the outgoing until the move starts
-        let parked = Moves { from_loop: None, from_brake: false, ..wo_booth::mix::moves(kind, 0.0) };
-        self.apply_moves(from, to, &parked);
-        if let Some(m) = self.mix.as_mut() {
-            m.applied = Some(parked);
-        }
-    }
-
-    /// One frame of a transition's moves onto the decks (only what changed).
-    fn apply_moves(&mut self, from: usize, to: usize, m: &Moves) {
-        let was = self.mix.as_ref().and_then(|p| p.applied);
-        let x = if from == 0 { m.crossfader } else { 1.0 - m.crossfader };
-        if (x - self.crossfader).abs() > 1e-4 {
-            self.set_crossfader(x);
-        }
-        for (d, eq) in [(from, m.from_eq), (to, m.to_eq)] {
-            if self.slots[d].eq != eq {
-                self.slots[d].eq = eq;
-                self.engine.deck(DeckId::new(d).unwrap()).set_eq(eq_db(eq), 0.05);
-            }
-        }
-        if (self.slots[from].filter - m.from_filter).abs() > 1e-4 {
-            self.set_filter(from, m.from_filter);
-        }
-        let had_loop = was.and_then(|w| w.from_loop);
-        if m.from_loop != had_loop {
-            match (had_loop, m.from_loop) {
-                (None, Some(beats)) => self.hands(from, |h, t| h.loop_from_bar(beats, t)),
-                (Some(_), Some(_)) => self.halve_loop(from),
-                (Some(_), None) => self.unloop(from),
-                (None, None) => {}
-            }
-        }
-        if m.from_brake && !was.is_some_and(|w| w.from_brake) {
-            self.brake(from);
-        }
+        let run = transition::Running::new(kind, bars);
+        self.mix = Some(Plan { from, to, kind, bars, out, length, in_step, turn: self.load_gen[to], started: false, begun: None, progress: 0.0, run });
+        // the incoming waits silent, its bands and stems already where the move opens
+        // them: nothing happens to the outgoing until the move starts
+        self.open_move();
     }
 
     /// The transition is over: the old record stops and is put back to flat, the new
@@ -603,10 +588,13 @@ impl Desk {
     fn finish_mix(&mut self, from: usize, to: usize) {
         self.mix = None;
         self.engine.deck(DeckId::new(from).unwrap()).play(false);
-        self.unloop(from);
-        self.set_filter(from, 0.5);
-        self.slots[from].eq = [0.5; 3];
-        self.engine.deck(DeckId::new(from).unwrap()).set_eq(eq_db([0.5; 3]), 0.0);
+        self.plain(from);
+        // the incoming keeps its bands and filter as the move left them (flat), its stems
+        // back to its part
+        self.slots[to].stems.mix = None;
+        self.apply_part(to, parts::RAMP);
+        self.full_law = false;
+        self.apply_levels();
         self.engine.deck(DeckId::new(to).unwrap()).unsync();
         self.master = to;
         let next = self.take_next();
@@ -715,7 +703,6 @@ impl Desk {
             crossfader: self.crossfader,
             mix: self.mix.as_ref().map(|m| {
                 let heard = self.engine.deck(DeckId::new(m.from).unwrap()).position();
-                let swaps = matches!(m.kind, Transition::Blend | Transition::Sweep | Transition::Roll | Transition::Brake);
                 MixView {
                     from: m.from,
                     to: m.to,
@@ -724,7 +711,7 @@ impl Desk {
                     mixing: m.started,
                     bar: m.progress * m.bars as f64,
                     starts_in: (m.out - heard).max(0.0),
-                    swap_bar: swaps.then_some(m.bars as f64 / 2.0),
+                    swap_bar: transition::bass_swap_bar(m.kind, m.bars),
                 }
             }),
             auto: self.auto,
@@ -1389,8 +1376,7 @@ impl Desk {
     // ---- inside
 
     fn apply_levels(&self) {
-        let x = self.crossfader;
-        let (ga, gb) = ((2.0 * (1.0 - x)).min(1.0), (2.0 * x).min(1.0));
+        let (ga, gb) = transition::law(self.crossfader, self.full_law);
         for (d, g) in [(0, ga), (1, gb)] {
             let s = &self.slots[d];
             let trim = 10f32.powf((s.gain - 0.5) * 24.0 / 20.0);

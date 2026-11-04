@@ -1197,12 +1197,12 @@ impl App {
             }
         }
         let n = 48;
-        let curve = |level: &dyn Fn(&wo_deskcore::Moves) -> f32, color: Color32| {
+        let curve = |level: &dyn Fn((f32, f32)) -> f32, color: Color32| {
             let pts: Vec<egui::Pos2> = (0..=n)
                 .map(|i| {
                     let k = i as f64 / n as f64;
-                    let mv = wo_deskcore::mix_moves(m.kind, k);
-                    pos2(r.left() + r.width() * k as f32, r.bottom() - 6.0 - (r.height() - 12.0) * level(&mv))
+                    let lv = wo_deskcore::mix_levels_at(m.kind, m.bars, k);
+                    pos2(r.left() + r.width() * k as f32, r.bottom() - 6.0 - (r.height() - 12.0) * level(lv))
                 })
                 .collect();
             let mut fill = Mesh::default();
@@ -1218,8 +1218,8 @@ impl App {
             p.add(fill);
             p.add(Shape::line(pts, Stroke::new(1.6, alpha_of(color, 0.95 * dim))));
         };
-        curve(&|mv| (2.0 * (1.0 - mv.crossfader)).min(1.0) * if mv.from_brake { 0.6 } else { 1.0 }, t::deck(from));
-        curve(&|mv| (2.0 * mv.crossfader).min(1.0), t::deck(to));
+        curve(&|lv| lv.0, t::deck(from));
+        curve(&|lv| lv.1, t::deck(to));
         if let Some(sw) = m.swap_bar {
             let x = r.left() + r.width() * (sw / bars as f64) as f32;
             p.line_segment([pos2(x, r.top() + 4.0), pos2(x, r.bottom() - 4.0)], Stroke::new(1.0, white(0.5 * dim)));

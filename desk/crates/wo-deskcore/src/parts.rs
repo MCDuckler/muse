@@ -27,66 +27,7 @@ pub const RETRY: Duration = Duration::from_secs(10);
 /// How long a part takes to change (v1's hand press: 120 ms).
 pub const RAMP: f64 = 0.12;
 
-/// What plays of a record.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Part {
-    #[default]
-    Whole,
-    Drums,
-    /// Everything but the drums.
-    Music,
-    /// Everything but the voice.
-    Instrumental,
-    Vocals,
-}
-
-impl Part {
-    pub const ALL: [Part; 5] = [Part::Whole, Part::Drums, Part::Music, Part::Instrumental, Part::Vocals];
-
-    /// The pad's word, as v1's.
-    pub fn word(self) -> &'static str {
-        match self {
-            Part::Whole => "WHOLE",
-            Part::Drums => "DRUMS",
-            Part::Music => "MUSIC",
-            Part::Instrumental => "NO VOX",
-            Part::Vocals => "VOCALS",
-        }
-    }
-
-    /// What it is, in words (a tooltip).
-    pub fn says(self) -> &'static str {
-        match self {
-            Part::Whole => "The whole record",
-            Part::Drums => "The drums alone",
-            Part::Music => "The music without its drums",
-            Part::Instrumental => "The record without its voice",
-            Part::Vocals => "The voice alone",
-        }
-    }
-
-    /// The stems' levels: drums, bass and the rest, voice (mixer.dart StemLevels.of).
-    pub fn levels(self) -> [f32; 3] {
-        match self {
-            Part::Whole => [1.0, 1.0, 1.0],
-            Part::Drums => [1.0, 0.0, 0.0],
-            Part::Music => [0.0, 1.0, 1.0],
-            Part::Instrumental => [1.0, 1.0, 0.0],
-            Part::Vocals => [0.0, 0.0, 1.0],
-        }
-    }
-
-    /// v1's name for it (the house's part names, session files).
-    pub fn name(self) -> Option<&'static str> {
-        match self {
-            Part::Whole => None,
-            Part::Drums => Some("drums"),
-            Part::Music => Some("music"),
-            Part::Instrumental => Some("instrumental"),
-            Part::Vocals => Some("vocals"),
-        }
-    }
-}
+pub use wo_booth::Part;
 
 /// Where a deck's stems are.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -128,6 +69,8 @@ pub(crate) struct DeckStems {
     pub source: Option<Source>,
     pub part: Part,
     pub retry_at: Option<Instant>,
+    /// A transition's own levels for the stems while it runs (None: the part's).
+    pub mix: Option<wo_booth::Levels>,
 }
 
 impl Desk {
@@ -260,8 +203,9 @@ impl Desk {
     pub(crate) fn apply_part(&self, d: usize, ramp: f64) {
         let deck = self.engine.deck(DeckId::new(d).unwrap());
         let s = &self.slots[d].stems;
-        if s.source.is_some() && s.part != Part::Whole {
-            let [drums, rest, vocals] = s.part.levels();
+        let levels = s.mix.or((s.part != Part::Whole).then(|| s.part.levels()));
+        if let (Some(_), Some(l)) = (&s.source, levels) {
+            let [drums, rest, vocals] = l.as_array();
             deck.set_gains(0, Gains { gain: 0.0, ..Gains::FULL }, ramp);
             deck.set_gains(1, Gains { gain: 1.0, drums, rest, vocals }, ramp);
         } else {
@@ -278,11 +222,11 @@ mod tests {
     #[test]
     fn parts_are_v1s_levels() {
         // mixer.dart StemLevels.of
-        assert_eq!(Part::Drums.levels(), [1.0, 0.0, 0.0]);
-        assert_eq!(Part::Music.levels(), [0.0, 1.0, 1.0]);
-        assert_eq!(Part::Instrumental.levels(), [1.0, 1.0, 0.0]);
-        assert_eq!(Part::Vocals.levels(), [0.0, 0.0, 1.0]);
-        assert_eq!(Part::Whole.levels(), [1.0; 3]);
+        assert_eq!(Part::Drums.levels().as_array(), [1.0, 0.0, 0.0]);
+        assert_eq!(Part::Music.levels().as_array(), [0.0, 1.0, 1.0]);
+        assert_eq!(Part::Instrumental.levels().as_array(), [1.0, 1.0, 0.0]);
+        assert_eq!(Part::Vocals.levels().as_array(), [0.0, 0.0, 1.0]);
+        assert_eq!(Part::Whole.levels().as_array(), [1.0; 3]);
         let words: Vec<_> = Part::ALL.iter().map(|p| p.word()).collect();
         assert_eq!(words, ["WHOLE", "DRUMS", "MUSIC", "NO VOX", "VOCALS"]);
     }
