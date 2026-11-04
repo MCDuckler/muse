@@ -156,7 +156,13 @@ pub(crate) struct Show {
     /// The hands' judging of what is on (v1: desk_hands.dart): what NEVER last took out and
     /// how widely, the plan before it (UNDO), and what the show said of it.
     judged: Judged,
+    /// The board as last worked out, and for what (the look, the plan, the grounds here, the
+    /// favourites kept).
+    board: Option<(BoardKey, ShowBoard)>,
+    faves_kept: u32,
 }
+
+type BoardKey = (Option<wo_show::Combo>, wo_show::plan::ShowPlan, Option<std::collections::BTreeSet<String>>, u32);
 
 #[derive(Default)]
 struct Judged {
@@ -231,7 +237,7 @@ impl Show {
             m.set_textures(Some(home.join("textures").to_string_lossy().into_owned()));
             direct.milk = Some(m);
         }
-        Show { direct, facts: [None, None], covers: [false; 2], last: None, said: String::new(), milk_home, notes_saved: Instant::now(), judged: Judged::default() }
+        Show { direct, facts: [None, None], covers: [false; 2], last: None, said: String::new(), milk_home, notes_saved: Instant::now(), judged: Judged::default(), board: None, faves_kept: 0 }
     }
 
     /// Whether a deck's record has its cover on the stage (the cover ground's say).
@@ -407,6 +413,12 @@ impl Show {
     pub(crate) fn board(&mut self) -> ShowBoard {
         let d = &mut self.direct;
         let on = d.director.combo().cloned();
+        // the look's alternatives weigh every combination of its scene (milliseconds): only
+        // again when the look, the plan or the grounds here change
+        let key = (on.clone(), d.director.plan().clone(), d.director.grounds_here.clone(), self.faves_kept);
+        if self.board.as_ref().is_some_and(|(k, _)| *k == key) {
+            return self.board.as_ref().map(|(_, b)| b.clone()).unwrap_or_default();
+        }
         let mut coming: Vec<(wo_show::Combo, f64)> = match d.director.scene() {
             Some(scene) => d.director.weighted(scene).into_iter().filter(|(c, w)| *w > 0.0 && Some(c) != on.as_ref()).collect(),
             None => vec![],
@@ -433,7 +445,14 @@ impl Show {
             .map(|(id, l)| (d.looks.get(id).map_or(id.clone(), |l| l.name.clone()), (l / most) as f32))
             .collect();
         rotation.sort_by(|a, b| b.1.total_cmp(&a.1));
-        ShowBoard { coming, bars_on: d.director.combo_bars(), faves, rotation }
+        let b = ShowBoard { coming, bars_on: 0, faves, rotation };
+        self.board = Some((key, b.clone()));
+        b
+    }
+
+    /// The board with what moves every bar.
+    pub(crate) fn board_now(&mut self) -> ShowBoard {
+        ShowBoard { bars_on: self.direct.director.combo_bars(), ..self.board() }
     }
 
     /// The look on, in words.
@@ -511,6 +530,7 @@ impl Show {
         let words = combo_words(&c, &self.direct.looks);
         let fave = wo_show::faves::ShowFave { id: wo_show::faves::ShowFave::new_id(micros), at, combo: c, milk, shot: None, type3d: None, stars: 0, name: String::new() };
         self.direct.doc.keep_fave(fave);
+        self.faves_kept += 1;
         self.say(format!("Kept: {words}"));
     }
 }
@@ -630,5 +650,31 @@ mod tests {
         show.save_notes(true);
         assert!(home.join("notes.json").is_file());
         let _ = std::fs::remove_dir_all(&home);
+    }
+}
+
+#[cfg(test)]
+mod board {
+    /// Weighing a look's alternatives takes milliseconds: the Show page asks every frame, so
+    /// the board is worked out once per look (and again when the plan changes).
+    #[test]
+    fn the_board_is_worked_out_once_per_look() {
+        let mut s = super::Show::new_in(None);
+        let frame = wo_wire::Frame::default();
+        for _ in 0..30 {
+            s.tick(&frame, None);
+        }
+        let first = s.board_now();
+        assert!(!first.coming.is_empty(), "a scene on has alternatives");
+        assert!(!first.rotation.is_empty());
+        let t = std::time::Instant::now();
+        for _ in 0..100 {
+            assert_eq!(s.board_now().coming, first.coming);
+        }
+        assert!(t.elapsed().as_millis() < 50, "kept, not weighed again: {:?} for 100", t.elapsed());
+        // LESS changes the plan: the board follows
+        s.hand(&wo_wire::Hand::Less);
+        let _ = s.board_now();
+        assert!(s.board.as_ref().is_some_and(|(k, _)| k.1 == *s.direct.director.plan()));
     }
 }

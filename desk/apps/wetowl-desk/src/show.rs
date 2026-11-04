@@ -201,16 +201,13 @@ impl App {
         kit::section(p, inner.left_top(), Align2::LEFT_TOP, "Coming up");
         match board.filter(|_| directs) {
             Some(b) if !b.coming.is_empty() => {
-                for (i, (words, share)) in b.coming.iter().enumerate() {
-                    let y = inner.top() + 32.0 + i as f32 * 40.0;
-                    if y + 30.0 > inner.bottom() {
+                for (i, (words, _)) in b.coming.iter().enumerate() {
+                    let y = inner.top() + 40.0 + i as f32 * 34.0;
+                    if y + 12.0 > inner.bottom() {
                         break;
                     }
-                    kit::clipped(p, pos2(inner.left(), y + 6.0), words, 13.0, "", if i == 0 { t::text() } else { t::soft() }, inner.width() - 44.0);
-                    kit::text(p, pos2(inner.right(), y + 6.0), Align2::RIGHT_CENTER, &format!("{:.0}%", share * 100.0), 11.0, "mono", t::muted());
-                    let bar = Rect::from_min_size(pos2(inner.left(), y + 20.0), vec2(inner.width(), 3.0));
-                    p.rect_filled(bar, CornerRadius::same(1), white(0.07));
-                    p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * share.clamp(0.0, 1.0), 3.0)), CornerRadius::same(1), white(0.35));
+                    kit::text(p, pos2(inner.left(), y), Align2::LEFT_CENTER, &(i + 1).to_string(), 11.0, "mono", t::faint());
+                    kit::clipped(p, pos2(inner.left() + 20.0, y), words, 13.0, "", if i == 0 { t::text() } else { t::soft() }, inner.width() - 20.0);
                 }
             }
             Some(_) => {
@@ -228,23 +225,21 @@ impl App {
         kit::section(p, inner.left_top(), Align2::LEFT_TOP, "Favourites");
         match board.filter(|_| directs) {
             Some(b) if !b.faves.is_empty() => {
-                let (h, gap) = (28.0, 6.0);
-                let (mut x, mut y) = (inner.left(), inner.top() + 28.0);
-                for (id, words) in &b.faves {
-                    let short: String = if words.chars().count() > 28 { words.chars().take(27).collect::<String>() + "…" } else { words.clone() };
-                    let w = (kit::chip_width(p, &short)).min(inner.width());
-                    if x + w > inner.right() && x > inner.left() {
-                        x = inner.left();
-                        y += h + gap;
+                let rows = (((inner.height() - 24.0) / 30.0).floor() as usize).max(1);
+                let ctx = ui.ctx().clone();
+                for (i, (id, words)) in b.faves.iter().take(rows).enumerate() {
+                    let rr = Rect::from_min_size(pos2(inner.left() - 6.0, inner.top() + 24.0 + i as f32 * 30.0), vec2(inner.width() + 12.0, 28.0));
+                    let usable = v.stages > 0;
+                    let resp = ui.interact(rr, ui.scope_id().with(("fave", id)), if usable { Sense::click() } else { Sense::hover() });
+                    let h = motion::tween_bool(&ctx, resp.id.with("h"), usable && resp.hovered(), motion::QUICK, motion::STANDARD);
+                    if h > 0.0 {
+                        p.rect_filled(rr, CornerRadius::same(t::R_CONTROL), white(0.05 * h));
                     }
-                    if y + h > inner.bottom() {
-                        break;
-                    }
-                    let cr = Rect::from_min_size(pos2(x, y), vec2(w, h));
-                    if kit::chip(ui, p, cr, &short, false, Tone::Neutral, v.stages > 0, ("fave", id)).on_hover_text(words).clicked() {
+                    crate::ui::icons::paint(p, Rect::from_center_size(pos2(rr.left() + 16.0, rr.center().y), vec2(13.0, 13.0)), Icon::HeartFull, mix(alpha_of(t::hot(), 0.55), t::hot(), h));
+                    kit::clipped(p, pos2(rr.left() + 32.0, rr.center().y), words, 13.0, "", mix(t::soft(), t::text(), h), rr.width() - 40.0);
+                    if resp.on_hover_text("Put it on, held until let go").clicked() {
                         desk.show(ShowHand::Fave(id.clone()));
                     }
-                    x += w + gap;
                 }
             }
             Some(_) => {

@@ -22,7 +22,9 @@ pub fn backdrop(width: u32, height: u32) -> Backdrop {
 /// and scrim, so the light behind the glass is the show's own.
 pub fn live(rgba: &[u8], w: u32, h: u32, width: u32, height: u32) -> Option<Backdrop> {
     let img = image::RgbaImage::from_raw(w, h, rgba.to_vec())?;
-    Some(glass(&image::DynamicImage::ImageRgba8(img).to_rgb8(), width, height))
+    // a quick box-filtered thumbnail first: it is blurred heavily after
+    let small = image::imageops::thumbnail(&img, width * 2, height * 2);
+    Some(glass(&image::DynamicImage::ImageRgba8(small).to_rgb8(), width, height))
 }
 
 fn glass(img: &image::RgbImage, width: u32, height: u32) -> Backdrop {

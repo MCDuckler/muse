@@ -133,7 +133,7 @@ mod tests {
         assert_eq!(said(&record("A", None)), Said::Record("A".into(), None));
         let c = Cue { scene: Some("glide".into()), k: 0.25, ..Default::default() };
         assert_eq!(said(&cue(&c)), Said::Cue(Box::new(c)));
-        for h in [Hand::Hit, Hand::Hold(false), Hand::Screen("HDMI-1".into()), Hand::Set(String::new()), Hand::Full(true)] {
+        for h in [Hand::Hit, Hand::Hold(false), Hand::Screen("HDMI-1".into()), Hand::Set(String::new()), Hand::Full(true), Hand::Fave("f-17".into())] {
             assert_eq!(said(&crate::hand(h.clone())), Said::Hand(h));
         }
         let f = Frame { a: Deck { track_id: Some(3), playing: true, position_ms: 1000.0, rate: 1.0, level: 1.0, ..Default::default() }, ..Default::default() };

@@ -321,7 +321,7 @@ impl Stage {
 
     /// The Desk's show for the Show page, where the Desk directs (a Rust stage).
     pub(crate) fn board(&mut self) -> Option<crate::show::ShowBoard> {
-        self.show.as_mut().map(crate::show::Show::board)
+        self.show.as_mut().map(crate::show::Show::board_now)
     }
 
     pub(crate) fn milk_hand(&mut self, h: crate::show::MilkHand) {

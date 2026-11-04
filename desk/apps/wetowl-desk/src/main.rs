@@ -262,6 +262,7 @@ impl eframe::App for App {
         let shared = self.desk.clone();
         let mut guard = shared.lock().unwrap_or_else(|e| e.into_inner());
         let desk: &mut Desk = &mut guard;
+        let locked = t0.elapsed().as_secs_f32() * 1000.0;
         // the keyboard, unless a field is being typed in
         if !ui.ctx().egui_wants_keyboard_input() {
             let keys: Vec<(egui::Key, egui::Modifiers)> = ui.input(|i| {
@@ -300,6 +301,9 @@ impl eframe::App for App {
         let stage = desk.stage().stages > 0;
         drop(guard);
         let work = t0.elapsed().as_secs_f32() * 1000.0;
+        if std::env::var_os("WO_UI_TIMES").is_some() {
+            eprintln!("ui: {work:.2} ms, {locked:.2} of it waiting for the Desk");
+        }
         if let Some(b) = &mut self.bench {
             b.size = (full.width() as u32, full.height() as u32);
             if self.shot.is_none() && b.frame(work) {
