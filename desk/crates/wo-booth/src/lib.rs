@@ -6,6 +6,7 @@ pub mod hands;
 pub mod mix;
 pub mod planner;
 pub mod steps;
+pub mod taste;
 
 pub use grid::Grid;
 pub use hands::{Hands, NUDGE, Pad, PadKind, RANGES, Transport};

@@ -63,6 +63,8 @@ pub(crate) struct App {
     shot: Option<mpsc::Receiver<Arc<ColorImage>>>,
     /// CUE held, per deck (CUE acts on press and on release).
     cue_held: [bool; 2],
+    /// The Auto DJ panel's list: what is coming (0) or the log (1).
+    auto_tab: usize,
     /// The nudge held, per deck.
     nudge_held: [i8; 2],
     /// The search as typed, when typing last changed it, what the house was last asked.
@@ -213,6 +215,7 @@ impl App {
             bench,
             shot: None,
             cue_held: [false; 2],
+            auto_tab: 0,
             nudge_held: [0; 2],
             search_at: None,
             searched: String::new(),

@@ -53,10 +53,15 @@ fn parts_reach_the_engine() {
         std::env::set_var("WO_AUDIO", "off");
         std::env::set_var("WO_CONTROLLERS", "off");
         std::env::set_var("WO_RECORDS", &empty);
+        // never the house: no saved sign-in read, nothing told to any account
+        std::env::set_var("WO_HOUSE", "off");
+        std::env::set_var("XDG_CONFIG_HOME", &empty);
     }
     let mut d = Desk::open(true);
     d.set_auto(false);
-    for _ in 0..20 {
+    // both records all in (a deck plays silence past what is decoded so far)
+    let t0 = Instant::now();
+    while d.snapshot().decks.iter().any(|v| v.decoded < 1.0) && t0.elapsed() < Duration::from_secs(10) {
         d.tick();
         sleep(Duration::from_millis(20));
     }
@@ -64,7 +69,6 @@ fn parts_reach_the_engine() {
     assert_eq!(d.part(0).1, Stems::None);
     d.set_part(0, Part::Drums);
     assert_eq!(d.part(0), (Part::Drums, Stems::None));
-    // (somewhere loud: the synthesised record holds its breath for a second before its drop)
     d.seek_to(0, 30.0);
     assert!(loudness(&mut d, 0) > 0.05, "a synthesised record with no stems still sounds whole");
     d.set_part(0, Part::Whole);

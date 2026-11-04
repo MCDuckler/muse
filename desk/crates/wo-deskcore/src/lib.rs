@@ -15,6 +15,7 @@ pub mod bench;
 pub mod covers;
 pub mod library;
 pub mod milk;
+pub mod autodj;
 mod fx;
 mod transition;
 pub mod parts;
@@ -228,6 +229,8 @@ pub struct Desk {
     recent: Vec<Transition>,
     /// The planner's dice.
     dice: u64,
+    /// The Auto DJ's mind: steering, the house's choices, the log, the thumbs (autodj.rs).
+    mind: autodj::Mind,
 }
 
 /// An offline engine rendered in real time on its own thread: a computer with no
@@ -334,12 +337,15 @@ impl Desk {
             full_law: false,
             fx: Default::default(),
             recent: vec![],
+            mind: Default::default(),
             dice: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_nanos() as u64) | 1,
         };
         // the Desk's own saved sign-in; WO_APP_SIGN_IN=1 borrows the WetOwl app's for
         // this run only (development, screenshots)
+        // WO_HOUSE=off: never the house (tests: no account is read or told anything)
         let borrowed = (std::env::var("WO_APP_SIGN_IN").as_deref() == Ok("1")).then(wo_house::Session::from_wetowl_app).flatten();
-        if let Some(session) = wo_house::Session::saved().or(borrowed) {
+        let house_ok = std::env::var("WO_HOUSE").as_deref() != Ok("off");
+        if let Some(session) = wo_house::Session::saved().or(borrowed).filter(|_| house_ok) {
             desk.signed_in(wo_house::House::new(session));
         }
         let (a, b) = (desk.take_next(), desk.take_next());
@@ -361,6 +367,9 @@ impl Desk {
     /// The Auto DJ's next record: the best fit to the master's on the house's shelf (what
     /// Up next shows first), else the local queue's next.
     fn take_next(&mut self) -> Record {
+        if let Some(r) = self.chosen_next() {
+            return r;
+        }
         let playing: Vec<i64> = self.slots.iter().map(|s| s.record.id).collect();
         let m = &self.slots[self.master].record;
         let best = self
@@ -379,6 +388,7 @@ impl Desk {
 
     /// A record onto a deck: its grid at once, its sound and waveform as they decode.
     pub fn load(&mut self, slot: usize, record: Record) {
+        self.mind.by_hand[slot] = false;
         let deck = self.engine.deck(DeckId::new(slot).unwrap());
         deck.play(false);
         deck.unsync();
@@ -511,6 +521,7 @@ impl Desk {
         }
         self.controllers_tick();
         self.stems_tick();
+        self.mind_tick();
         self.feed_stage();
         if !self.auto {
             return;
@@ -605,7 +616,7 @@ impl Desk {
             None,
             &self.recent,
             wo_booth::planner::Can { sound: true, gate: true },
-            &|_| 0.0,
+            &|k| self.mind.taste.of_kind(k),
             &mut chance,
         );
         self.dice = self.dice.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) | 1;
@@ -656,6 +667,25 @@ impl Desk {
             if self.recent.len() > 8 {
                 self.recent.remove(0);
             }
+            let inn = self.slots[to].hands.cue.unwrap_or(0.0);
+            self.mind.last = Some(autodj::LastMix {
+                from: self.slots[from].record.clone(),
+                to: self.slots[to].record.clone(),
+                kind: m.kind,
+                bars: m.bars,
+                shift: self.slots[to].shift as f64,
+                out: m.out,
+                inn,
+                why: m.why.clone(),
+                steered: !self.mind.steer.neutral(),
+                rating: None,
+            });
+            let id = self.slots[from].record.id;
+            if !self.mind.played.contains(&id) {
+                self.mind.played.push(id);
+            }
+            let t = self.slots[to].record.title.clone();
+            self.note(autodj::LogKind::Done, format!("{t} has the room"));
         }
         self.mix = None;
         self.engine.deck(DeckId::new(from).unwrap()).play(false);
@@ -769,6 +799,17 @@ impl Desk {
         let mut up: Vec<&Record> =
             pool.iter().filter(|r| r.playable() && r.id != decks[0].record.id && r.id != decks[1].record.id).collect();
         up.sort_by_key(|r| std::cmp::Reverse(records::fits(r, master_bpm, &key)));
+        // the house's choices for after the master, where it has given them
+        let chosen: Vec<&Record> = self
+            .mind
+            .choices
+            .iter()
+            .map(|c| &c.record)
+            .filter(|r| r.id != decks[0].record.id && r.id != decks[1].record.id && !self.mind.played.contains(&r.id))
+            .collect();
+        if !chosen.is_empty() {
+            up = chosen;
+        }
         Snapshot {
             master_bpm,
             crossfader: self.crossfader,
@@ -1110,6 +1151,14 @@ impl Desk {
             }
             Done::LoadFailed { .. } => {}
             Done::Stems { slot, turn, got } if turn == self.load_gen[slot] => self.got_stems(slot, got),
+            Done::Taste(t) => {
+                if t.count > 0 {
+                    let fav = t.favourite().map(|k| format!(" · you like a {}", k.word().to_lowercase())).unwrap_or_default();
+                    self.note(autodj::LogKind::Plan, format!("Read {} of your words on its mixes{fav}", t.count));
+                }
+                self.mind.taste = t;
+            }
+            Done::Choices { turn, got } => self.got_choices(turn, got),
             Done::Stems { .. } => {}
         }
     }

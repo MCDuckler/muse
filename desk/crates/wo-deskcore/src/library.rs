@@ -59,6 +59,10 @@ pub(crate) enum Done {
     /// A record's cover, as the stage's cover ground takes it (None: none to be had).
     Cover { slot: usize, turn: u64, id: i64, cover: Option<Picture> },
     LoadFailed { slot: usize, turn: u64, why: String },
+    /// This person's taste in the booth's mixes (autodj.rs).
+    Taste(wo_booth::taste::Taste),
+    /// The house's choices for after the master (autodj.rs), for an ask by turn.
+    Choices { turn: u64, got: Result<Vec<wo_house::SlotChoice>, String> },
     /// A deck's stems: decoded onto a source, or where they are instead (parts.rs).
     Stems { slot: usize, turn: u64, got: crate::parts::Got },
 }

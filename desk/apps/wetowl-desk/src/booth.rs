@@ -370,7 +370,7 @@ impl App {
             let k = motion::tween_bool(&ctx, ui.scope_id().with(("drop", d)), over && ok, 0.12, 0.12);
             p.rect_stroke(r, CornerRadius::same(t::R_PANEL), Stroke::new(1.0 + 1.5 * k, alpha_of(t::deck(d), if ok { 0.3 + 0.6 * k } else { 0.12 })), StrokeKind::Inside);
             if over && ok && ctx.input(|i| i.pointer.any_released()) {
-                desk.load(d, (*rec).clone());
+                desk.load_by_hand(d, (*rec).clone());
                 egui::DragAndDrop::clear_payload(&ctx);
                 self.toasts.say(format!("{} on deck {}", rec.title, ["A", "B"][d]), Tone::Deck(d));
             }
@@ -797,7 +797,7 @@ impl App {
                         && row.on_deck.is_none()
                         && !s.decks[d].playing
                     {
-                        desk.load(d, row.record.clone());
+                        desk.load_by_hand(d, row.record.clone());
                     }
                 }
                 _ => {}
@@ -902,7 +902,7 @@ impl App {
             let free = s.decks.iter().position(|d| !d.master).unwrap_or(1);
             if !s.decks[free].playing {
                 self.toasts.say(format!("{} on deck {}", rec.title, ["A", "B"][free]), Tone::Deck(free));
-                desk.load(free, rec);
+                desk.load_by_hand(free, rec);
             }
         }
     }
@@ -1117,7 +1117,10 @@ impl App {
         if let Some(i) = kit::segmented(ui, p, seg, &["Easy", "Normal", "Bold"], styles.iter().position(|&st| st == desk.style), Tone::Neutral, "style") {
             desk.style = styles[i];
         }
-        let card_h = (inner.height() - 30.0).min(156.0);
+        // under the card: the hands on the move, the room's word, the last mix's thumb
+        let last = desk.last_mix();
+        let below = 36.0 + 36.0 + if last.is_some() { 36.0 } else { 0.0 };
+        let card_h = (inner.height() - 30.0 - below).max(120.0);
         let card = Rect::from_min_size(pos2(inner.left(), inner.top() + 30.0), vec2(inner.width(), card_h));
         p.rect(card, CornerRadius::same(t::R_PAD), white(0.035), Stroke::new(1.0, white(0.06)), StrokeKind::Inside);
         let c = card.shrink(12.0);
@@ -1138,18 +1141,24 @@ impl App {
         kit::clipped(p, pos2(b.right() + 10.0, c.top() + 9.0), &what, 13.0, "semi", t::text(), st.left() - b.right() - 20.0);
         // the mix as a timeline: the two levels crossing over the bars, the bass changing
         // hands, a playhead
-        // why the planner chose it, in its words
+        // the move, what is coming, or what it has done (tabs at the right of the second
+        // line); why the planner chose it, in its words, at its left
+        let tabs = Rect::from_min_size(pos2(c.right() - 168.0, c.top() + 24.0), vec2(168.0, 20.0));
+        if let Some(i) = kit::segmented(ui, p, tabs, &["Move", "Next", "Log"], Some(self.auto_tab), Tone::Neutral, "auto-tab") {
+            self.auto_tab = i;
+        }
         let why = s.mix.as_ref().map(|m| m.why.clone()).filter(|w| !w.is_empty() && s.auto);
-        let mut top = c.top() + 26.0;
         if let Some(w) = &why {
-            kit::clipped(p, pos2(c.left(), c.top() + 28.0), w, 11.5, "", t::label(), c.width());
-            ui.interact(Rect::from_min_size(pos2(c.left(), c.top()), vec2(c.width(), 36.0)), ui.scope_id().with("why"), Sense::hover()).on_hover_text(w.as_str());
-            top += 16.0;
+            kit::clipped(p, pos2(c.left(), tabs.center().y), w, 11.5, "", t::label(), tabs.left() - c.left() - 10.0);
+            ui.interact(Rect::from_min_max(pos2(c.left(), c.top()), pos2(tabs.left() - 4.0, tabs.bottom())), ui.scope_id().with("why"), Sense::hover()).on_hover_text(w.as_str());
         }
         let buttons_y = c.bottom() - 30.0;
-        let tl = Rect::from_min_max(pos2(c.left(), top), pos2(c.right(), buttons_y - 12.0));
-        if tl.height() >= 30.0 {
-            self.timeline(ui, p, tl, s, from, to);
+        let area = Rect::from_min_max(pos2(c.left(), tabs.bottom() + 6.0), pos2(c.right(), buttons_y - 8.0));
+        match self.auto_tab {
+            0 if area.height() >= 24.0 => self.timeline(ui, p, area, s, from, to),
+            1 => self.up_next(desk, ui, p, area, s),
+            2 => auto_log(desk, p, area),
+            _ => {}
         }
         let planned = s.mix.as_ref().is_some_and(|m| !m.mixing);
         let bw = (c.width() - 16.0) / 3.0;
@@ -1163,26 +1172,100 @@ impl App {
         if Btn::new(if s.auto { "Pause" } else { "Paused" }).icon(Icon::Pause).on(!s.auto).size(11.0).show(ui, p, at(2.0), "pause").clicked() {
             desk.set_auto(!s.auto);
         }
-        // up next
-        let y0 = card.bottom() + 16.0;
-        let room = ((inner.bottom() - y0 - 22.0) / 44.0).floor().max(0.0) as usize;
-        if room == 0 || s.up_next.is_empty() {
+        // the hands on the planned move: skip, later, sooner, longer; undo
+        let hy = card.bottom() + 10.0;
+        let can_undo = desk.can_undo();
+        let hands: [(&str, Icon, bool, &str); 5] = [
+            ("Skip", Icon::Next, planned && s.auto, "Into the next record at the next bar, quickly"),
+            ("Later", Icon::ChevronRight, planned && s.auto, "Not now: two phrases later"),
+            ("Sooner", Icon::ChevronLeft, planned && s.auto, "A phrase sooner"),
+            ("Longer", Icon::Plus, planned && s.auto, "The move twice as long"),
+            ("Undo", Icon::Undo, can_undo.is_some(), "Go back on the last thing the Auto DJ changed"),
+        ];
+        let hw = (inner.width() - 4.0 * 6.0) / 5.0;
+        for (i, (word, icon, on, tip)) in hands.into_iter().enumerate() {
+            let br = Rect::from_min_size(pos2(inner.left() + i as f32 * (hw + 6.0), hy), vec2(hw, 26.0));
+            let tip = if word == "Undo" { can_undo.as_ref().map_or(tip.to_owned(), |w| format!("Undo: {w}")) } else { tip.to_owned() };
+            if Btn::new(word).icon(icon).enabled(on).quiet().size(10.5).show(ui, p, br, ("auto-hand", i)).on_hover_text(tip).clicked() {
+                match i {
+                    0 => desk.skip(),
+                    1 => desk.later(2),
+                    2 => desk.later(-1),
+                    3 => desk.longer(),
+                    _ => desk.undo(),
+                }
+            }
+        }
+        // the room's word on the next records: less or more energy, more like this one,
+        // something different (lit while it holds; a second press takes it back)
+        let steer = desk.steer();
+        let ry = hy + 26.0 + 10.0;
+        kit::section(p, pos2(inner.left(), ry + 13.0), Align2::LEFT_CENTER, "Room");
+        let words: [(&str, bool); 4] = [
+            (if steer.energy < 0.0 { "Less ·" } else { "Less" }, steer.energy < 0.0),
+            (if steer.energy > 0.0 { "More ·" } else { "More" }, steer.energy > 0.0),
+            ("Like this", steer.like.is_some()),
+            ("Different", steer.different),
+        ];
+        let mut x = inner.left() + 52.0;
+        for (i, (word, on)) in words.into_iter().enumerate() {
+            let w = kit::chip_width(p, word);
+            let cr = Rect::from_min_size(pos2(x, ry), vec2(w, 26.0));
+            if kit::chip(ui, p, cr, word, on, Tone::Neutral, s.auto, ("room", i)).clicked() {
+                match (i, on) {
+                    (0, _) => desk.more_energy(-1),
+                    (1, _) => desk.more_energy(1),
+                    (2, false) => desk.more_like_this(),
+                    (3, false) => desk.something_different(),
+                    _ => desk.steer_neutral(),
+                }
+            }
+            x = cr.right() + 6.0;
+        }
+        // the last transition, and a thumb on it
+        let y0 = ry + 26.0 + 10.0;
+        if let Some(last) = last {
+            let ty = y0 + 13.0;
+            let up = Rect::from_min_size(pos2(inner.right() - 2.0 * 84.0 - 6.0, y0), vec2(84.0, 26.0));
+            let down = Rect::from_min_size(pos2(inner.right() - 84.0, y0), vec2(84.0, 26.0));
+            let what = format!("Last: {} · {}", last.kind.word(), last.to.title);
+            kit::clipped(p, pos2(inner.left(), ty), &what, 12.0, "", t::muted(), up.left() - inner.left() - 10.0);
+            let rated = last.rating;
+            if Btn::new("Good one").icon(Icon::Heart).on(rated == Some(1)).enabled(rated.is_none()).size(10.5).show(ui, p, up, "rate-up").on_hover_text("Tell the Auto DJ this mix worked").clicked() {
+                desk.rate(1);
+            }
+            if Btn::new("So-so").on(rated == Some(-1)).enabled(rated.is_none()).quiet().size(10.5).show(ui, p, down, "rate-down").on_hover_text("Tell the Auto DJ this mix did not").clicked() {
+                desk.rate(-1);
+            }
+        }
+    }
+
+    /// What the Auto DJ would play next, best first (the house's choices, steered), with
+    /// why each on hover.
+    fn up_next(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, area: Rect, s: &Snapshot) {
+        if s.up_next.is_empty() {
+            kit::hint(p, area.left_top() + vec2(0.0, 6.0), Align2::LEFT_TOP, "Nothing lined up yet");
             return;
         }
-        kit::section(p, pos2(inner.left(), y0), Align2::LEFT_TOP, "Up next");
         let ctx = ui.ctx().clone();
+        let row = 32.0;
+        let room = (area.height() / row).floor().max(0.0) as usize;
         for (i, rec) in s.up_next.iter().take(room).enumerate() {
-            let y = y0 + 24.0 + i as f32 * 44.0;
+            let y = area.top() + i as f32 * row;
             let k = motion::appear(&ctx, ui.scope_id().with(("next", rec.id)), motion::EMPHASIS);
             let mut p = p.clone();
             p.multiply_opacity(k);
-            let sl = Rect::from_min_size(pos2(inner.left(), y), vec2(36.0, 36.0));
+            let sl = Rect::from_min_size(pos2(area.left(), y + 2.0), vec2(26.0, 26.0));
             let tex = self.sleeves.of(&ctx, desk, rec);
-            kit::sleeve(ui, &p, sl, tex, &rec.initials(), col(theme::sleeve(rec.id)), 4, ("next-sleeve", rec.id));
+            kit::sleeve(ui, &p, sl, tex, &rec.initials(), col(theme::sleeve(rec.id)), 3, ("next-sleeve", rec.id));
             let meta = if rec.key.is_empty() { format!("{:.0}", rec.bpm) } else { format!("{:.0}  {}", rec.bpm, rec.key) };
-            let m = kit::text(&p, pos2(inner.right(), y + 18.0), Align2::RIGHT_CENTER, &meta, 11.0, "mono", t::muted());
-            kit::clipped(&p, pos2(sl.right() + 10.0, y + 10.0), &rec.title, 13.0, "", t::text(), m.left() - sl.right() - 20.0);
-            kit::clipped(&p, pos2(sl.right() + 10.0, y + 27.0), &rec.artist, 12.0, "", t::muted(), m.left() - sl.right() - 20.0);
+            let m = kit::text(&p, pos2(area.right(), y + 15.0), Align2::RIGHT_CENTER, &meta, 11.0, "mono", t::muted());
+            let w = m.left() - sl.right() - 18.0;
+            kit::clipped(&p, pos2(sl.right() + 8.0, y + 9.0), &rec.title, 12.5, "", t::text(), w);
+            kit::clipped(&p, pos2(sl.right() + 8.0, y + 23.0), &rec.artist, 11.0, "", t::muted(), w);
+            if let Some(why) = desk.choice_why(rec.id) {
+                ui.interact(Rect::from_min_max(pos2(area.left(), y), pos2(area.right(), y + row)), ui.scope_id().with(("next-why", rec.id)), Sense::hover()).on_hover_text(why);
+            }
         }
     }
 
@@ -1311,5 +1394,25 @@ mod tests {
         assert_eq!(thousands(12774), "12,774");
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(-1000), "-1,000");
+    }
+}
+
+/// What the Auto DJ has been doing, newest first: the time into the set and the line.
+fn auto_log(desk: &Desk, p: &Painter, area: Rect) {
+    let log = desk.log();
+    if log.is_empty() {
+        kit::hint(p, area.left_top() + vec2(0.0, 6.0), Align2::LEFT_TOP, "It writes here as it plans and mixes");
+        return;
+    }
+    let rows = (area.height() / 18.0).floor().max(0.0) as usize;
+    for (i, line) in log.iter().take(rows).enumerate() {
+        let y = area.top() + i as f32 * 18.0 + 8.0;
+        let c = match line.kind {
+            wo_deskcore::autodj::LogKind::Trouble => t::warm(),
+            wo_deskcore::autodj::LogKind::Hand => t::soft(),
+            _ => t::muted(),
+        };
+        let tr = kit::text(p, pos2(area.left(), y), Align2::LEFT_CENTER, &wo_deskcore::autodj::clock(line.at), 10.5, "mono", t::faint());
+        kit::clipped(p, pos2(tr.right() + 8.0, y), &line.text, 11.5, "", c, area.right() - tr.right() - 8.0);
     }
 }

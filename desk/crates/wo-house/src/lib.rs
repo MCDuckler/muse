@@ -454,6 +454,67 @@ impl House {
         self.json(&format!("/tracks/{id}/analysis?structure=1"))
     }
 
+    fn post_json(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
+        let mut r = self
+            .agent
+            .post(format!("{}{path}", self.session.server))
+            .header("Authorization", &format!("Bearer {}", self.session.token))
+            .send_json(body)?;
+        Ok(r.body_mut().read_json()?)
+    }
+
+    /// What this person thought of the booth's mixes, newest first (the thumbs, the hands
+    /// on the plan): for the planner's taste.
+    pub fn feedback_list(&self, limit: u32) -> Result<Vec<wo_booth::taste::FeedbackRow>> {
+        #[derive(Deserialize)]
+        struct Row {
+            #[serde(default)]
+            event: String,
+            #[serde(default)]
+            from_track: Option<i64>,
+            #[serde(default)]
+            to_track: Option<i64>,
+            #[serde(default)]
+            kind: Option<String>,
+            #[serde(default)]
+            rating: Option<f64>,
+            #[serde(default)]
+            detail: Option<serde_json::Value>,
+        }
+        #[derive(Deserialize)]
+        struct All {
+            #[serde(default)]
+            feedback: Vec<Row>,
+        }
+        let all: All = self.json(&format!("/booth/feedback?limit={limit}"))?;
+        Ok(all
+            .feedback
+            .into_iter()
+            .map(|r| wo_booth::taste::FeedbackRow {
+                event: r.event,
+                from_track: r.from_track,
+                to_track: r.to_track,
+                kind: r.kind,
+                rating: r.rating,
+                was: r.detail.as_ref().and_then(|d| d.get("was")).and_then(|w| w.as_str()).map(str::to_owned),
+            })
+            .collect())
+    }
+
+    /// What the booth did between two records, or what was thought of it: kept by the
+    /// house for the planner to learn from (POST /booth/feedback).
+    pub fn feedback(&self, body: &serde_json::Value) -> Result<()> {
+        self.post_json("/booth/feedback", body).map(|_| ())
+    }
+
+    /// The records that would sit best in one slot after `body.prev` (POST /booth/slot:
+    /// the set builder's answer, steered by the shape's offset and anchor), best first.
+    pub fn slot_choices(&self, body: &serde_json::Value) -> Result<Vec<SlotChoice>> {
+        let v = self.post_json("/booth/slot", body)?;
+        let rows = v.get("choices").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+        Ok(rows.into_iter().filter_map(|c| serde_json::from_value(c).ok()).collect())
+    }
+
     /// Where the voice is in a record, a bar at a time, and its hook (the house's vocal
     /// map; v1's VocalMap).
     pub fn vocals(&self, id: i64) -> Result<wo_booth::planner::VocalMap> {
@@ -498,6 +559,18 @@ impl House {
         download(self.get(&format!("/tracks/{id}/stream")).call()?, &file)?;
         Ok(file)
     }
+}
+
+/// One record the set builder would put in a slot, and its words.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct SlotChoice {
+    pub track: Track,
+    #[serde(default)]
+    pub fit_in: Option<f64>,
+    #[serde(default)]
+    pub why: String,
+    #[serde(default)]
+    pub energy: Option<f64>,
 }
 
 /// Whether a record's stems are here to play.

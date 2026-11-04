@@ -16,6 +16,9 @@ fn a_stage_reads_the_desk() {
         std::env::set_var("WO_AUDIO", "off");
         std::env::set_var("WO_CONTROLLERS", "off");
         std::env::set_var("WO_RECORDS", &empty);
+        // never the house: no saved sign-in read, nothing told to any account
+        std::env::set_var("WO_HOUSE", "off");
+        std::env::set_var("XDG_CONFIG_HOME", &empty);
         std::env::set_var("WETOWL_MILK_HOME", empty.join("milk"));
     }
     let mut d = Desk::open(true);

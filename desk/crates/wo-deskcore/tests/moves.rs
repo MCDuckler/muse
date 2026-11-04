@@ -28,6 +28,9 @@ fn every_move_runs_and_hands_over() {
         std::env::set_var("WO_AUDIO", "off");
         std::env::set_var("WO_CONTROLLERS", "off");
         std::env::set_var("WO_RECORDS", &empty);
+        // never the house: no saved sign-in read, nothing told to any account
+        std::env::set_var("WO_HOUSE", "off");
+        std::env::set_var("XDG_CONFIG_HOME", &empty);
     }
     let mut d = Desk::open(true);
     for kind in Transition::ALL {
