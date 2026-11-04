@@ -473,6 +473,52 @@ impl House {
     }
 }
 
+/// Whether a record's stems are here to play.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Stems {
+    /// On this computer (the WetOwl app's, or the Desk's cache, or fetched just now).
+    Ready(PathBuf),
+    /// Being made by a computer in the pool (asking queued it): ask again in a while.
+    Making,
+    /// Not for this record (too long to take apart, or no such record).
+    Never,
+}
+
+/// The stems' file name, as the WetOwl app and the house name them (separator v2).
+pub fn stems_file(id: i64) -> String {
+    format!("{id}-stems-v2.opus")
+}
+
+impl House {
+    /// A record's stems: drums, bass and the rest, voice, as one six-channel Opus file
+    /// (see wo_decode::opus). From the WetOwl app's own copy on this computer, else the
+    /// Desk's cache, else the house — which answers 202 while the pool makes them (the
+    /// asking queues them; `soon`: asked ahead, queued behind records wanted now).
+    pub fn stems(&self, id: i64, soon: bool) -> Result<Stems> {
+        let name = stems_file(id);
+        if let Some(local) = app_folder().map(|a| a.join("stems").join(&name)).filter(|p| p.exists()) {
+            return Ok(Stems::Ready(local));
+        }
+        let cache = dirs::cache_dir().ok_or_else(|| Error::Net("no cache folder".into()))?.join("wetowl-desk").join("stems");
+        let file = cache.join(&name);
+        if file.exists() {
+            return Ok(Stems::Ready(file));
+        }
+        let path = if soon { format!("/tracks/{id}/stem/stems?soon=true") } else { format!("/tracks/{id}/stem/stems") };
+        let resp = match self.get(&path).call() {
+            Ok(r) => r,
+            Err(ureq::Error::StatusCode(404)) => return Ok(Stems::Never),
+            Err(e) => return Err(e.into()),
+        };
+        if resp.status().as_u16() == 202 {
+            return Ok(Stems::Making);
+        }
+        std::fs::create_dir_all(&cache)?;
+        download(resp, &file)?;
+        Ok(Stems::Ready(file))
+    }
+}
+
 /// The body into `to`, whole or not at all (a partial file never sits in the cache).
 fn download(mut resp: ureq::http::Response<ureq::Body>, to: &Path) -> Result<()> {
     let part = to.with_extension("part");

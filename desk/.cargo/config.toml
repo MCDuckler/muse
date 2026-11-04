@@ -1,3 +1,10 @@
 # The dev laptop has ~5.7 GB usable; three jobs keep a full build under it.
 [build]
 jobs = 3
+
+# libopus (the stems' codec) built from audiopus_sys's own sources on every desktop, never
+# the system's: one decoder everywhere and no libopus.so for a zip to need. Its CMakeLists
+# asks for CMake 3.1, which CMake 4 refuses without this.
+[env]
+LIBOPUS_NO_PKG = "1"
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

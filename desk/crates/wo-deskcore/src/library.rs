@@ -57,6 +57,8 @@ pub(crate) enum Done {
     /// A record's cover, as the stage's cover ground takes it (None: none to be had).
     Cover { slot: usize, turn: u64, id: i64, cover: Option<Picture> },
     LoadFailed { slot: usize, turn: u64, why: String },
+    /// A deck's stems: decoded onto a source, or where they are instead (parts.rs).
+    Stems { slot: usize, turn: u64, got: crate::parts::Got },
 }
 
 pub(crate) fn sign_in(tx: &Sender<Done>, server: String, user: String, password: String) {

@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+audiopus_sys = { version = "0.2.2", features = ["static"] }
 rubato = "5.0.1"
 symphonia = { version = "0.6.1", features = ["aac", "isomp4", "mp3", "flac", "wav", "pcm", "ogg", "vorbis"] }
 wo-engine = { version = "0.1.0", path = "../wo-engine" }

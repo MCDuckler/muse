@@ -15,6 +15,7 @@ pub mod bench;
 pub mod covers;
 pub mod library;
 pub mod milk;
+pub mod parts;
 pub mod prefs;
 pub mod records;
 pub mod show;
@@ -66,6 +67,10 @@ pub struct DeckView {
     pub pads: [Option<Pad>; 8],
     /// How much of the record is decoded, 0..1.
     pub decoded: f32,
+    /// The part playing (the whole record, or its stems at a part's levels) and where
+    /// the stems are.
+    pub part: parts::Part,
+    pub stems: parts::Stems,
     /// The hands' state: CUE, the loop, the pitch fader.
     pub cue: Option<f64>,
     pub looped: Option<(f64, f64)>,
@@ -135,6 +140,8 @@ struct Slot {
     filter: f32,
     fader: f32,
     keylock: bool,
+    /// The record's stems and the part playing (parts.rs).
+    stems: parts::DeckStems,
 }
 
 /// A transition the Auto DJ has planned (and, once `started`, is making).
@@ -264,6 +271,7 @@ impl Desk {
             filter: 0.5,
             fader: 0.85,
             keylock: true,
+            stems: Default::default(),
         };
         let (done_tx, done_rx) = mpsc::channel();
         let mut desk = Desk {
@@ -444,6 +452,7 @@ impl Desk {
         s.timing = timing;
         s.wave = wave;
         s.loader = Some(loader);
+        self.reset_stems(slot);
         self.apply_levels();
         let deck = self.engine.deck(DeckId::new(slot).unwrap());
         deck.set_keylock(self.slots[slot].keylock);
@@ -464,6 +473,7 @@ impl Desk {
             self.changes += 1;
         }
         self.controllers_tick();
+        self.stems_tick();
         self.feed_stage();
         if !self.auto {
             return;
@@ -688,6 +698,8 @@ impl Desk {
                 pitch: s.hands.pitch,
                 range: RANGES[s.hands.range],
                 decoded: if wave.done { 1.0 } else { (wave.seconds() / length.max(1.0)).min(1.0) as f32 },
+                part: s.stems.part,
+                stems: s.stems.state.clone(),
             }
         };
         let decks = [view(0), view(1)];
@@ -1037,6 +1049,8 @@ impl Desk {
                 self.library.error = Some(format!("{}: {why}", self.slots[slot].record.title));
             }
             Done::LoadFailed { .. } => {}
+            Done::Stems { slot, turn, got } if turn == self.load_gen[slot] => self.got_stems(slot, got),
+            Done::Stems { .. } => {}
         }
     }
 

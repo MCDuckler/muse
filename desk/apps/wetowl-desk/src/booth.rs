@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Mesh, Painter, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 use wo_deskcore::theme;
+use wo_deskcore::parts::{Part, Stems};
 use wo_deskcore::{Desk, Record, Shelf, ShowHand, Snapshot, Style, Transition};
 
 use crate::paint::{alpha, band, col, label_sized, label_width, mmss, pad_colour, pad_name, white};
@@ -469,14 +470,17 @@ impl App {
     }
 
     /// The hot cues: a click sets an empty one or jumps to a set one; shift- or right-click
-    /// clears.
+    /// clears. Under them, the record's parts.
     fn pads(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
         let v = &s.decks[d];
         kit::section(p, r.left_top(), Align2::LEFT_TOP, "Hot cues");
         let top = r.top() + 22.0;
         let g = 8.0;
+        let parts_h = 26.0;
+        let parts_r = Rect::from_min_max(pos2(r.left(), r.bottom() - parts_h), r.max);
         let pw = (r.width() - 3.0 * g) / 4.0;
-        let ph = ((r.bottom() - top - g) / 2.0).min(64.0);
+        let ph = ((parts_r.top() - 10.0 - top - g) / 2.0).min(64.0);
+        self.parts(desk, ui, p, parts_r, s, d);
         let shift = ui.input(|i| i.modifiers.shift);
         for i in 0..8 {
             let pr = Rect::from_min_size(pos2(r.left() + (i % 4) as f32 * (pw + g), top + (i / 4) as f32 * (ph + g)), vec2(pw, ph));
@@ -496,6 +500,43 @@ impl App {
                 _ => {}
             }
         }
+    }
+
+    /// The record's parts (v1's parts pads): the whole record, or its stems — drums, the
+    /// music without them, no voice, the voice alone. A part asked for before the stems
+    /// are on the deck plays the moment they are.
+    fn parts(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
+        let v = &s.decks[d];
+        let ready = v.stems.ready();
+        let usable = !matches!(v.stems, Stems::None | Stems::Never);
+        let names: Vec<&str> = Part::ALL.iter().map(|p| p.word()).collect();
+        let chosen = Part::ALL.iter().position(|p| *p == v.part);
+        // where the stems are, at the row's right above it
+        let (word, tone) = match &v.stems {
+            Stems::None => ("", t::faint()),
+            Stems::Asking => ("asking for the parts", t::faint()),
+            Stems::Making => ("the parts are being made", t::warm()),
+            Stems::Never => ("no parts for this record", t::faint()),
+            Stems::Ready => ("", t::faint()),
+            Stems::Failed(_) => ("the parts could not be had", t::warm()),
+        };
+        if !word.is_empty() {
+            kit::text(p, pos2(r.right(), r.top() - 6.0), Align2::RIGHT_BOTTOM, word, 11.0, "", tone);
+        }
+        let seg = kit::segmented(ui, p, r, &names, chosen, Tone::Deck(d), (d, "parts"));
+        // the stems' parts faint until they are on the deck
+        if !ready {
+            p.rect_filled(r, CornerRadius::same(t::R_CONTROL), Color32::from_black_alpha(if usable { 70 } else { 120 }));
+        }
+        if let Some(i) = seg.filter(|_| usable || Part::ALL[seg.unwrap()] == Part::Whole) {
+            desk.set_part(d, Part::ALL[i]);
+        }
+        let tip = match &v.stems {
+            Stems::Failed(why) => format!("The parts could not be had: {why}"),
+            Stems::Never => "This record is not taken apart (too long)".into(),
+            _ => "The whole record, or its parts: the drums, the music without them, no voice, the voice alone".into(),
+        };
+        ui.interact(r, ui.scope_id().with((d, "parts-tip")), Sense::hover()).on_hover_text(tip);
     }
 
     /// The loop: a length from the bar (again lets go), IN / OUT, half and double; jumps.
