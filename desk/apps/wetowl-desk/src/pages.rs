@@ -35,13 +35,15 @@ fn every_page_and_overlay_draws_at_every_size() {
     let mut frames = 0;
     for size in [vec2(1280.0, 720.0), vec2(1400.0, 840.0), vec2(1920.0, 1080.0), vec2(2560.0, 1440.0)] {
         for page in [Page::Booth, Page::Show, Page::Kit] {
-            for overlay in [None, Some(Overlay::Keys), Some(Overlay::Settings)] {
+            for overlay in [None, Some(Overlay::Keys), Some(Overlay::Settings), Some(Overlay::Set)] {
                 if page == Page::Kit && overlay.is_some() {
                     continue;
                 }
                 app.page = page;
                 app.overlay = overlay;
                 for n in 0..8 {
+                    // the booth's plan view over the waveforms for the last frames
+                    app.plan_open = n >= 4;
                     t += 1.0 / 60.0;
                     app.desk.lock().unwrap().tick();
                     // as a window gives it: its pixels in points at the zoom (the screen's own

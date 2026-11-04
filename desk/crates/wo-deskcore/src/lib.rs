@@ -17,6 +17,7 @@ pub mod library;
 pub mod milk;
 pub mod autodj;
 pub mod plan_view;
+pub mod set;
 mod fx;
 mod transition;
 pub mod parts;
@@ -234,6 +235,8 @@ pub struct Desk {
     dice: u64,
     /// The Auto DJ's mind: steering, the house's choices, the log, the thumbs (autodj.rs).
     mind: autodj::Mind,
+    /// A set built at the house, and whether the Auto DJ plays it (set.rs).
+    set: set::SetState,
 }
 
 /// An offline engine rendered in real time on its own thread: a computer with no
@@ -341,6 +344,7 @@ impl Desk {
             fx: Default::default(),
             recent: vec![],
             mind: Default::default(),
+            set: Default::default(),
             dice: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_nanos() as u64) | 1,
         };
         // the Desk's own saved sign-in; WO_APP_SIGN_IN=1 borrows the WetOwl app's for
@@ -370,6 +374,9 @@ impl Desk {
     /// The Auto DJ's next record: the best fit to the master's on the house's shelf (what
     /// Up next shows first), else the local queue's next.
     fn take_next(&mut self) -> Record {
+        if let Some(r) = self.set_next() {
+            return r;
+        }
         if let Some(r) = self.chosen_next() {
             return r;
         }
@@ -813,6 +820,16 @@ impl Desk {
         if !chosen.is_empty() {
             up = chosen;
         }
+        // a set playing: its records still to come, in order
+        let from_set: Vec<&Record> = if self.set.playing {
+            let at = self.set_view().at;
+            self.set.built.as_ref().map(|st| st.slots.iter().skip(at).map(|x| &x.record).filter(|r| r.id != decks[0].record.id && r.id != decks[1].record.id).collect()).unwrap_or_default()
+        } else {
+            vec![]
+        };
+        if !from_set.is_empty() {
+            up = from_set;
+        }
         Snapshot {
             master_bpm,
             crossfader: self.crossfader,
@@ -1162,6 +1179,7 @@ impl Desk {
                 self.mind.taste = t;
             }
             Done::Choices { turn, got } => self.got_choices(turn, got),
+            Done::Set { turn, got, rest } => self.got_set(turn, got, rest),
             Done::Stems { .. } => {}
         }
     }

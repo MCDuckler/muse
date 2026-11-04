@@ -23,6 +23,7 @@ mod gallery;
 mod overlays;
 mod paint;
 mod plan;
+mod set_page;
 #[cfg(test)]
 mod pages;
 mod show;
@@ -37,6 +38,8 @@ use ui::tokens::Tone;
 pub(crate) enum Overlay {
     Keys,
     Settings,
+    /// PLAN A SET.
+    Set,
 }
 
 /// How the crate is sorted: by fit (the booth's own order), title, artist, tempo or key;
@@ -68,6 +71,8 @@ pub(crate) struct App {
     auto_tab: usize,
     /// The plan view over the waveforms (P).
     plan_open: bool,
+    /// The set being shaped on the set page.
+    set_shape: wo_deskcore::set::SetShape,
     /// The nudge held, per deck.
     nudge_held: [i8; 2],
     /// The search as typed, when typing last changed it, what the house was last asked.
@@ -187,6 +192,7 @@ impl App {
         app.overlay = match arg("--overlay").as_deref() {
             Some("keys") => Some(Overlay::Keys),
             Some("settings") => Some(Overlay::Settings),
+            Some("set") => Some(Overlay::Set),
             _ => None,
         };
         // --plan: the plan view over the waveforms (screenshots)
@@ -222,6 +228,7 @@ impl App {
             cue_held: [false; 2],
             auto_tab: 0,
             plan_open: false,
+            set_shape: Default::default(),
             nudge_held: [0; 2],
             search_at: None,
             searched: String::new(),

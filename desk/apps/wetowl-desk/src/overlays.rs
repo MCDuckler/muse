@@ -28,6 +28,7 @@ impl App {
         let size = match which {
             Overlay::Keys => vec2(760.0, 470.0),
             Overlay::Settings => vec2(600.0, 560.0),
+            Overlay::Set => vec2((full.width() - 80.0).min(1180.0), (full.height() - 80.0).min(720.0)),
         };
         egui::Area::new(egui::Id::unique("overlay-area")).order(egui::Order::Foreground).fixed_pos(full.min).show(&ctx, |ui| {
             let (all, scrim) = ui.allocate_exact_size(full.size(), Sense::click());
@@ -42,6 +43,7 @@ impl App {
             let title = match which {
                 Overlay::Keys => "Keys",
                 Overlay::Settings => "Settings",
+                Overlay::Set => "Plan a set",
             };
             kit::text(&pp, inner.left_top() + vec2(0.0, 2.0), Align2::LEFT_TOP, title, t::TITLE, "semi", t::text());
             let close = Rect::from_min_size(pos2(inner.right() - 30.0, inner.top() - 4.0), vec2(30.0, 30.0));
@@ -52,6 +54,7 @@ impl App {
             match which {
                 Overlay::Keys => keys(&pp, body),
                 Overlay::Settings => self.settings(desk, ui, &pp, body),
+                Overlay::Set => self.set_page(desk, ui, &pp, body),
             }
         });
     }

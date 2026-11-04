@@ -178,6 +178,7 @@ impl Desk {
         self.mind.steer = to;
         self.mind.steer_gen += 1;
         self.note(LogKind::Plan, format!("{} from here", capital(what)));
+        self.reroute_set();
     }
 
     /// More energy (+1) or less (−1) from here on.
@@ -279,6 +280,7 @@ impl Desk {
         let Some(best) = self.mind.choices.first().cloned() else { return };
         if let Some(to) = self.incoming_parked()
             && self.auto
+            && !self.set.playing
             && !self.mind.by_hand[to]
             && self.slots[to].record.id != best.record.id
             && !self.mind.steer.neutral()

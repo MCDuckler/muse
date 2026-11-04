@@ -1141,11 +1141,16 @@ impl App {
                 if m.mixing { format!("bar {:.0} / {}", m.bar.floor() + 1.0, m.bars) } else { format!("in {}:{:02}", m.starts_in as u64 / 60, m.starts_in as u64 % 60) },
             ),
         };
+        let set_b = Rect::from_min_size(pos2(c.right() - 52.0 - 46.0, c.top() - 2.0), vec2(44.0, 22.0));
+        let set_on = desk.set_view().playing;
+        if Btn::new("Set").on(set_on).quiet().size(10.0).show(ui, p, set_b, "set-open").on_hover_text("Plan a set: the house picks and orders the records").clicked() {
+            self.overlay = Some(crate::Overlay::Set);
+        }
         let plan_b = Rect::from_min_size(pos2(c.right() - 52.0, c.top() - 2.0), vec2(52.0, 22.0));
         if Btn::new("Plan").on(self.plan_open).quiet().size(10.0).show(ui, p, plan_b, "plan-open").on_hover_text("The move drawn out, with a hand on it  (P)").clicked() {
             self.plan_open = !self.plan_open;
         }
-        let st = kit::text(p, pos2(plan_b.left() - 8.0, c.top() + 9.0), Align2::RIGHT_CENTER, &status, 12.0, "mono", t::muted());
+        let st = kit::text(p, pos2(set_b.left() - 8.0, c.top() + 9.0), Align2::RIGHT_CENTER, &status, 12.0, "mono", t::muted());
         kit::clipped(p, pos2(b.right() + 10.0, c.top() + 9.0), &what, 13.0, "semi", t::text(), st.left() - b.right() - 20.0);
         // the mix as a timeline: the two levels crossing over the bars, the bass changing
         // hands, a playhead

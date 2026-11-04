@@ -59,6 +59,8 @@ pub(crate) enum Done {
     /// A record's cover, as the stage's cover ground takes it (None: none to be had).
     Cover { slot: usize, turn: u64, id: i64, cover: Option<Picture> },
     LoadFailed { slot: usize, turn: u64, why: String },
+    /// A set from the house (set.rs); `rest`: the rest of one playing, built again.
+    Set { turn: u64, got: Result<crate::set::DjSet, String>, rest: bool },
     /// This person's taste in the booth's mixes (autodj.rs).
     Taste(wo_booth::taste::Taste),
     /// The house's choices for after the master (autodj.rs), for an ask by turn.

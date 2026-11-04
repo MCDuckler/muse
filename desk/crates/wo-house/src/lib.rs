@@ -518,6 +518,12 @@ impl House {
         self.post_json("/booth/feedback", body).map(|_| ())
     }
 
+    /// A set built by the house from a pool to a shape (POST /booth/set): the raw
+    /// answer (`slots`, `stats`, `curve`).
+    pub fn build_set(&self, body: &serde_json::Value) -> Result<serde_json::Value> {
+        self.post_json("/booth/set", body)
+    }
+
     /// The records that would sit best in one slot after `body.prev` (POST /booth/slot:
     /// the set builder's answer, steered by the shape's offset and anchor), best first.
     pub fn slot_choices(&self, body: &serde_json::Value) -> Result<Vec<SlotChoice>> {
