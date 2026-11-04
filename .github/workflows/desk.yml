@@ -158,10 +158,12 @@ jobs:
       - name: Smoke — MilkDrop on the Rust stage (the bundle's helper)
         timeout-minutes: 3
         run: |
-          "$APP/Contents/MacOS/wetowl-stage" --scene milk --milk-dir "$PWD/app/assets/milk/presets" --seconds 12 --shot "$PWD/smoke/rust-milk.png" > smoke/rust-milk.log 2>&1 || true
+          # 24 s: on the runner the helper draws with Apple's software renderer (a few frames a
+          # second, its first after seconds), and the stage builds its pipelines first
+          "$APP/Contents/MacOS/wetowl-stage" --scene milk --milk-dir "$PWD/app/assets/milk/presets" --seconds 24 --shot "$PWD/smoke/rust-milk.png" > smoke/rust-milk.log 2>&1 || true
           grep -E 'STAGE|milk|stage:' smoke/rust-milk.log | tail -8
           grep -q 'milk: preset ok' smoke/rust-milk.log || { echo "MilkDrop's helper did not put a preset on"; exit 1; }
-          grep -E 'STAGE fps=' smoke/rust-milk.log | tail -1 | grep -qE 'milk=[1-9][0-9]*fps' || { echo "no MilkDrop frames reached the Rust stage"; exit 1; }
+          grep -E 'STAGE fps=' smoke/rust-milk.log | grep -qE 'milk=[1-9][0-9]*fps' || { echo "no MilkDrop frames reached the Rust stage"; exit 1; }
       - name: Smoke — every shader scene builds on Metal
         timeout-minutes: 6
         run: |

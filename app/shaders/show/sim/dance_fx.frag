@@ -115,8 +115,16 @@ vec3 crtRamp(float t) {
   return mix(c, uInk, smoothstep(0.66, 0.95, t));
 }
 
-// A cheap hash for the rows' tear.
-float crtHash(float n) { return fract(sin(n * 91.345) * 47453.5453); }
+// A cheap hash for the rows' tear and the tube's static: products and fractions only. A
+// sine of the numbers fed here, times a big number, is only as exact as each GPU's sine
+// (lavapipe's differs from the rest in its last bits, enough to tear other rows); this is
+// the same on every GPU.
+float crtHash(float n) {
+  n = fract(n * 0.1031);
+  n *= n + 33.33;
+  n *= n + n;
+  return fract(n);
+}
 
 vec4 crt(vec2 fc) {
   vec2 res = uResolution;
@@ -171,7 +179,8 @@ vec4 crt(vec2 fc) {
   // The glass darker toward its edge.
   // The glass itself, faintly lit where nothing is: the tube's own violet, its
   // scanlines and a little static, so the screen's curve shows round the picture.
-  float noise = crtHash(dot(floor(fc), vec2(1.0, 157.0)) + floor(uTime * 30.0) * 13.1);
+  // (whole numbers throughout, so no GPU rounds the sum its own way)
+  float noise = crtHash(dot(floor(fc), vec2(1.0, 157.0)) + floor(uTime * 30.0) * 13.0);
   vec3 tube = (uPaper * 2.2 + vec3(0.035, 0.008, 0.06) * scan + vec3(0.03, 0.012, 0.05) * noise * 0.8) * seam;
   col = max(col, tube);
   col *= 1.0 - 0.5 * smoothstep(0.25, 1.0, length(q) * 1.45);
