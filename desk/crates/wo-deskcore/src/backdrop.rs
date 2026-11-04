@@ -11,11 +11,23 @@ pub struct Backdrop {
     pub rgba: Vec<u8>,
 }
 
-/// The backdrop at `width` × `height` (small: it is drawn stretched, and it is a blur).
+/// The backdrop at `width` × `height` (small: it is drawn stretched, and it is a blur), from
+/// the still stage frame — the glass when no stage is showing.
 pub fn backdrop(width: u32, height: u32) -> Backdrop {
     let img = image::load_from_memory(STAGE).expect("the stage frame").to_rgb8();
+    glass(&img, width, height)
+}
+
+/// The backdrop from the live stage's picture (RGBA8, rows top first): the same blur, dim
+/// and scrim, so the light behind the glass is the show's own.
+pub fn live(rgba: &[u8], w: u32, h: u32, width: u32, height: u32) -> Option<Backdrop> {
+    let img = image::RgbaImage::from_raw(w, h, rgba.to_vec())?;
+    Some(glass(&image::DynamicImage::ImageRgba8(img).to_rgb8(), width, height))
+}
+
+fn glass(img: &image::RgbImage, width: u32, height: u32) -> Backdrop {
     // Cover the box, then blur: 80 px at 1920 wide.
-    let small = image::imageops::resize(&img, width, height, image::imageops::FilterType::Triangle);
+    let small = image::imageops::resize(img, width, height, image::imageops::FilterType::Triangle);
     let mut px: Vec<[f32; 3]> = small.pixels().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
     let radius = ((80.0 * width as f32 / 1920.0) / 1.7).max(1.0) as usize;
     for _ in 0..3 {

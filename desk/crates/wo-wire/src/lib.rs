@@ -128,6 +128,8 @@ pub enum Hand {
     Screen(String),
     /// Full screen where the window is, or a window again.
     Full(bool),
+    /// A favourite put on, by id (the Desk's director; held until let go).
+    Fave(String),
 }
 
 /// The house the Desk is signed into: the stage reads the records' beats, sections,
@@ -223,6 +225,7 @@ pub fn hand(h: Hand) -> String {
         Hand::Full(on) => ("full", Some(on)),
         Hand::Set(id) => return named("set", "id", &id),
         Hand::Screen(name) => return named("screen", "name", &name),
+        Hand::Fave(id) => return named("fave", "id", &id),
     };
     match on {
         Some(on) => format!(r#"{{"t":"hands","do":"{what}","on":{on}}}"#),

@@ -153,8 +153,62 @@ pub(crate) struct Show {
     /// MilkDrop's library folder, and when its notes were last written.
     milk_home: Option<std::path::PathBuf>,
     notes_saved: Instant,
+    /// The hands' judging of what is on (v1: desk_hands.dart): what NEVER last took out and
+    /// how widely, the plan before it (UNDO), and what the show said of it.
+    judged: Judged,
 }
 
+#[derive(Default)]
+struct Judged {
+    never: Option<wo_show::Combo>,
+    scope: u8,
+    before: Option<wo_show::plan::ShowPlan>,
+    said: Option<String>,
+    said_n: u32,
+}
+
+/// A combination in words: `Dancer · ascii on White · keyhole · add · kaleidoscope`.
+pub(crate) fn combo_words(c: &wo_show::Combo, looks: &std::collections::BTreeMap<String, wo_show::Look>) -> String {
+    use wo_show::json::Named;
+    let name = looks.get(&c.scene).map_or(c.scene.clone(), |l| l.name.clone());
+    let mut w = if c.style == "raw" { name } else { format!("{name} · {}", c.style) };
+    if !c.world() {
+        let ground: Vec<String> = c.ground.split('.').enumerate().map(|(i, p)| if i == 0 { cap(p) } else { p.to_owned() }).collect();
+        w += &format!(" on {}", ground.join(" "));
+        if c.mask != wo_show::Mask::None {
+            w += &format!(" · {}", c.mask.name());
+        }
+        w += &format!(" · {}", c.mix.name());
+    }
+    if c.fx != wo_show::Fx::None {
+        w += &format!(" · {}", match c.fx {
+            wo_show::Fx::Kaleidoscope => "kaleidoscope",
+            wo_show::Fx::Slit => "slit-scan",
+            wo_show::Fx::Both => "slit-scan and kaleidoscope",
+            _ => "datamosh",
+        });
+    }
+    w
+}
+
+fn cap(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}
+
+
+/// The show as the Show page draws it ([Show::board]).
+#[derive(Clone, Debug, Default)]
+pub struct ShowBoard {
+    /// The likeliest looks next in the scene on, in words, with their shares.
+    pub coming: Vec<(String, f32)>,
+    /// Bars the look has been on.
+    pub bars_on: i64,
+    /// The favourites the Rust stage draws: id, words.
+    pub faves: Vec<(String, String)>,
+    /// How often each scene comes (the most-played 1), by name.
+    pub rotation: Vec<(String, f32)>,
+}
 
 impl Show {
     /// The director over the scenes the Rust stage draws.
@@ -177,7 +231,7 @@ impl Show {
             m.set_textures(Some(home.join("textures").to_string_lossy().into_owned()));
             direct.milk = Some(m);
         }
-        Show { direct, facts: [None, None], covers: [false; 2], last: None, said: String::new(), milk_home, notes_saved: Instant::now() }
+        Show { direct, facts: [None, None], covers: [false; 2], last: None, said: String::new(), milk_home, notes_saved: Instant::now(), judged: Judged::default() }
     }
 
     /// Whether a deck's record has its cover on the stage (the cover ground's say).
@@ -321,15 +375,173 @@ impl Show {
             Hand::Blackout(on) => d.macros.blackout = *on,
             Hand::Strobe(on) => d.macros.strobe = if *on { 1.0 } else { 0.0 },
             Hand::Freeze(on) => d.macros.freeze = *on,
+            Hand::Never => self.never(0, false),
+            Hand::Wider => {
+                if self.judged.never.is_some() && self.judged.scope < 2 {
+                    self.never(self.judged.scope + 1, true);
+                }
+            }
+            Hand::Less => self.scale(0.5),
+            Hand::More => self.scale(2.0),
+            Hand::Keep => self.keep(),
+            Hand::Fave(id) => {
+                if let Some(f) = self.direct.doc.faves().into_iter().find(|f| &f.id == id) {
+                    let words = combo_words(&f.combo, &self.direct.looks);
+                    self.direct.director.play(f.combo, wo_show::director::SceneChange::Dissolve);
+                    self.say(format!("On: {words}"));
+                }
+            }
+            Hand::Undo => {
+                if let Some(b) = self.judged.before.take() {
+                    self.set_plan(b);
+                    self.judged.never = None;
+                    self.say("Undone".into());
+                }
+            }
             _ => {}
         }
     }
+
+    /// The show as the Show page draws it: what may come next, how long the look has been
+    /// on, the favourites the Rust stage can put on, and the rotation.
+    pub(crate) fn board(&mut self) -> ShowBoard {
+        let d = &mut self.direct;
+        let on = d.director.combo().cloned();
+        let mut coming: Vec<(wo_show::Combo, f64)> = match d.director.scene() {
+            Some(scene) => d.director.weighted(scene).into_iter().filter(|(c, w)| *w > 0.0 && Some(c) != on.as_ref()).collect(),
+            None => vec![],
+        };
+        coming.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let total: f64 = coming.iter().map(|c| c.1).sum::<f64>().max(1e-9);
+        let coming = coming.into_iter().take(3).map(|(c, w)| (combo_words(&c, &d.looks), (w / total) as f32)).collect();
+        let faves = d
+            .doc
+            .faves()
+            .into_iter()
+            .filter(|f| DRAWN.contains(&f.combo.scene.as_str()))
+            .take(12)
+            .map(|f| {
+                let words = if f.name.is_empty() { combo_words(&f.combo, &d.looks) } else { f.name.clone() };
+                (f.id, words)
+            })
+            .collect();
+        let levels = d.director.levels();
+        let most = levels.values().copied().fold(0.0f64, f64::max).max(1e-9);
+        let mut rotation: Vec<(String, f32)> = levels
+            .iter()
+            .filter(|(id, _)| DRAWN.contains(&id.as_str()))
+            .map(|(id, l)| (d.looks.get(id).map_or(id.clone(), |l| l.name.clone()), (l / most) as f32))
+            .collect();
+        rotation.sort_by(|a, b| b.1.total_cmp(&a.1));
+        ShowBoard { coming, bars_on: d.director.combo_bars(), faves, rotation }
+    }
+
+    /// The look on, in words.
+    pub(crate) fn look_words(&self) -> Option<String> {
+        self.direct.director.combo().map(|c| combo_words(c, &self.direct.looks))
+    }
+
+    /// What the hands' judging said last (counted), and whether UNDO and WIDER have work.
+    pub(crate) fn judged(&self) -> (Option<String>, u32, bool, bool) {
+        let j = &self.judged;
+        (j.said.clone(), j.said_n, j.before.is_some(), j.never.as_ref().is_some_and(|c| j.scope < 2 && !c.world()))
+    }
+
+    fn say(&mut self, words: String) {
+        self.judged.said = Some(words);
+        self.judged.said_n += 1;
+    }
+
+    /// The plan the director picks by, changed (kept for this session: the WetOwl app's
+    /// show.json is read, never written, while v1 keeps it).
+    fn set_plan(&mut self, p: wo_show::plan::ShowPlan) {
+        self.direct.doc.set_plan(&p);
+        self.direct.director.set_plan(p);
+    }
+
+    /// NEVER this look: the combination (0), its style on its ground whatever the mask and
+    /// blend (1), or the scene in that style at all (2); WIDER reaches from the plan before.
+    fn never(&mut self, scope: u8, again: bool) {
+        use wo_show::plan::{PlanAxis, cell_key, cell_of};
+        let c = if again { self.judged.never.clone() } else { self.direct.director.combo().cloned() };
+        let Some(c) = c else { return };
+        let before = if again { self.judged.before.clone().unwrap_or_else(|| self.direct.director.plan().clone()) } else { self.direct.director.plan().clone() };
+        let name = self.direct.looks.get(&c.scene).map_or(c.scene.clone(), |l| l.name.clone());
+        let s = if c.world() { 2 } else { scope };
+        let (plan, words) = match s {
+            0 => (before.with_cell(&c.scene, &cell_of(&c), Some(0.0)), format!("Never: {}", combo_words(&c, &self.direct.looks))),
+            1 => (before.with_cell(&c.scene, &cell_key(&c.style, &c.ground, "*", "*", "*"), Some(0.0)), format!("Never: {name} · {}, any mask and blend", c.style)),
+            _ => (
+                before.with_in(&c.scene, PlanAxis::Style, &c.style, None, Some(true)),
+                format!("Never: {name} in {}", if c.style == "raw" { "its own style" } else { c.style.as_str() }),
+            ),
+        };
+        self.judged.before = Some(before);
+        self.judged.never = Some(c);
+        self.judged.scope = s;
+        self.set_plan(plan);
+        self.say(words);
+        // and off it, now
+        self.direct.next(1);
+    }
+
+    /// LESS (½) or MORE (×2) of the look on.
+    fn scale(&mut self, k: f64) {
+        use wo_show::plan::{cell_of, level_word};
+        let Some(c) = self.direct.director.combo().cloned().filter(|c| !c.world()) else { return };
+        let before = self.direct.director.plan().clone();
+        let key = cell_of(&c);
+        let next = before.scale_cell(&c.scene, &key, k);
+        let level = next.of(&c.scene).cells.get(&key).copied().unwrap_or(1.0);
+        self.judged.before = Some(before);
+        self.judged.never = None;
+        self.set_plan(next);
+        self.say(format!("{}: {} — {}", if k < 1.0 { "Less" } else { "More" }, combo_words(&c, &self.direct.looks), level_word(level)));
+    }
+
+    /// KEEP: the look on as a favourite (the MilkDrop preset with it).
+    fn keep(&mut self) {
+        let Some(c) = self.direct.director.combo().cloned() else {
+            self.say("Nothing on to keep".into());
+            return;
+        };
+        let micros = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_micros() as i64);
+        let at = chrono_free_iso(micros / 1_000_000);
+        let milk = self.direct.milk.as_ref().and_then(|m| m.preset().map(|p| p.name.clone()));
+        let words = combo_words(&c, &self.direct.looks);
+        let fave = wo_show::faves::ShowFave { id: wo_show::faves::ShowFave::new_id(micros), at, combo: c, milk, shot: None, type3d: None, stars: 0, name: String::new() };
+        self.direct.doc.keep_fave(fave);
+        self.say(format!("Kept: {words}"));
+    }
+}
+
+/// Seconds since 1970 as ISO 8601 UTC (`2026-11-03T19:42:07Z`), without a calendar crate.
+fn chrono_free_iso(secs: i64) -> String {
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // civil from days (Howard Hinnant)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem / 60 % 60, rem % 60)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use wo_booth::Grid;
+
+    #[test]
+    fn iso_dates_without_a_calendar() {
+        assert_eq!(chrono_free_iso(0), "1970-01-01T00:00:00Z");
+        assert_eq!(chrono_free_iso(1_793_740_927), "2026-11-03T21:22:07Z");
+        assert_eq!(chrono_free_iso(951_782_400), "2000-02-29T00:00:00Z", "a leap day");
+    }
 
     #[test]
     fn a_synthesised_record_reads_as_steady_facts() {
@@ -347,6 +559,42 @@ mod tests {
         assert_eq!(f.energy.len(), f.downbeats_ms.len());
         assert_eq!((f.energy[0], *f.energy.last().unwrap()), (230, 90), "the sections' shape");
         assert_eq!(f.camelot.as_deref(), Some("8A"));
+    }
+
+    #[test]
+    fn the_hands_judge_what_is_on_and_undo_it() {
+        let mut show = Show::new_in(None);
+        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 120.0, key: String::new(), seconds: 200, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None };
+        let t = Timing::from_grid(Grid::new((0..400).map(|i| i as f64 * 0.5).collect(), 0), 200.0);
+        show.record(0, Some(facts_of(&r, &t)));
+        let frame = wo_wire::Frame { a: wo_wire::Deck { playing: true, position_ms: 4000.0, rate: 1.0, level: 1.0, ..Default::default() }, ..Default::default() };
+        show.tick(&frame, None);
+        let c = show.direct.director.combo().cloned().expect("a look on");
+        let words = show.look_words().unwrap();
+        assert!(!words.is_empty());
+        // MORE doubles its cell; LESS halves it back
+        show.hand(&Hand::More);
+        let key = wo_show::plan::cell_of(&c);
+        let level = |s: &Show| s.direct.director.plan().of(&c.scene).cells.get(&key).copied().unwrap_or(1.0);
+        if !c.world() {
+            assert_eq!(level(&show), 2.0);
+            let (said, n, undo, _) = show.judged();
+            assert!(said.unwrap().starts_with("More: ") && n == 1 && undo);
+            show.hand(&Hand::Less);
+            assert_eq!(level(&show), 1.0);
+        }
+        // NEVER takes it out of the plan (and off the stage); UNDO puts the plan back
+        let before = show.direct.director.plan().clone();
+        show.hand(&Hand::Never);
+        assert_ne!(*show.direct.director.plan(), before);
+        assert!(show.judged().0.unwrap().starts_with("Never: "));
+        show.hand(&Hand::Undo);
+        assert_eq!(*show.direct.director.plan(), before);
+        assert_eq!(show.judged().0.as_deref(), Some("Undone"));
+        // KEEP: a favourite of it
+        let faves = show.direct.doc.faves().len();
+        show.hand(&Hand::Keep);
+        assert_eq!(show.direct.doc.faves().len(), faves + 1);
     }
 
     #[test]

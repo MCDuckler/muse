@@ -80,6 +80,7 @@ fn hand_of(j: &serde_json::Value) -> Option<Hand> {
         "full" => Hand::Full(on),
         "set" => Hand::Set(s("id").unwrap_or_default()),
         "screen" => Hand::Screen(s("name")?),
+        "fave" => Hand::Fave(s("id")?),
         _ => return None,
     })
 }

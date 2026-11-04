@@ -319,6 +319,11 @@ impl Stage {
         self.show().milk(told.as_ref())
     }
 
+    /// The Desk's show for the Show page, where the Desk directs (a Rust stage).
+    pub(crate) fn board(&mut self) -> Option<crate::show::ShowBoard> {
+        self.show.as_mut().map(crate::show::Show::board)
+    }
+
     pub(crate) fn milk_hand(&mut self, h: crate::show::MilkHand) {
         self.show().milk_hand(h);
     }
@@ -379,7 +384,10 @@ impl Stage {
                 held: s.direct.held(),
                 blackout: cue.macros.blackout,
                 freeze: cue.macros.freeze,
-                told: Shown { scene: name, held: s.direct.held(), blackout: cue.macros.blackout, freeze: cue.macros.freeze, ..shown },
+                told: {
+                    let (said, said_n, undo, wider) = s.judged();
+                    Shown { scene: name, held: s.direct.held(), blackout: cue.macros.blackout, freeze: cue.macros.freeze, look: s.look_words(), said, said_n, undo, wider, ..shown }
+                },
                 kept_screen: self.kept().screen.clone(),
                 rust: self.wants_rust(),
                 rust_here: rust_program().is_some(),

@@ -441,6 +441,12 @@ impl House {
         Ok(r.body_mut().with_config().limit(16 << 20).read_to_vec()?)
     }
 
+    /// A record's small cover (the house's `sm`: rows and sleeves), as the file is.
+    pub fn cover_small(&self, id: i64) -> Result<Vec<u8>> {
+        let mut r = self.get(&format!("/tracks/{id}/cover?size=sm")).call()?;
+        Ok(r.body_mut().with_config().limit(4 << 20).read_to_vec()?)
+    }
+
     pub fn analysis(&self, id: i64) -> Result<Analysis> {
         self.json(&format!("/tracks/{id}/analysis?structure=1"))
     }

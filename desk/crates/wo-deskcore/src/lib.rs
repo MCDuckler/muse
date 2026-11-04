@@ -12,8 +12,10 @@ use wo_wave::{Analyser, Tee, Wave};
 
 pub mod backdrop;
 pub mod bench;
+pub mod covers;
 pub mod library;
 pub mod milk;
+pub mod prefs;
 pub mod records;
 pub mod show;
 pub mod stage;
@@ -21,12 +23,15 @@ pub mod synth;
 pub mod theme;
 
 pub use backdrop::Backdrop;
+pub use covers::Cover;
+pub use prefs::Prefs;
 pub use library::{Library, Shelf};
 pub use records::{Audio, Record};
-pub use show::{MilkHand, MilkRow, MilkView};
+pub use show::{MilkHand, MilkRow, MilkView, ShowBoard};
 /// The scenes the Rust stage draws so far.
 pub use wo_show::scenes::DRAWN as RUST_SCENES;
 pub use stage::{Hand as ShowHand, StageView, Thumb};
+pub use wo_booth::mix::moves as mix_moves;
 pub use wo_booth::{Grid, Hands, Moves, Pad, PadKind, RANGES, Style, Timing, Transition, Transport};
 pub use wo_engine::Load;
 
@@ -187,6 +192,11 @@ pub struct Desk {
     lit_for: usize,
     /// The show's window.
     stage: stage::Stage,
+    /// Counts what changed the Desk from outside the window (a controller, an answer from
+    /// the house): the window repaints when it moves, and rests when nothing does.
+    changes: u64,
+    /// Records' covers for the sleeves.
+    covers: covers::Covers,
 }
 
 /// An offline engine rendered in real time on its own thread: a computer with no
@@ -283,6 +293,8 @@ impl Desk {
             lit: Default::default(),
             lit_for: 0,
             stage: stage::Stage::default(),
+            changes: 0,
+            covers: Default::default(),
         };
         // the Desk's own saved sign-in; WO_APP_SIGN_IN=1 borrows the WetOwl app's for
         // this run only (development, screenshots)
@@ -449,6 +461,7 @@ impl Desk {
     pub fn tick(&mut self) {
         while let Ok(done) = self.done_rx.try_recv() {
             self.handle(done);
+            self.changes += 1;
         }
         self.controllers_tick();
         self.feed_stage();
@@ -628,6 +641,20 @@ impl Desk {
             t.phrases = (0..8).map(|k| bar(16.0 * k as f64)).collect();
         }
         t
+    }
+
+    /// What changed the Desk from outside the window, counted ([Desk::tick] moves it).
+    pub fn changes(&self) -> u64 {
+        self.changes + self.covers.arrived.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// A record's cover for its sleeve, where it has one and it has come (asked for the
+    /// first time it is wanted; the house's small one, kept on disk).
+    pub fn cover(&mut self, r: &Record) -> Option<Arc<Cover>> {
+        match (&r.audio, r.cover) {
+            (Audio::House { id }, true) => self.covers.get(*id, self.house.as_ref()),
+            _ => None,
+        }
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -859,6 +886,12 @@ impl Desk {
     }
 
     /// `beats` on (negative: back), the loop with it.
+    /// The record moved to `at` seconds (the overview clicked).
+    pub fn seek_to(&mut self, d: usize, at: f64) {
+        let len = self.slots[d].wave.lock().unwrap().seconds().max(self.slots[d].record.seconds as f64);
+        self.engine.deck(DeckId::new(d).unwrap()).seek(at.clamp(0.0, len.max(0.0)));
+    }
+
     pub fn jump(&mut self, d: usize, beats: f64) {
         self.hands(d, |h, t| h.jump(beats, t));
     }
@@ -922,6 +955,7 @@ impl Desk {
         self.house = None;
         self.stage.set_house(None);
         self.library = Library::default();
+        self.covers.forget();
     }
 
     /// Shows a shelf: everything, a playlist, a search (an empty search is everything).
@@ -938,6 +972,7 @@ impl Desk {
     }
 
     fn signed_in(&mut self, house: wo_house::House) {
+        self.covers.forget();
         library::fetch_playlists(&self.done_tx, &house);
         self.stage.set_house(Some(wo_wire::House { server: house.session.server.clone(), token: house.session.token.clone() }));
         self.house = Some(house);
@@ -1019,6 +1054,9 @@ impl Desk {
 
     fn controllers_tick(&mut self) {
         let events = self.controls.as_ref().map(|c| c.poll()).unwrap_or_default();
+        if !events.is_empty() {
+            self.changes += 1;
+        }
         for e in events {
             let at = self.positions();
             for a in self.binding.handle(&e, &at) {
@@ -1208,6 +1246,14 @@ impl Desk {
     }
 
     /// The hands on MilkDrop.
+    /// The show as the Show page draws it, where the Desk directs (the Rust stage).
+    pub fn show_board(&mut self) -> Option<ShowBoard> {
+        if !self.stage().rust {
+            return None;
+        }
+        self.stage.board()
+    }
+
     pub fn milk_hand(&mut self, h: MilkHand) {
         self.stage.milk_hand(h);
     }
