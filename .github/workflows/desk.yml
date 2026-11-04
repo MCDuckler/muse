@@ -1,7 +1,8 @@
 # WetOwl Desk (v2) builds.
-# - windows: the booth (egui), zipped with bench.cmd for a tester to run on real hardware
-#   (see desk/README.md). No music goes in the zip: the booths play the tester's own
-#   fetched records, else synthesised ones.
+# - windows: the booth (egui) and the Rust stage, zipped with bench.cmd for a tester to run
+#   on real hardware (see desk/README.md); on pushes to desk published as the rolling
+#   release wetowl-desk-windows. No music goes in the zip: the booths play the tester's
+#   own fetched records, else synthesised ones.
 # - macos: "WetOwl Desk.app" (Apple silicon + Intel, the stage inside it), smoke-tested
 #   with its stage, and on pushes to desk published as the rolling release
 #   wetowl-desk-macos, which desk/deploy/macos/install.sh fetches (no administrator).
@@ -18,6 +19,8 @@ on:
 jobs:
   windows:
     runs-on: windows-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: desk
@@ -68,6 +71,17 @@ jobs:
             Copy-Item "$($d.FullName)/dancer.json", "$($d.FullName)/dancer.bin", "$($d.FullName)/moves.bin", "$($d.FullName)/skin.webp" "pkg/dance/$($d.Name)/"
           }
           Copy-Item design/fonts/OFL-*.txt pkg/
+          $build = "$(Get-Date -AsUTC -Format yyyyMMdd-HHmm) $("${{ github.sha }}".Substring(0, 7))"
+          Set-Content pkg/build.txt $build
+          Set-Content pkg/README.txt @"
+          WetOwl Desk for Windows (build $build)
+
+          Run wetowl-desk.exe. Windows may say "Windows protected your PC" (the program is
+          not signed): click "More info", then "Run anyway".
+          Sign in with your WetOwl account. The stage (the show) opens from the Show page.
+          If Windows says VCRUNTIME140.dll is missing, install the Microsoft Visual C++
+          Redistributable (x64): https://aka.ms/vs/17/release/vc_redist.x64.exe
+          "@
           Compress-Archive -Path pkg/* -DestinationPath wetowl-desk-windows.zip -Force
       - uses: actions/upload-artifact@v4
         with:
@@ -75,6 +89,21 @@ jobs:
           path: |
             desk/wetowl-desk-windows.zip
             desk/smoke/
+      - name: Published for download (rolling release wetowl-desk-windows)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/desk'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The tag sits on the default branch, as the Mac's does (see there).
+          tag=wetowl-desk-windows
+          zip_url="https://github.com/${{ github.repository }}/releases/download/$tag/wetowl-desk-windows.zip"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" \
+            --prerelease --latest=false --target "${{ github.event.repository.default_branch }}" \
+            --title "WetOwl Desk for Windows (rolling)" \
+            --notes "The newest WetOwl Desk for Windows, from the desk branch."
+          gh release upload "$tag" wetowl-desk-windows.zip --clobber
+          gh release edit "$tag" --notes "Build $(tr -d '\r' < pkg/build.txt). The newest WetOwl Desk for Windows (the booth and the Rust stage), from the desk branch. Download $zip_url, unzip it anywhere, run wetowl-desk.exe. Windows may say \"Windows protected your PC\" (the program is not signed): More info, then Run anyway."
 
   macos:
     runs-on: macos-15

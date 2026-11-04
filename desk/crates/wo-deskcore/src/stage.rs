@@ -256,9 +256,10 @@ impl Stage {
         self.hello = Some(hello);
     }
 
-    /// The Rust stage asked for: on the Show page, or by WO_STAGE_RUST.
+    /// The Rust stage asked for: on the Show page, or by WO_STAGE_RUST; or the only
+    /// stage here (the Windows zip carries no WetOwl app).
     fn wants_rust(&self) -> bool {
-        self.kept().rust || std::env::var_os("WO_STAGE_RUST").is_some()
+        self.kept().rust || std::env::var_os("WO_STAGE_RUST").is_some() || (program().is_none() && rust_program().is_some())
     }
 
     fn kept(&self) -> &Kept {
