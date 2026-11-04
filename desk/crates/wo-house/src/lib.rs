@@ -148,6 +148,8 @@ pub struct Analysis {
     #[serde(default)]
     pub camelot: Option<String>,
     #[serde(default)]
+    pub key_confidence: Option<f64>,
+    #[serde(default)]
     pub drops: Vec<i64>,
     #[serde(default)]
     pub cues: Cues,
@@ -218,6 +220,7 @@ impl Analysis {
         let mut t = wo_booth::Timing::from_grid(grid, self.duration_ms.map(s).unwrap_or(0.0));
         t.bpm = self.bpm.or(t.bpm);
         t.camelot = self.camelot.clone();
+        t.key_confidence = self.key_confidence.unwrap_or(0.0);
         t.ends = self.ends.clone();
         t.first_downbeat = self.cues.first_downbeat_ms.map(s).or(t.first_downbeat);
         t.mix_in = self.cues.mix_in_ms.map(s);
@@ -449,6 +452,30 @@ impl House {
 
     pub fn analysis(&self, id: i64) -> Result<Analysis> {
         self.json(&format!("/tracks/{id}/analysis?structure=1"))
+    }
+
+    /// Where the voice is in a record, a bar at a time, and its hook (the house's vocal
+    /// map; v1's VocalMap).
+    pub fn vocals(&self, id: i64) -> Result<wo_booth::planner::VocalMap> {
+        #[derive(Deserialize)]
+        struct Hook {
+            #[serde(default)]
+            text: String,
+            #[serde(default)]
+            at: Vec<i64>,
+        }
+        #[derive(Deserialize)]
+        struct Row {
+            #[serde(default)]
+            bars: Option<Vec<i64>>,
+            #[serde(default)]
+            hook: Option<Hook>,
+        }
+        let r: Row = self.json(&format!("/tracks/{id}/vocals"))?;
+        Ok(wo_booth::planner::VocalMap {
+            bars: r.bars.map(|b| b.into_iter().map(|v| v.clamp(0, 255) as u8).collect()),
+            hook: r.hook.map(|h| (h.text, h.at.into_iter().map(|ms| ms as f64 / 1000.0).collect())),
+        })
     }
 
     pub fn hand_pads(&self, id: i64) -> Result<HandPads> {

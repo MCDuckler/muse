@@ -33,6 +33,7 @@ fn every_move_runs_and_hands_over() {
     for kind in Transition::ALL {
         assert!(until(&mut d, 20.0, |d| d.snapshot().mix.is_some_and(|m| !m.mixing)), "{kind:?}: nothing planned");
         let from = d.snapshot().mix.unwrap().from;
+        let fired = d.sounds_fired();
         d.choose_move(kind, Some(2));
         let m = d.snapshot().mix.unwrap();
         assert_eq!((m.kind, m.bars), (kind, 2));
@@ -46,6 +47,13 @@ fn every_move_runs_and_hands_over() {
         assert!(old.looped.is_none() && !old.playing, "{kind:?}: the outgoing stopped and let go");
         assert!((s.crossfader - if from == 0 { 1.0 } else { 0.0 }).abs() < 1e-3, "{kind:?}: the fader across");
         assert!(old.eq.iter().all(|k| (k - 0.5).abs() < 1e-3) && (old.filter - 0.5).abs() < 1e-3, "{kind:?}: the outgoing put back flat");
-        eprintln!("{:16} made and handed over", kind.word());
+        let shots = d.sounds_fired() - fired;
+        let want = match kind {
+            Transition::Riser | Transition::NoiseSweep => 2,
+            Transition::Hydrant => 1,
+            _ => 0,
+        };
+        assert_eq!(shots, want, "{kind:?}: the booth's own sounds fired");
+        eprintln!("{:16} made and handed over ({shots} sounds)", kind.word());
     }
 }

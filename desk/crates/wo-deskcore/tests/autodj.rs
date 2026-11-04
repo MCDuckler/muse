@@ -33,7 +33,15 @@ fn a_roll_planned_made_and_handed_over() {
     assert!(until(&mut d, 15.0, |d| d.snapshot().mix.is_some()), "nothing planned");
     let m = d.snapshot().mix.unwrap();
     assert_eq!((m.from, m.to), (0, 1));
-    assert_eq!((m.kind, m.bars), (Transition::Roll, 8), "in key with a drop to land on, bold: a roll");
+    // the planner's choice among every move that fits (with chance in it), with its words
+    let options = d.mix_options();
+    assert!(options.len() > 5 && options[0].0 == m.kind, "the planner's options, best first: {options:?}");
+    assert!(!m.why.is_empty(), "why it was chosen");
+    assert!(options.iter().any(|o| o.0 == Transition::Roll), "in key with a drop to land on: a roll is one of them");
+    // a hand on the plan: the roll
+    d.choose_move(Transition::Roll, Some(8));
+    let m = d.snapshot().mix.unwrap();
+    assert_eq!((m.kind, m.bars), (Transition::Roll, 8));
     assert!(!d.snapshot().decks[1].playing, "the incoming waits, parked");
 
     d.mix_now();

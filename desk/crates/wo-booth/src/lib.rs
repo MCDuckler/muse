@@ -4,6 +4,7 @@
 pub mod grid;
 pub mod hands;
 pub mod mix;
+pub mod planner;
 pub mod steps;
 
 pub use grid::Grid;

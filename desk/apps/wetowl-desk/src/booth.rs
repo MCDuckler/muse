@@ -1122,11 +1122,11 @@ impl App {
         p.rect(card, CornerRadius::same(t::R_PAD), white(0.035), Stroke::new(1.0, white(0.06)), StrokeKind::Inside);
         let c = card.shrink(12.0);
         let master = s.decks.iter().position(|d| d.master).unwrap_or(0);
-        let (from, to) = s.mix.map(|m| (m.from, m.to)).unwrap_or((master, 1 - master));
+        let (from, to) = s.mix.as_ref().map(|m| (m.from, m.to)).unwrap_or((master, 1 - master));
         let a = kit::deck_chip(p, pos2(c.left(), c.top() + 9.0), from);
         crate::ui::icons::paint(p, Rect::from_center_size(pos2(a.right() + 12.0, c.top() + 9.0), vec2(12.0, 12.0)), Icon::ChevronRight, t::muted());
         let b = kit::deck_chip(p, pos2(a.right() + 24.0, c.top() + 9.0), to);
-        let (what, status) = match (s.auto, s.mix) {
+        let (what, status) = match (s.auto, s.mix.clone()) {
             (false, _) => ("Paused".to_owned(), "".to_owned()),
             (true, None) => ("Listening".to_owned(), if s.decks[master].playing { "planning…" } else { "play a deck" }.to_owned()),
             (true, Some(m)) => (
@@ -1138,12 +1138,20 @@ impl App {
         kit::clipped(p, pos2(b.right() + 10.0, c.top() + 9.0), &what, 13.0, "semi", t::text(), st.left() - b.right() - 20.0);
         // the mix as a timeline: the two levels crossing over the bars, the bass changing
         // hands, a playhead
+        // why the planner chose it, in its words
+        let why = s.mix.as_ref().map(|m| m.why.clone()).filter(|w| !w.is_empty() && s.auto);
+        let mut top = c.top() + 26.0;
+        if let Some(w) = &why {
+            kit::clipped(p, pos2(c.left(), c.top() + 28.0), w, 11.5, "", t::label(), c.width());
+            ui.interact(Rect::from_min_size(pos2(c.left(), c.top()), vec2(c.width(), 36.0)), ui.scope_id().with("why"), Sense::hover()).on_hover_text(w.as_str());
+            top += 16.0;
+        }
         let buttons_y = c.bottom() - 30.0;
-        let tl = Rect::from_min_max(pos2(c.left(), c.top() + 26.0), pos2(c.right(), buttons_y - 12.0));
+        let tl = Rect::from_min_max(pos2(c.left(), top), pos2(c.right(), buttons_y - 12.0));
         if tl.height() >= 30.0 {
             self.timeline(ui, p, tl, s, from, to);
         }
-        let planned = s.mix.is_some_and(|m| !m.mixing);
+        let planned = s.mix.as_ref().is_some_and(|m| !m.mixing);
         let bw = (c.width() - 16.0) / 3.0;
         let at = |i: f32| Rect::from_min_size(pos2(c.left() + i * (bw + 8.0), buttons_y), vec2(bw, 30.0));
         if Btn::new("Mix now").icon(Icon::Next).enabled(planned && s.auto).size(11.0).show(ui, p, at(0.0), "mix-now").on_hover_text("Start the mix on the next bar  (M)").clicked() {
@@ -1182,7 +1190,7 @@ impl App {
     /// bass's change of hands, the bars, and where it is.
     fn timeline(&self, ui: &Ui, p: &Painter, r: Rect, s: &Snapshot, from: usize, to: usize) {
         p.rect_filled(r, CornerRadius::same(t::R_CONTROL), Color32::from_black_alpha(60));
-        let Some(m) = s.mix.filter(|_| s.auto) else {
+        let Some(m) = s.mix.clone().filter(|_| s.auto) else {
             let say = if s.auto { "Each mix chosen from key, tempo and the phrases" } else { "The Auto DJ is paused: the decks are yours" };
             kit::hint(p, r.center(), Align2::CENTER_CENTER, say);
             return;
@@ -1223,7 +1231,9 @@ impl App {
         if let Some(sw) = m.swap_bar {
             let x = r.left() + r.width() * (sw / bars as f64) as f32;
             p.line_segment([pos2(x, r.top() + 4.0), pos2(x, r.bottom() - 4.0)], Stroke::new(1.0, white(0.5 * dim)));
-            label_sized(p, pos2(x + 5.0, r.top() + 4.0), Align2::LEFT_TOP, "Bass", 9.5, alpha_of(t::soft(), dim));
+            // (on the move's last bar the word goes the other side of its line)
+            let (lx, anchor) = if x > r.right() - 40.0 { (x - 5.0, Align2::RIGHT_TOP) } else { (x + 5.0, Align2::LEFT_TOP) };
+            label_sized(p, pos2(lx, r.top() + 4.0), anchor, "Bass", 9.5, alpha_of(t::soft(), dim));
         } else if m.kind == Transition::Cut {
             label_sized(p, pos2(r.left() + 6.0, r.top() + 4.0), Align2::LEFT_TOP, "On the one", 9.5, alpha_of(t::soft(), dim));
         }

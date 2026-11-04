@@ -84,7 +84,7 @@ pub struct DeckView {
 }
 
 /// The Auto DJ's next transition, planned or under way.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct MixView {
     pub from: usize,
     pub to: usize,
@@ -97,6 +97,8 @@ pub struct MixView {
     pub starts_in: f64,
     /// Where its bass changes hands, bars in (the transitions that swap it).
     pub swap_bar: Option<f64>,
+    /// Why the planner chose it, in its words.
+    pub why: String,
 }
 
 #[derive(Clone, Debug)]
@@ -149,6 +151,8 @@ struct Slot {
     echo: (f32, f32),
     gate: (f32, u32),
     shift: f32,
+    /// Where the record sings (the house's vocal map), for the planner.
+    vocals: Option<wo_booth::planner::VocalMap>,
 }
 
 /// A transition the Auto DJ has planned (and, once `started`, is making).
@@ -172,6 +176,9 @@ struct Plan {
     progress: f64,
     /// Its steps and how far through them (transition.rs).
     run: transition::Running,
+    /// Every move the planner considered, best first, and why each.
+    options: Vec<wo_booth::planner::MixPlan>,
+    why: String,
 }
 
 pub struct Desk {
@@ -217,6 +224,10 @@ pub struct Desk {
     full_law: bool,
     /// The booth's own sounds.
     fx: fx::Fx,
+    /// The moves made, the last last (the planner keeps from repeating itself).
+    recent: Vec<Transition>,
+    /// The planner's dice.
+    dice: u64,
 }
 
 /// An offline engine rendered in real time on its own thread: a computer with no
@@ -288,6 +299,7 @@ impl Desk {
             echo: (0.0, 1.0),
             gate: (0.0, 2),
             shift: 0.0,
+            vocals: None,
         };
         let (done_tx, done_rx) = mpsc::channel();
         let mut desk = Desk {
@@ -321,6 +333,8 @@ impl Desk {
             covers: Default::default(),
             full_law: false,
             fx: Default::default(),
+            recent: vec![],
+            dice: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_nanos() as u64) | 1,
         };
         // the Desk's own saved sign-in; WO_APP_SIGN_IN=1 borrows the WetOwl app's for
         // this run only (development, screenshots)
@@ -470,6 +484,11 @@ impl Desk {
         s.timing = timing;
         s.wave = wave;
         s.loader = Some(loader);
+        s.vocals = None;
+        if s.shift != 0.0 {
+            s.shift = 0.0;
+            self.engine.deck(DeckId::new(slot).unwrap()).set_shift(0.0);
+        }
         self.reset_stems(slot);
         self.apply_levels();
         let deck = self.engine.deck(DeckId::new(slot).unwrap());
@@ -556,13 +575,50 @@ impl Desk {
             return;
         }
         let pitch = fd.read().rate.max(0.01);
-        let (kind, bars) = wo_booth::mix::choose(Some(ft), Some(tt), self.style, pitch);
+        let heard = fd.position();
+        let mut dice = self.dice;
+        let mut chance = move || {
+            // xorshift64*
+            dice ^= dice >> 12;
+            dice ^= dice << 25;
+            dice ^= dice >> 27;
+            (dice.wrapping_mul(0x2545F4914F6CDD1D) >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let options = wo_booth::planner::options(
+            wo_booth::planner::MixSide {
+                timing: ft,
+                vocals: self.slots[from].vocals.as_ref(),
+                stems: self.slots[from].stems.state.ready(),
+                pitch,
+                fx: true,
+                position: Some(heard),
+            },
+            wo_booth::planner::MixSide {
+                timing: tt,
+                vocals: self.slots[to].vocals.as_ref(),
+                stems: self.slots[to].stems.state.ready(),
+                pitch: 1.0,
+                fx: true,
+                position: None,
+            },
+            self.style,
+            None,
+            &self.recent,
+            wo_booth::planner::Can { sound: true, gate: true },
+            &|_| 0.0,
+            &mut chance,
+        );
+        self.dice = self.dice.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) | 1;
+        let best = options[0].clone();
+        let (kind, bars) = (best.kind, best.bars.max(1));
         let bar = ft.bar().unwrap_or(60.0 / self.slots[from].record.bpm.max(60.0) * 4.0);
         let length = bars as f64 * bar;
-        let mut out = wo_booth::mix::clear_of_drops(ft, wo_booth::mix::out_point(ft, length), length);
+        let mut out = match best.out_at {
+            Some(at) => ft.on_grid(at, 4),
+            None => wo_booth::mix::clear_of_drops(ft, wo_booth::mix::out_point(ft, length), length),
+        };
         // a plan for a place already behind the record goes at the soonest marker
         // there is time for
-        let heard = fd.position();
         if out < heard + bar {
             out = ft.markers.iter().copied().find(|&m| m >= heard + bar).unwrap_or_else(|| ft.on_grid(heard + bar, 4));
         }
@@ -571,13 +627,22 @@ impl Desk {
             _ => false,
         };
         let on_the_drop = self.style == Style::Bold && !tt.drops.is_empty();
-        let park = if in_step { wo_booth::mix::in_point(tt, bars, on_the_drop) } else { tt.first_downbeat.unwrap_or(0.0) };
+        let park = match (in_step, best.in_at) {
+            (true, Some(at)) => at,
+            (true, None) => wo_booth::mix::in_point(tt, bars, on_the_drop),
+            (false, _) => tt.first_downbeat.unwrap_or(0.0),
+        };
+        if best.shift != 0.0 {
+            self.slots[to].shift = best.shift as f32;
+            self.engine.deck(DeckId::new(to).unwrap()).set_shift(best.shift);
+        }
         let td = self.engine.deck(DeckId::new(to).unwrap());
         td.play(false);
         td.unsync();
         td.seek(park);
         let run = transition::Running::new(kind, bars);
-        self.mix = Some(Plan { from, to, kind, bars, out, length, in_step, turn: self.load_gen[to], started: false, begun: None, progress: 0.0, run });
+        let why = best.why.clone();
+        self.mix = Some(Plan { from, to, kind, bars, out, length, in_step, turn: self.load_gen[to], started: false, begun: None, progress: 0.0, run, options, why });
         // the incoming waits silent, its bands and stems already where the move opens
         // them: nothing happens to the outgoing until the move starts
         self.open_move();
@@ -586,6 +651,12 @@ impl Desk {
     /// The transition is over: the old record stops and is put back to flat, the new
     /// one is the master, and the record after goes on the deck just freed.
     fn finish_mix(&mut self, from: usize, to: usize) {
+        if let Some(m) = self.mix.as_ref() {
+            self.recent.push(m.kind);
+            if self.recent.len() > 8 {
+                self.recent.remove(0);
+            }
+        }
         self.mix = None;
         self.engine.deck(DeckId::new(from).unwrap()).play(false);
         self.plain(from);
@@ -712,6 +783,7 @@ impl Desk {
                     bar: m.progress * m.bars as f64,
                     starts_in: (m.out - heard).max(0.0),
                     swap_bar: transition::bass_swap_bar(m.kind, m.bars),
+                    why: m.why.clone(),
                 }
             }),
             auto: self.auto,
@@ -1020,6 +1092,7 @@ impl Desk {
                     let s = &mut self.slots[slot];
                     s.hands = hands;
                     s.timing = a.timing;
+                    s.vocals = a.vocals;
                     if let Some(k) = a.camelot {
                         s.record.key = k;
                     }

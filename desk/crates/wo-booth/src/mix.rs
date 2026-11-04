@@ -170,6 +170,8 @@ pub struct Timing {
     pub grid: Grid,
     pub bpm: Option<f64>,
     pub camelot: Option<String>,
+    /// How sure the house is of the key: the margin it won by, 0..1 (0: not known).
+    pub key_confidence: f64,
     /// "cold", "fade", or "" when it could not be said.
     pub ends: String,
     pub duration: f64,

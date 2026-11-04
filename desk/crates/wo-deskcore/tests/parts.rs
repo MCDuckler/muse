@@ -64,6 +64,8 @@ fn parts_reach_the_engine() {
     assert_eq!(d.part(0).1, Stems::None);
     d.set_part(0, Part::Drums);
     assert_eq!(d.part(0), (Part::Drums, Stems::None));
+    // (somewhere loud: the synthesised record holds its breath for a second before its drop)
+    d.seek_to(0, 30.0);
     assert!(loudness(&mut d, 0) > 0.05, "a synthesised record with no stems still sounds whole");
     d.set_part(0, Part::Whole);
 

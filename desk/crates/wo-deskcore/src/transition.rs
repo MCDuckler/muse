@@ -66,6 +66,17 @@ pub(crate) fn knob_of_db(db: f32) -> f32 {
 }
 
 impl Desk {
+    /// Every move the planner considered for the transition planned, best first: the
+    /// kind, its bars, why (the plan view's choices).
+    pub fn mix_options(&self) -> Vec<(Transition, u32, String)> {
+        self.mix.as_ref().map(|m| m.options.iter().map(|o| (o.kind, o.bars, o.why.clone())).collect()).unwrap_or_default()
+    }
+
+    /// How many of the booth's own sounds have been fired.
+    pub fn sounds_fired(&self) -> u64 {
+        self.fx.fired
+    }
+
     /// Another move for the transition planned (a hand on the plan): `kind` over `bars`
     /// (or the bars planned), from the same out point. Not once it has started.
     pub fn choose_move(&mut self, kind: Transition, bars: Option<u32>) {
@@ -105,6 +116,14 @@ impl Desk {
         }
         if let Some(l) = steps::stems_at(&self.mix.as_ref().unwrap().run.steps, Side::To, 0.0) {
             self.stems_mix(to, Some(l));
+        }
+        // the move's own sounds, rendered now so each is there when its step comes
+        let m = self.mix.as_ref().unwrap();
+        let shots: Vec<steps::FxShot> = m.run.steps.iter().filter_map(|s| s.fx).collect();
+        if !shots.is_empty() {
+            let rate = self.engine.deck(DeckId::new(m.from).unwrap()).read().rate.max(0.01);
+            let (move_s, beat) = (m.length / rate, self.spb(m.from) / rate);
+            self.fx.prepare(&shots, move_s, beat);
         }
     }
 

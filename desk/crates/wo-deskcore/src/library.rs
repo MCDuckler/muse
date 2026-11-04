@@ -46,6 +46,8 @@ pub(crate) struct Analysed {
     pub hand: HandPads,
     pub camelot: Option<String>,
     pub bpm: Option<f64>,
+    /// Where it sings (none where the house has not mapped it).
+    pub vocals: Option<wo_booth::planner::VocalMap>,
 }
 
 /// What a worker thread hands back.
@@ -122,5 +124,6 @@ pub(crate) fn cover(house: &House, id: i64) -> Result<Picture, String> {
 pub(crate) fn analyse(house: &House, id: i64) -> Result<Analysed, String> {
     let a = house.analysis(id).map_err(|e| e.to_string())?;
     let hand = house.hand_pads(id).unwrap_or_default();
-    Ok(Analysed { grid: a.grid(), timing: a.timing(), auto: a.auto_pads(), hand, camelot: a.camelot.clone(), bpm: a.bpm })
+    let vocals = house.vocals(id).ok();
+    Ok(Analysed { grid: a.grid(), timing: a.timing(), auto: a.auto_pads(), hand, camelot: a.camelot.clone(), bpm: a.bpm, vocals })
 }
