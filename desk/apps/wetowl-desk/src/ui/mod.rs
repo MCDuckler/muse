@@ -189,3 +189,29 @@ impl Toasts {
         ctx.request_repaint_after(Duration::from_millis(50));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The booth's panels inside the window and clear of each other, from the smallest laid
+    /// out to 4K.
+    #[test]
+    fn the_layout_fits_every_window() {
+        for size in [MIN, vec2(1440.0, 860.0), vec2(1920.0, 1080.0), vec2(2560.0, 1440.0), vec2(3840.0, 2160.0)] {
+            let full = Rect::from_min_size(pos2(0.0, 0.0), size);
+            let l = layout(full);
+            let panels = [("top", l.top), ("overview", l.overview), ("waves", l.waves), ("deck A", l.decks[0]), ("deck B", l.decks[1]), ("mixer", l.mixer), ("crate", l.crate_), ("stage", l.stage), ("auto", l.auto)];
+            for (name, r) in panels {
+                assert!(full.contains_rect(r), "{name} leaves the window at {size:?}: {r:?}");
+                assert!(r.width() >= 200.0 && r.height() >= 48.0, "{name} too small at {size:?}: {r:?}");
+            }
+            for (i, (a, ra)) in panels.iter().enumerate() {
+                for (b, rb) in &panels[i + 1..] {
+                    assert!(!ra.shrink(0.5).intersects(rb.shrink(0.5)), "{a} and {b} overlap at {size:?}");
+                }
+            }
+            assert!(full.contains_rect(l.page) && l.page.top() >= l.overview.bottom(), "the Show page's room at {size:?}");
+        }
+    }
+}

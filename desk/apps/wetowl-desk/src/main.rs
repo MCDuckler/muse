@@ -2,7 +2,7 @@
 //! the live stage, blurred, driven by wo-deskcore. `--bench 30 [--out DIR]` measures it;
 //! `--stage` opens the show's window from the start; `--page show` opens on the Show page,
 //! `--page kit` on the kit's gallery (every control in every state); `--overlay keys` or
-//! `--overlay settings` opens with that over it, `--size 1440x860` at that size (screenshots).
+//! `--overlay settings` (or `milk`: MilkDrop's library) opens with that over it, `--size 1440x860` at that size (screenshots).
 //!
 //! The Desk keeps time on a thread of its own (the Auto DJ, the controllers, the stage's
 //! frames), so the set goes on while the window is hidden — behind a full-screen stage,
@@ -14,19 +14,20 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Color32, ColorImage, CornerRadius, Rect, TextureHandle, TextureOptions, pos2};
+use eframe::egui::{self, Color32, ColorImage, Rect, TextureHandle, TextureOptions, pos2};
 use wo_deskcore::bench::Bench;
-use wo_deskcore::theme;
 use wo_deskcore::{Desk, Prefs, ShowHand};
 
 mod booth;
 mod gallery;
 mod overlays;
 mod paint;
+#[cfg(test)]
+mod pages;
 mod show;
 mod ui;
 
-use paint::{col, fonts};
+use paint::fonts;
 use ui::motion::{self, Ease};
 use ui::tokens::Tone;
 
@@ -152,20 +153,17 @@ impl Glass {
         // the still a little dimmer: no show is on
         let light = light * if self.on_still { 0.85 } else { 1.0 };
         let tint = |a: f32| Color32::from_rgba_unmultiplied((255.0 * light) as u8, (255.0 * light) as u8, (255.0 * light) as u8, (255.0 * a) as u8);
-        p.image(self.tex[1 - self.front].id(), full, uv, tint(1.0));
+        // the light before only while the new one fades in: each full-window picture is
+        // fill the GPU shares with the stage
+        if k < 1.0 {
+            p.image(self.tex[1 - self.front].id(), full, uv, tint(1.0));
+        }
         p.image(self.tex[self.front].id(), full, uv, tint(k));
     }
 }
 
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        fonts(&cc.egui_ctx);
-        ui::style(&cc.egui_ctx);
-        let prefs = Prefs::read();
-        motion::set_reduced(&cc.egui_ctx, prefs.reduced_motion);
-        let tex = |name: &str, b: wo_deskcore::Backdrop| {
-            cc.egui_ctx.load_texture(name, ColorImage::from_rgba_unmultiplied([b.width as usize, b.height as usize], &b.rgba), TextureOptions::LINEAR)
-        };
         // --bench plays and mixes by itself; a desk opened by hand stays quiet
         let bench = Bench::from_args(if glow() { "egui-glow" } else { "egui-wgpu" });
         let mut desk = Desk::open(bench.is_some());
@@ -173,13 +171,43 @@ impl App {
         if std::env::args().any(|a| a == "--stage") {
             desk.open_stage();
         }
-        let desk = Arc::new(Mutex::new(desk));
         let arg = |name: &str| std::env::args().collect::<Vec<_>>().windows(2).find(|w| w[0] == name).map(|w| w[1].clone());
+        let mut app = App::with(&cc.egui_ctx, desk, bench, true);
+        // --page show: open on the Show page (screenshots, a show-only night)
+        app.page = match arg("--page").as_deref() {
+            Some("show") => show::Page::Show,
+            Some("kit") => show::Page::Kit,
+            _ => show::Page::Booth,
+        };
+        app.overlay = match arg("--overlay").as_deref() {
+            Some("keys") => Some(Overlay::Keys),
+            Some("settings") => Some(Overlay::Settings),
+            _ => None,
+        };
+        // --overlay milk: MilkDrop's library open on the Show page (a Rust stage's)
+        if arg("--overlay").as_deref() == Some("milk") {
+            app.page = show::Page::Show;
+            app.milk_list = true;
+        }
+        app
+    }
+
+    /// The Desk's window over `desk`, its clock on its own thread or (`clock` false: tests)
+    /// ticked by whoever draws it.
+    fn with(ctx: &egui::Context, desk: Desk, bench: Option<Bench>, clock: bool) -> Self {
+        fonts(ctx);
+        ui::style(ctx);
+        let prefs = Prefs::read();
+        motion::set_reduced(ctx, prefs.reduced_motion);
+        let tex = |name: &str, b: wo_deskcore::Backdrop| {
+            ctx.load_texture(name, ColorImage::from_rgba_unmultiplied([b.width as usize, b.height as usize], &b.rgba), TextureOptions::LINEAR)
+        };
+        let desk = Arc::new(Mutex::new(desk));
         App {
-            clock: Some(keep_time(desk.clone(), cc.egui_ctx.clone())),
+            clock: clock.then(|| keep_time(desk.clone(), ctx.clone())),
             desk,
             stage_pic: None,
-            glass: Glass::new(&cc.egui_ctx),
+            glass: Glass::new(ctx),
             ball: tex("ball", wo_deskcore::backdrop::ball()),
             search: String::new(),
             bench,
@@ -191,12 +219,7 @@ impl App {
             form: (wo_house::DEFAULT_SERVER.to_owned(), String::new(), String::new()),
             app_sign_in: Desk::app_sign_in_here(),
             cursor: 0,
-            // --page show: open on the Show page (screenshots, a show-only night)
-            page: match arg("--page").as_deref() {
-                Some("show") => show::Page::Show,
-                Some("kit") => show::Page::Kit,
-                _ => show::Page::Booth,
-            },
+            page: show::Page::Booth,
             said: (0, None),
             strobe: false,
             milk_list: false,
@@ -204,11 +227,7 @@ impl App {
             prefs,
             sleeves: Default::default(),
             toasts: Default::default(),
-            overlay: match arg("--overlay").as_deref() {
-                Some("keys") => Some(Overlay::Keys),
-                Some("settings") => Some(Overlay::Settings),
-                _ => None,
-            },
+            overlay: None,
             overlay_was: None,
             sort: (Sort::Fits, false),
             pad_fired: [[0; 8]; 2],
@@ -258,6 +277,38 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let t0 = Instant::now();
+        let (full, moving, stage) = self.frame(ui);
+        let work = t0.elapsed().as_secs_f32() * 1000.0;
+        if let Some(b) = &mut self.bench {
+            b.size = (full.width() as u32, full.height() as u32);
+            if self.shot.is_none() && b.frame(work) {
+                let (tx, rx) = mpsc::channel();
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |img| {
+                    let _ = tx.send(img);
+                })));
+                self.shot = Some(rx);
+            }
+            if let Some(rx) = &self.shot
+                && let Ok(img) = rx.try_recv() {
+                    let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+                    println!("{}", b.finish(Some((img.size[0] as u32, img.size[1] as u32, &rgba))));
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            ui.ctx().request_repaint();
+        } else if moving {
+            ui.ctx().request_repaint();
+        } else {
+            ui.ctx().request_repaint_after(Duration::from_millis(if stage { 100 } else { 250 }));
+        }
+    }
+}
+
+impl App {
+    /// One frame of the window: the keys, the pictures, the page and what is over it. The
+    /// window's rect, whether anything moves (a frame wanted at once) and whether a stage
+    /// shows (a picture ten times a second).
+    pub(crate) fn frame(&mut self, ui: &mut egui::Ui) -> (Rect, bool, bool) {
+        let t0 = Instant::now();
         ui::fit(ui.ctx());
         let shared = self.desk.clone();
         let mut guard = shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -286,7 +337,7 @@ impl eframe::App for App {
         let s = desk.snapshot();
         let full = ui.max_rect();
         let p = ui.painter().clone();
-        p.rect_filled(full, CornerRadius::ZERO, col(theme::GROUND));
+        // (the glass is opaque: no ground under it)
         self.glass.draw(ui.ctx(), &p, full, self.prefs.backdrop_light);
         if self.page == show::Page::Kit {
             gallery::draw(self, ui, &p, full);
@@ -300,31 +351,10 @@ impl eframe::App for App {
         let moving = s.decks.iter().any(|d| d.playing || d.decoded < 1.0) || s.mix.is_some_and(|m| m.mixing) || desk.library().loading || desk.library().signing_in;
         let stage = desk.stage().stages > 0;
         drop(guard);
-        let work = t0.elapsed().as_secs_f32() * 1000.0;
         if std::env::var_os("WO_UI_TIMES").is_some() {
-            eprintln!("ui: {work:.2} ms, {locked:.2} of it waiting for the Desk");
+            eprintln!("ui: {:.2} ms, {locked:.2} of it waiting for the Desk", t0.elapsed().as_secs_f32() * 1000.0);
         }
-        if let Some(b) = &mut self.bench {
-            b.size = (full.width() as u32, full.height() as u32);
-            if self.shot.is_none() && b.frame(work) {
-                let (tx, rx) = mpsc::channel();
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |img| {
-                    let _ = tx.send(img);
-                })));
-                self.shot = Some(rx);
-            }
-            if let Some(rx) = &self.shot
-                && let Ok(img) = rx.try_recv() {
-                    let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
-                    println!("{}", b.finish(Some((img.size[0] as u32, img.size[1] as u32, &rgba))));
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            ui.ctx().request_repaint();
-        } else if moving {
-            ui.ctx().request_repaint();
-        } else {
-            ui.ctx().request_repaint_after(Duration::from_millis(if stage { 100 } else { 250 }));
-        }
+        (full, moving, stage)
     }
 }
 

@@ -807,7 +807,7 @@ impl App {
                 }
                 let y = rr.center().y + 4.0 * (1.0 - k);
                 let at = |c: usize| rr.left() + cx[c];
-                kit::text(&p, pos2(at(0), y), Align2::LEFT_CENTER, &(i + 1).to_string(), 11.0, "mono", t::faint());
+                kit::text(&p, pos2(at(0), y), Align2::LEFT_CENTER, &(i + 1).to_string(), 11.0, "mono", t::label());
                 let sl = Rect::from_min_size(pos2(at(1), y - 14.0), vec2(28.0, 28.0));
                 let tex = self.sleeves.of(&ctx, desk, &row.record);
                 kit::sleeve(ui, &p, sl, tex, &row.record.initials(), col(theme::sleeve(row.record.id)), 4, ("row-sleeve", row.record.id));

@@ -160,7 +160,7 @@ impl App {
             let kx = motion::spring(ui.ctx(), ui.scope_id().with("phrase"), pr.width() * k, 0.2);
             p.rect_filled(Rect::from_min_size(pr.min, vec2(kx, 4.0)), CornerRadius::same(2), t::soft());
             kit::text(p, pos2(pr.left() - 10.0, bar.center().y), Align2::RIGHT_CENTER, &format!("{} bar{} on", b.bars_on, if b.bars_on == 1 { "" } else { "s" }), 11.5, "mono", t::muted());
-            let nl = label_sized(p, pos2(bar.left() + 14.0, bar.center().y), Align2::LEFT_CENTER, "Next", 10.5, t::label());
+            let nl = label_sized(p, pos2(bar.left() + 14.0, bar.center().y), Align2::LEFT_CENTER, "Next", 10.5, t::muted());
             let next = b.coming.first().map_or("the director's choice", |c| c.0.as_str());
             kit::clipped(p, pos2(nl.right() + 10.0, bar.center().y), next, 13.0, "", t::text(), pr.left() - 120.0 - nl.right());
         }
@@ -539,8 +539,14 @@ impl App {
                     let heart = Rect::from_center_size(pos2(rr.left() + 24.0, rr.center().y), vec2(24.0, 24.0));
                     let hr = ui.interact(heart, resp.id.with("fave"), Sense::click()).on_hover_text("A favourite: comes more often");
                     crate::ui::icons::paint(&p, heart.shrink(5.0), if row.favourite { Icon::HeartFull } else { Icon::Heart }, if row.favourite { t::hot() } else if hr.hovered() { t::soft() } else { t::faint() });
+                    // switching one off: on the row under the pointer, or where it is off
                     let off = Rect::from_center_size(pos2(rr.right() - 34.0, rr.center().y), vec2(40.0, 20.0));
-                    let or = kit::chip(ui, &p, off, "Off", row.off, Tone::Danger, true, ("off", &row.path)).on_hover_text("Never put on by the director");
+                    let shown = row.off || resp.hovered() || ui.rect_contains_pointer(off);
+                    let or = if shown {
+                        kit::chip(ui, &p, off, "Off", row.off, Tone::Danger, true, ("off", &row.path)).on_hover_text("Never put on by the director")
+                    } else {
+                        ui.interact(off, resp.id.with("off-hidden"), Sense::hover())
+                    };
                     let ink = if row.off { t::faint() } else if row.on { t::high() } else { t::text() };
                     kit::clipped(&p, pos2(rr.left() + 44.0, rr.center().y), &row.name, 13.0, "", ink, off.left() - rr.left() - 56.0);
                     if hr.clicked() {

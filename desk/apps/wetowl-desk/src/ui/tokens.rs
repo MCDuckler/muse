@@ -125,3 +125,85 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let (a, b) = (a.to_srgba_unmultiplied(), b.to_srgba_unmultiplied());
     Color32::from_rgba_unmultiplied(l(a[0], b[0]), l(a[1], b[1]), l(a[2], b[2]), l(a[3], b[3]))
 }
+
+/// Contrast (plans/wetowl-desk-ui-overhaul.md §8): every text the kit draws, at 4.5:1 over
+/// the brightest the glass gets — a white stage frame, blurred, dimmed and under the scrim —
+/// and over the stage picture itself where text sits on a glass tab.
+#[cfg(test)]
+mod contrast {
+    use super::*;
+
+    /// `top` (with its alpha) over the opaque `under`.
+    fn over(top: Color32, under: [f32; 3]) -> [f32; 3] {
+        let [r, g, b, a] = top.to_srgba_unmultiplied();
+        let a = a as f32 / 255.0;
+        [r as f32 * a + under[0] * (1.0 - a), g as f32 * a + under[1] * (1.0 - a), b as f32 * a + under[2] * (1.0 - a)]
+    }
+
+    fn luminance(c: [f32; 3]) -> f32 {
+        let lin = |v: f32| {
+            let v = v / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+    }
+
+    fn ratio(fg: Color32, bg: [f32; 3]) -> f32 {
+        let f = luminance(over(fg, bg));
+        let b = luminance(bg);
+        (f.max(b) + 0.05) / (f.min(b) + 0.05)
+    }
+
+    /// The glass at its brightest: what backdrop::glass makes of white, at full light.
+    fn brightest_glass() -> [f32; 3] {
+        let b = wo_deskcore::backdrop::live(&[255u8; 4 * 64 * 36], 64, 36, 32, 18).unwrap();
+        let mut most = [0.0f32; 3];
+        for px in b.rgba.chunks(4) {
+            let c = [px[0] as f32, px[1] as f32, px[2] as f32];
+            if luminance(c) > luminance(most) {
+                most = c;
+            }
+        }
+        most
+    }
+
+    #[test]
+    fn every_text_reads_over_the_brightest_glass() {
+        let glass = brightest_glass();
+        assert!(luminance(glass) > 0.02, "the glass is lit: {glass:?}");
+        let panel = over(col(theme::GLASS_PANEL), glass);
+        let dense = over(col(theme::GLASS_DENSE), glass);
+        let picture_white = [255.0, 255.0, 255.0];
+        let tab = over(Color32::from_rgba_unmultiplied(14, 15, 19, 214), picture_white);
+        let row_on = over(Color32::from_white_alpha(18), dense);
+        let button = over(fill_rest(), panel);
+        let toast = [20.0, 21.0, 27.0];
+        let mut fails = vec![];
+        let mut check = |what: &str, fg: Color32, bg: [f32; 3]| {
+            let r = ratio(fg, bg);
+            if r < 4.5 {
+                fails.push(format!("{what}: {r:.2}:1"));
+            }
+        };
+        for (where_, bg) in [("panel", panel), ("dense panel", dense)] {
+            for (name, c) in [("text", text()), ("soft", soft()), ("muted", muted()), ("label", label()), ("faint", faint()), ("tint A", tint(0)), ("tint B", tint(1)), ("ok", ok()), ("warm", warm()), ("hot", hot())] {
+                check(&format!("{name} on the {where_}"), c, bg);
+            }
+        }
+        // on a lit row the faint steps up to the label (the crate's numbers)
+        for (name, c) in [("text", text()), ("muted", muted()), ("label", label())] {
+            check(&format!("{name} on the crate's cursor row"), c, row_on);
+        }
+        // over a picture, labels on glass tabs step up to muted
+        for (name, c) in [("text", text()), ("soft", soft()), ("muted", muted()), ("warm", warm())] {
+            check(&format!("{name} on a glass tab over a white picture"), c, tab);
+        }
+        check("a button's word", soft(), button);
+        for tone in [Tone::Neutral, Tone::Deck(0), Tone::Deck(1), Tone::Ok, Tone::Warm, Tone::Danger] {
+            let (fill, _, ink) = tone.lit();
+            check(&format!("{tone:?} lit"), ink, over(fill, panel));
+        }
+        check("a toast", text(), toast);
+        assert!(fails.is_empty(), "under 4.5:1 —\n{}", fails.join("\n"));
+    }
+}

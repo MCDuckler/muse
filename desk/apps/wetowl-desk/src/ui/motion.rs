@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn a_tween_takes_its_time_and_lands() {
         let ctx = Context::default();
-        let id = Id::new("x");
+        let id = Id::unique("x");
         let mut v = 0.0;
         frame(&ctx, 0.0, |c| v = tween(c, id, 0.0, 0.16, Ease::Out));
         assert_eq!(v, 0.0);
@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn a_spring_settles_without_overshoot() {
         let ctx = Context::default();
-        let id = Id::new("s");
+        let id = Id::unique("s");
         let mut v = 0.0;
         frame(&ctx, 0.0, |c| v = spring(c, id, 0.0, 0.2));
         let mut most: f32 = 0.0;
