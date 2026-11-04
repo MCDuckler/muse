@@ -16,6 +16,7 @@ pub mod covers;
 pub mod library;
 pub mod milk;
 pub mod autodj;
+pub mod plan_view;
 mod fx;
 mod transition;
 pub mod parts;
@@ -180,6 +181,8 @@ struct Plan {
     /// Every move the planner considered, best first, and why each.
     options: Vec<wo_booth::planner::MixPlan>,
     why: String,
+    /// Where the incoming waits, parked (its source time).
+    park: f64,
 }
 
 pub struct Desk {
@@ -653,7 +656,7 @@ impl Desk {
         td.seek(park);
         let run = transition::Running::new(kind, bars);
         let why = best.why.clone();
-        self.mix = Some(Plan { from, to, kind, bars, out, length, in_step, turn: self.load_gen[to], started: false, begun: None, progress: 0.0, run, options, why });
+        self.mix = Some(Plan { from, to, kind, bars, out, length, in_step, turn: self.load_gen[to], started: false, begun: None, progress: 0.0, run, options, why, park });
         // the incoming waits silent, its bands and stems already where the move opens
         // them: nothing happens to the outgoing until the move starts
         self.open_move();

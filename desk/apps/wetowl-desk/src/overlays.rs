@@ -12,7 +12,7 @@ use crate::{App, Overlay};
 /// The keys, by where they act.
 const KEYS: [(&str, &[(&str, &str)]); 4] = [
     ("Decks", &[("1 2", "Play A / B"), ("Q W", "Sync A / B"), ("Z X", "Start A / B in step"), ("F G", "The bass off and on, A / B"), ("[ ]", "A 16-beat loop on A / B")]),
-    ("Mixer and Auto DJ", &[("← →", "The crossfader"), ("⇧← ⇧→", "Nudge the master"), ("A", "The Auto DJ on and off"), ("M Space", "Mix now"), ("S N", "Not that: another record next")]),
+    ("Mixer and Auto DJ", &[("← →", "The crossfader"), ("⇧← ⇧→", "Nudge the master"), ("A", "The Auto DJ on and off"), ("M Space", "Mix now"), ("S N", "Not that: another record next"), ("P", "The plan: the move drawn out")]),
     ("Show", &[("K", "The Show page and the booth"), ("H B", "A hit · the blackout"), (", .", "The scene before / after"), ("J", "Mosh into the next"), ("L V", "Hold the scene · freeze")]),
     ("Desk", &[("?", "These keys"), ("Ctrl ,", "The settings"), ("Esc", "Close what is over the page")]),
 ];

@@ -463,6 +463,17 @@ impl House {
         Ok(r.body_mut().read_json()?)
     }
 
+    /// Keeps a hand's cues on a record (PUT /tracks/{id}/cues): `out_ms` / `in_ms`
+    /// (null clears one), `pads` {"1": ms | null | "auto"} — only what the body names
+    /// changes.
+    pub fn set_cues(&self, id: i64, body: &serde_json::Value) -> Result<()> {
+        self.agent
+            .put(format!("{}/tracks/{id}/cues", self.session.server))
+            .header("Authorization", &format!("Bearer {}", self.session.token))
+            .send_json(body)?;
+        Ok(())
+    }
+
     /// What this person thought of the booth's mixes, newest first (the thumbs, the hands
     /// on the plan): for the planner's taste.
     pub fn feedback_list(&self, limit: u32) -> Result<Vec<wo_booth::taste::FeedbackRow>> {

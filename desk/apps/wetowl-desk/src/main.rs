@@ -22,6 +22,7 @@ mod booth;
 mod gallery;
 mod overlays;
 mod paint;
+mod plan;
 #[cfg(test)]
 mod pages;
 mod show;
@@ -63,8 +64,10 @@ pub(crate) struct App {
     shot: Option<mpsc::Receiver<Arc<ColorImage>>>,
     /// CUE held, per deck (CUE acts on press and on release).
     cue_held: [bool; 2],
-    /// The Auto DJ panel's list: what is coming (0) or the log (1).
+    /// The Auto DJ card's tab: the move (0), what is coming (1), the log (2).
     auto_tab: usize,
+    /// The plan view over the waveforms (P).
+    plan_open: bool,
     /// The nudge held, per deck.
     nudge_held: [i8; 2],
     /// The search as typed, when typing last changed it, what the house was last asked.
@@ -186,6 +189,8 @@ impl App {
             Some("settings") => Some(Overlay::Settings),
             _ => None,
         };
+        // --plan: the plan view over the waveforms (screenshots)
+        app.plan_open = std::env::args().any(|a| a == "--plan");
         // --overlay milk: MilkDrop's library open on the Show page (a Rust stage's)
         if arg("--overlay").as_deref() == Some("milk") {
             app.page = show::Page::Show;
@@ -216,6 +221,7 @@ impl App {
             shot: None,
             cue_held: [false; 2],
             auto_tab: 0,
+            plan_open: false,
             nudge_held: [0; 2],
             search_at: None,
             searched: String::new(),
@@ -480,7 +486,7 @@ fn main() -> eframe::Result {
 
 impl App {
     /// The booth's keys, the v1 booth's map: 1 2 play, Q W sync, Z X start in step, F G
-    /// kill the bass, A the Auto DJ, M or Space mix now, S or N not that, ← → the
+    /// kill the bass, A the Auto DJ, M or Space mix now, S or N not that, P the plan, ← → the
     /// crossfader (with shift: nudge the master), [ ] a 16-beat loop, H the show's hit,
     /// B its blackout, ? the keys, ⌘, (Ctrl ,) the settings, Esc closes what is over the page.
     fn key(&mut self, d: &mut Desk, k: egui::Key, m: egui::Modifiers) {
@@ -500,6 +506,7 @@ impl App {
             }
             K::M | K::Space => d.mix_now(),
             K::S | K::N => d.not_that(),
+            K::P => self.plan_open = !self.plan_open,
             K::ArrowLeft | K::ArrowRight => {
                 let dir = if k == K::ArrowLeft { -1.0 } else { 1.0 };
                 if m.shift {
