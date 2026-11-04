@@ -1,0 +1,472 @@
+//! The kit: every control the Desk draws, each owning its look, its states (rest, hover,
+//! pressed, on, disabled) and its motion; panels only place them. Painted by hand over the
+//! glass, as before, but in one place.
+// a painted control takes its place, its value, its look and its id: many arguments
+#![allow(clippy::too_many_arguments)]
+use eframe::egui::{
+    self, Align2, Color32, CornerRadius, FontId, Id, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, TextureId, Ui, epaint::RectShape,
+    pos2, vec2,
+};
+use wo_deskcore::theme;
+
+use super::icons::{self, Icon};
+use super::motion::{self, Ease};
+use super::tokens::{self as t, Tone, mix};
+use crate::paint::{alpha, col, family, label_sized, label_width};
+
+/// A panel: elevation 1, glass (or dense glass for data), its edge and one inner highlight.
+pub fn panel(p: &Painter, r: Rect, dense: bool) {
+    let cr = CornerRadius::same(t::R_PANEL);
+    p.add(t::shadow(1).as_shape(r, cr));
+    let fill = col(if dense { theme::GLASS_DENSE } else { theme::GLASS_PANEL });
+    p.rect(r, cr, fill, Stroke::new(1.0, col(theme::GLASS_EDGE)), StrokeKind::Inside);
+    p.line_segment([pos2(r.left() + 12.0, r.top() + 1.5), pos2(r.right() - 12.0, r.top() + 1.5)], Stroke::new(1.0, col(theme::GLASS_HIGHLIGHT)));
+}
+
+/// A section's title: condensed caps, in `soft` — a step above a label.
+pub fn section(p: &Painter, pos: Pos2, anchor: Align2, s: &str) -> Rect {
+    label_sized(p, pos, anchor, s, t::SECTION, t::soft())
+}
+
+/// A field's label: condensed caps, 11 px, the glass's faint.
+pub fn label(p: &Painter, pos: Pos2, anchor: Align2, s: &str) -> Rect {
+    label_sized(p, pos, anchor, s, t::LABEL, t::label())
+}
+
+/// A hint: sentence case, Inter 12, faint.
+pub fn hint(p: &Painter, pos: Pos2, anchor: Align2, s: &str) -> Rect {
+    p.text(pos, anchor, s, FontId::new(t::HINT, family("")), t::faint())
+}
+
+/// Text in a font family, sized and coloured.
+pub fn text(p: &Painter, pos: Pos2, anchor: Align2, s: &str, size: f32, fam: &str, c: Color32) -> Rect {
+    p.text(pos, anchor, s, FontId::new(size, family(fam)), c)
+}
+
+/// One line cut to `room` with an ellipsis; its rect.
+pub fn clipped(p: &Painter, pos: Pos2, s: &str, size: f32, fam: &str, c: Color32, room: f32) -> Rect {
+    let mut job = egui::text::LayoutJob::single_section(s.to_owned(), egui::TextFormat { font_id: FontId::new(size, family(fam)), color: c, ..Default::default() });
+    job.wrap = egui::text::TextWrapping { max_width: room.max(10.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    let g = p.layout_job(job);
+    let r = Rect::from_min_size(pos2(pos.x, pos.y - g.size().y / 2.0), g.size());
+    p.galley(r.min, g, c);
+    r
+}
+
+/// The hover and press of `resp` as eased 0..1s, and whether it is pressed now.
+fn states(ui: &Ui, id: Id, resp: &Response, enabled: bool) -> (f32, f32, bool) {
+    let ctx = ui.ctx();
+    let hovered = enabled && resp.hovered();
+    let pressed = enabled && resp.is_pointer_button_down_on();
+    let h = motion::tween_bool(ctx, id.with("h"), hovered, motion::QUICK, motion::STANDARD);
+    let pr = motion::tween_bool(ctx, id.with("p"), pressed, 0.06, 0.14);
+    (h, pr, pressed)
+}
+
+/// A button.
+#[derive(Clone, Copy)]
+pub struct Btn<'a> {
+    text: &'a str,
+    icon: Option<Icon>,
+    tone: Tone,
+    on: bool,
+    enabled: bool,
+    sub: Option<&'a str>,
+    quiet: bool,
+    accent: bool,
+    size: f32,
+}
+
+impl<'a> Btn<'a> {
+    pub fn new(text: &'a str) -> Self {
+        Btn { text, icon: None, tone: Tone::Neutral, on: false, enabled: true, sub: None, quiet: false, accent: false, size: 11.5 }
+    }
+    pub fn icon(mut self, i: Icon) -> Self {
+        self.icon = Some(i);
+        self
+    }
+    pub fn tone(mut self, t: Tone) -> Self {
+        self.tone = t;
+        self
+    }
+    pub fn on(mut self, on: bool) -> Self {
+        self.on = on;
+        self
+    }
+    pub fn enabled(mut self, e: bool) -> Self {
+        self.enabled = e;
+        self
+    }
+    /// A line under the word (the judge's buttons).
+    pub fn sub(mut self, s: &'a str) -> Self {
+        self.sub = Some(s);
+        self
+    }
+    /// No fill at rest: a secondary action.
+    pub fn quiet(mut self) -> Self {
+        self.quiet = true;
+        self
+    }
+    /// Its tone shown a little at rest too (NEVER and KEEP: the judging's two ends).
+    pub fn accent(mut self, a: bool) -> Self {
+        self.accent = a;
+        self
+    }
+    /// The word's size (11.5 by default; the big transport and perform buttons larger).
+    pub fn size(mut self, s: f32) -> Self {
+        self.size = s;
+        self
+    }
+
+    /// Drawn in `r` and clicked (or not).
+    pub fn show(self, ui: &mut Ui, p: &Painter, r: Rect, id: impl std::hash::Hash + std::fmt::Debug) -> Response {
+        let id = ui.scope_id().with(id);
+        let resp = ui.interact(r, id, if self.enabled { Sense::click() } else { Sense::hover() });
+        self.paint(ui, p, r, id, &resp);
+        if self.enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
+    }
+
+    /// Drawn for a response that comes from elsewhere (one held down: CUE, a nudge).
+    pub fn paint(self, ui: &Ui, p: &Painter, r: Rect, id: Id, resp: &Response) {
+        let (h, pr, _) = states(ui, id, resp, self.enabled);
+        let on = motion::tween_bool(ui.ctx(), id.with("on"), self.on && self.enabled, motion::STANDARD, motion::STANDARD);
+        let (lit_fill, lit_edge, lit_ink) = self.tone.lit();
+        let rest = if self.quiet { Color32::TRANSPARENT } else { t::fill_rest() };
+        let mut fill = mix(rest, t::fill_hover(), h);
+        fill = mix(fill, t::fill_press(), pr * 0.7);
+        fill = mix(fill, lit_fill, on);
+        let mut edge = mix(if self.quiet { Color32::TRANSPARENT } else { t::edge_rest() }, t::edge_hover(), h);
+        edge = mix(edge, lit_edge, on);
+        let mut ink = mix(t::soft(), t::high(), h * 0.6);
+        if self.accent {
+            fill = mix(fill, lit_fill, 0.45);
+            edge = mix(edge, lit_edge, 0.5);
+            ink = mix(ink, lit_ink, 0.75);
+        }
+        ink = mix(ink, lit_ink, on);
+        if !self.enabled {
+            fill = Color32::from_white_alpha(5);
+            edge = Color32::from_white_alpha(14);
+            ink = t::faint();
+        }
+        let cr = CornerRadius::same(t::R_CONTROL);
+        p.rect(r, cr, fill, Stroke::new(1.0, edge), StrokeKind::Inside);
+        // the content sinks a pixel while pressed
+        let c = r.center() + vec2(0.0, pr);
+        let has_text = !self.text.is_empty();
+        let sub_h = if self.sub.is_some() { 8.0 } else { 0.0 };
+        match (self.icon, has_text) {
+            (Some(i), false) => {
+                let s = (r.height() * 0.5).min(20.0);
+                icons::paint(p, Rect::from_center_size(c, vec2(s, s)), i, ink);
+            }
+            (Some(i), true) => {
+                let s = 14.0f32.min(r.height() * 0.5);
+                let w = label_width(p, self.text, self.size) + s + 7.0;
+                let x0 = c.x - w / 2.0;
+                icons::paint(p, Rect::from_center_size(pos2(x0 + s / 2.0, c.y - sub_h), vec2(s, s)), i, ink);
+                label_sized(p, pos2(x0 + s + 7.0, c.y - sub_h), Align2::LEFT_CENTER, self.text, self.size, ink);
+            }
+            (None, _) => {
+                label_sized(p, pos2(c.x, c.y - sub_h), Align2::CENTER_CENTER, self.text, self.size, ink);
+            }
+        }
+        if let Some(s) = self.sub {
+            let sub_ink = if self.enabled { mix(t::muted(), lit_ink, on * 0.5) } else { t::faint() };
+            p.text(pos2(c.x, c.y + 10.0), Align2::CENTER_CENTER, s, FontId::new(11.0, family("")), sub_ink);
+        }
+    }
+}
+
+/// Whether the pointer is held down on `r` (a control that acts on press and on release).
+pub fn held(ui: &mut Ui, r: Rect, id: impl std::hash::Hash + std::fmt::Debug) -> (Id, Response) {
+    let id = ui.scope_id().with(id);
+    (id, ui.interact(r, id, Sense::click_and_drag()))
+}
+
+/// A segmented choice: the segments of `items` in `r`, the chosen one (if any) under a
+/// highlight that glides to it. The one clicked.
+pub fn segmented(ui: &mut Ui, p: &Painter, r: Rect, items: &[&str], chosen: Option<usize>, tone: Tone, id: impl std::hash::Hash + std::fmt::Debug) -> Option<usize> {
+    let id = ui.scope_id().with(id);
+    let n = items.len().max(1);
+    let cr = CornerRadius::same(t::R_CONTROL);
+    p.rect(r, cr, Color32::from_white_alpha(8), Stroke::new(1.0, Color32::from_white_alpha(18)), StrokeKind::Inside);
+    let w = r.width() / n as f32;
+    let some = motion::tween_bool(ui.ctx(), id.with("some"), chosen.is_some(), motion::STANDARD, motion::STANDARD);
+    // the highlight stays where it was while it fades out
+    let at = ui.ctx().data_mut(|d| {
+        let last = d.get_temp_mut_or_insert_with(id.with("last"), || chosen.unwrap_or(0));
+        if let Some(c) = chosen {
+            *last = c;
+        }
+        *last
+    });
+    let x = motion::spring(ui.ctx(), id.with("x"), r.left() + at.min(n - 1) as f32 * w, 0.18);
+    let (lit_fill, lit_edge, lit_ink) = tone.lit();
+    if some > 0.01 {
+        let hl = Rect::from_min_size(pos2(x, r.top()), vec2(w, r.height())).shrink(2.0);
+        p.rect(hl, CornerRadius::same(t::R_CONTROL - 1), lit_fill.gamma_multiply(some), Stroke::new(1.0, lit_edge.gamma_multiply(some)), StrokeKind::Inside);
+    }
+    let mut picked = None;
+    for (i, s) in items.iter().enumerate() {
+        let sr = Rect::from_min_size(pos2(r.left() + i as f32 * w, r.top()), vec2(w, r.height()));
+        let resp = ui.interact(sr, id.with(i), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let h = motion::tween_bool(ui.ctx(), id.with(("h", i)), resp.hovered(), motion::QUICK, motion::STANDARD);
+        let on = motion::tween_bool(ui.ctx(), id.with(("on", i)), chosen == Some(i), motion::STANDARD, motion::STANDARD);
+        let ink = mix(mix(t::label(), t::soft(), h), lit_ink, on);
+        label_sized(p, sr.center(), Align2::CENTER_CENTER, s, 11.0, ink);
+        if resp.clicked() {
+            picked = Some(i);
+        }
+    }
+    picked
+}
+
+/// A deck's letter in its colour, as a small chip; its rect.
+pub fn deck_chip(p: &Painter, left_center: Pos2, d: usize) -> Rect {
+    let r = Rect::from_min_size(pos2(left_center.x, left_center.y - 9.0), vec2(20.0, 18.0));
+    p.rect(r, CornerRadius::same(4), alpha_of(t::deck(d), 0.2), Stroke::new(1.0, alpha_of(t::deck(d), 0.55)), StrokeKind::Inside);
+    text(p, r.center() + vec2(0.0, 0.5), Align2::CENTER_CENTER, ["A", "B"][d.min(1)], 11.0, "mono-semi", t::tint(d));
+    r
+}
+
+/// A small glass tab over busy pictures (a waveform's lane, a stage picture's caption).
+pub fn glass_tab(p: &Painter, r: Rect) {
+    p.add(t::shadow(2).as_shape(r, CornerRadius::same(t::R_CONTROL)));
+    p.rect(r, CornerRadius::same(t::R_CONTROL), Color32::from_rgba_unmultiplied(14, 15, 19, 214), Stroke::new(1.0, Color32::from_white_alpha(22)), StrokeKind::Inside);
+}
+
+/// A chip: a small pill of words, lit or not.
+pub fn chip(ui: &mut Ui, p: &Painter, r: Rect, s: &str, on: bool, tone: Tone, enabled: bool, id: impl std::hash::Hash + std::fmt::Debug) -> Response {
+    let id = ui.scope_id().with(id);
+    let resp = ui.interact(r, id, if enabled { Sense::click() } else { Sense::hover() });
+    let (h, pr, _) = states(ui, id, &resp, enabled);
+    let on_t = motion::tween_bool(ui.ctx(), id.with("on"), on && enabled, motion::STANDARD, motion::STANDARD);
+    let (lf, le, li) = tone.lit();
+    let cr = CornerRadius::same((r.height() / 2.0) as u8);
+    let fill = mix(mix(mix(Color32::from_white_alpha(6), t::fill_hover(), h), t::fill_press(), pr), lf, on_t);
+    let edge = mix(mix(Color32::from_white_alpha(20), t::edge_hover(), h), le, on_t);
+    let ink = if enabled { mix(mix(t::muted(), t::text(), h), li, on_t) } else { t::faint() };
+    p.rect(r, cr, fill, Stroke::new(1.0, edge), StrokeKind::Inside);
+    label_sized(p, r.center(), Align2::CENTER_CENTER, s, 11.0, ink);
+    if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
+}
+
+/// How wide a chip of `s` is.
+pub fn chip_width(p: &Painter, s: &str) -> f32 {
+    label_width(p, s, 11.0) + 24.0
+}
+
+/// A hot cue pad: its number, its name and colour where it is set (a "+" on hover where it
+/// is not); a press flashes it. `fired` counts its presses (a new count flashes).
+pub fn pad(ui: &mut Ui, p: &Painter, r: Rect, n: usize, set: Option<(&str, Color32)>, fired: u64, id: impl std::hash::Hash + std::fmt::Debug) -> Response {
+    let id = ui.scope_id().with(id);
+    let resp = ui.interact(r, id, Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let (h, pr, _) = states(ui, id, &resp, true);
+    let set_t = motion::tween_bool(ui.ctx(), id.with("set"), set.is_some(), motion::STANDARD, motion::STANDARD);
+    let fl = motion::flash(ui.ctx(), id.with("fl"), fired, 0.26);
+    let cr = CornerRadius::same(t::R_PAD);
+    // narrow pads (a small window) keep their colour and word, losing the number
+    let pc = p.with_clip_rect(r.shrink(2.0));
+    let narrow = r.width() < 72.0;
+    match set {
+        Some((name, c)) => {
+            let fill = alpha_of(c, 0.13 + 0.1 * h + 0.35 * fl - 0.04 * pr);
+            p.rect(r, cr, mix(Color32::TRANSPARENT, fill, set_t), Stroke::new(1.0, alpha_of(c, 0.5 + 0.25 * h)), StrokeKind::Inside);
+            if narrow {
+                label_sized(&pc, r.center(), Align2::CENTER_CENTER, name, 10.5, t::text());
+            } else {
+                let num = text(&pc, pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, &n.to_string(), 11.0, "mono", Color32::from_white_alpha(200));
+                label_sized(&pc, pos2(num.right() + 7.0, r.center().y), Align2::LEFT_CENTER, name, 11.5, t::text());
+            }
+        }
+        None => {
+            p.rect(r, cr, Color32::from_white_alpha((4.0 + 10.0 * h) as u8), Stroke::new(1.0, Color32::from_white_alpha((18.0 + 22.0 * h) as u8)), StrokeKind::Inside);
+            let at = if narrow { pos2(r.center().x, r.center().y) } else { pos2(r.left() + 10.0, r.center().y) };
+            text(&pc, at, if narrow { Align2::CENTER_CENTER } else { Align2::LEFT_CENTER }, &n.to_string(), 11.0, "mono", mix(t::faint(), Color32::TRANSPARENT, h));
+            if h > 0.01 {
+                icons::paint(p, Rect::from_center_size(r.center() + vec2(if narrow { 0.0 } else { 8.0 }, 0.0), vec2(14.0, 14.0)), Icon::Plus, Color32::from_white_alpha((150.0 * h) as u8));
+            }
+        }
+    }
+    resp
+}
+
+pub fn alpha_of(c: Color32, a: f32) -> Color32 {
+    let [r, g, b, _] = c.to_srgba_unmultiplied();
+    Color32::from_rgba_unmultiplied(r, g, b, (a.clamp(0.0, 1.0) * 255.0) as u8)
+}
+
+/// A knob on a 270° sweep (bipolar from 12 o'clock); drag up or down, double-click to `rest`.
+/// Its picture follows the value on a spring, so a controller's steps glide.
+pub fn knob(ui: &mut Ui, p: &Painter, c: Pos2, v: f32, color: Color32, bipolar: bool, rest: f32, id: impl std::hash::Hash + std::fmt::Debug) -> Option<f32> {
+    let id = ui.scope_id().with(id);
+    let r = Rect::from_center_size(c, vec2(38.0, 38.0));
+    let resp = ui.interact(r, id, Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::ResizeVertical);
+    let h = motion::tween_bool(ui.ctx(), id.with("h"), resp.hovered() || resp.dragged(), motion::QUICK, motion::STANDARD);
+    let shown = motion::spring(ui.ctx(), id.with("v"), v, 0.06);
+    let arc = |a0: f32, a1: f32, color: Color32, w: f32| {
+        let n = 28;
+        let pts: Vec<Pos2> = (0..=n)
+            .map(|i| {
+                let a = (a0 + (a1 - a0) * i as f32 / n as f32).to_radians();
+                pos2(c.x + 14.0 * a.cos(), c.y + 14.0 * a.sin())
+            })
+            .collect();
+        p.add(Shape::line(pts, Stroke::new(w, color)));
+    };
+    arc(135.0, 405.0, mix(col(theme::EDGE), Color32::from_rgb(0x3A, 0x3E, 0x47), h), 3.0);
+    let at = 135.0 + 270.0 * shown;
+    if bipolar {
+        arc(270.0f32.min(at), 270.0f32.max(at), color, 3.0);
+    } else {
+        arc(135.0, at, color, 3.0);
+    }
+    p.circle(c, 10.0, mix(Color32::from_rgb(0x1E, 0x20, 0x27), Color32::from_rgb(0x26, 0x29, 0x31), h), Stroke::new(1.0, Color32::from_rgb(0x36, 0x39, 0x42)));
+    let a = at.to_radians();
+    p.line_segment([pos2(c.x + 3.0 * a.cos(), c.y + 3.0 * a.sin()), pos2(c.x + 8.5 * a.cos(), c.y + 8.5 * a.sin())], Stroke::new(2.0, t::text()));
+    if resp.double_clicked() {
+        return Some(rest);
+    }
+    resp.dragged().then(|| (v - resp.drag_delta().y * 0.004).clamp(0.0, 1.0))
+}
+
+/// A vertical fader: a track, the level below the cap, the cap on a spring; drag the cap.
+pub fn vfader(ui: &mut Ui, p: &Painter, r: Rect, v: f32, color: Color32, id: impl std::hash::Hash + std::fmt::Debug) -> Option<f32> {
+    let id = ui.scope_id().with(id);
+    let resp = ui.interact(r, id, Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeVertical);
+    let shown = motion::spring(ui.ctx(), id.with("v"), v, 0.05);
+    let h = motion::tween_bool(ui.ctx(), id.with("h"), resp.hovered() || resp.dragged(), motion::QUICK, motion::STANDARD);
+    let track = Rect::from_center_size(r.center(), vec2(4.0, r.height() - 10.0));
+    p.rect_filled(track, CornerRadius::same(2), col(theme::LINE));
+    let y = r.bottom() - 10.0 - shown * (r.height() - 20.0);
+    p.rect_filled(Rect::from_min_max(pos2(track.left(), y), track.max), CornerRadius::same(2), alpha_of(color, 0.55));
+    let cap = Rect::from_center_size(pos2(r.center().x, y), vec2(32.0, 18.0));
+    p.add(t::shadow(2).as_shape(cap, CornerRadius::same(4)));
+    p.rect(cap, CornerRadius::same(4), mix(col(theme::CAP), t::high(), h), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
+    p.line_segment([pos2(cap.left() + 6.0, cap.center().y), pos2(cap.right() - 6.0, cap.center().y)], Stroke::new(1.5, Color32::from_rgb(0x55, 0x59, 0x62)));
+    resp.dragged().then(|| (v - resp.drag_delta().y / (r.height() - 20.0)).clamp(0.0, 1.0))
+}
+
+/// The crossfader: a track shaded towards the deck it leans to, the cap on a spring.
+pub fn crossfader(ui: &mut Ui, p: &Painter, r: Rect, x: f32, id: impl std::hash::Hash + std::fmt::Debug) -> Option<f32> {
+    let id = ui.scope_id().with(id);
+    let resp = ui.interact(r, id, Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    let shown = motion::spring(ui.ctx(), id.with("x"), x, 0.05);
+    let h = motion::tween_bool(ui.ctx(), id.with("h"), resp.hovered() || resp.dragged(), motion::QUICK, motion::STANDARD);
+    let track = Rect::from_center_size(r.center(), vec2(r.width() - 28.0, 4.0));
+    p.rect_filled(track, CornerRadius::same(2), col(theme::LINE));
+    let cx = track.left() + shown * track.width();
+    let mid = track.center().x;
+    if (cx - mid).abs() > 1.0 {
+        let lean = if cx < mid { t::deck(0) } else { t::deck(1) };
+        p.rect_filled(Rect::from_min_max(pos2(cx.min(mid), track.top()), pos2(cx.max(mid), track.bottom())), CornerRadius::same(2), alpha_of(lean, 0.6));
+    }
+    p.line_segment([pos2(mid, r.top() + 4.0), pos2(mid, r.bottom() - 4.0)], Stroke::new(1.0, Color32::from_rgb(0x4A, 0x4E, 0x57)));
+    let cap = Rect::from_center_size(pos2(cx, r.center().y), vec2(30.0, 22.0));
+    p.add(t::shadow(2).as_shape(cap, CornerRadius::same(4)));
+    p.rect(cap, CornerRadius::same(4), mix(col(theme::CAP), t::high(), h), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
+    p.line_segment([pos2(cap.center().x, cap.top() + 5.0), pos2(cap.center().x, cap.bottom() - 5.0)], Stroke::new(1.5, Color32::from_rgb(0x55, 0x59, 0x62)));
+    if resp.double_clicked() {
+        return Some(0.5);
+    }
+    resp.dragged().then(|| (x + resp.drag_delta().x / track.width()).clamp(0.0, 1.0))
+}
+
+/// A level meter of `n` segments: up at once, down over 300 ms, the peak held a second.
+pub fn meter(ui: &Ui, p: &Painter, r: Rect, level: f32, n: usize, id: impl std::hash::Hash + std::fmt::Debug) {
+    let ctx = ui.ctx();
+    let id = ui.scope_id().with(id);
+    let now = ctx.input(|i| i.time);
+    let (mut shown, mut peak, mut peak_at, mut at) = ctx.data(|d| d.get_temp::<(f32, f32, f64, f64)>(id)).unwrap_or((0.0, 0.0, now, now));
+    let dt = (now - at).clamp(0.0, 0.1) as f32;
+    at = now;
+    shown = if level >= shown { level } else { (shown - dt / 0.3).max(level) };
+    if level >= peak {
+        peak = level;
+        peak_at = now;
+    } else if now - peak_at > 1.0 {
+        peak = (peak - dt / 0.4).max(shown);
+    }
+    ctx.data_mut(|d| d.insert_temp(id, (shown, peak, peak_at, at)));
+    if shown > 0.0 || peak > 0.0 {
+        ctx.request_repaint();
+    }
+    let gap = 2.0;
+    let h = (r.height() - (n - 1) as f32 * gap) / n as f32;
+    let peak_i = ((1.0 - peak) * n as f32).floor() as usize;
+    for i in 0..n {
+        let on = (n - i) as f32 / n as f32 <= shown + 1e-4;
+        let hot = if i < 2 { col(theme::HOT) } else if i < 5 { col(theme::WARM) } else { Color32::from_rgb(0xD7, 0xDA, 0xE0) };
+        let c = if on || (i == peak_i.min(n - 1) && peak > 0.02) { hot } else { Color32::from_rgb(0x22, 0x25, 0x2C) };
+        p.rect_filled(Rect::from_min_size(pos2(r.left(), r.top() + i as f32 * (h + gap)), vec2(r.width(), h)), CornerRadius::same(1), c);
+    }
+}
+
+/// A record's sleeve: its cover where there is one (faded in), else its initials on its
+/// colour.
+pub fn sleeve(ui: &Ui, p: &Painter, r: Rect, cover: Option<TextureId>, initials: &str, colour: Color32, radius: u8, id: impl std::hash::Hash + std::fmt::Debug) {
+    let cr = CornerRadius::same(radius);
+    let shown = motion::tween_bool(ui.ctx(), ui.scope_id().with(id), cover.is_some(), motion::EMPHASIS, 0.0);
+    if shown < 1.0 {
+        p.rect_filled(r, cr, colour);
+        text(p, r.center(), Align2::CENTER_CENTER, initials, (r.height() * 0.36).clamp(10.0, 24.0), "mark", Color32::from_white_alpha(224));
+    }
+    if let Some(tex) = cover {
+        let a = (shown * 255.0) as u8;
+        p.add(RectShape::filled(r, cr, Color32::from_white_alpha(a)).with_texture(tex, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
+    }
+    p.rect_stroke(r, cr, Stroke::new(1.0, Color32::from_white_alpha(18)), StrokeKind::Inside);
+}
+
+/// A text field over the glass: its frame lights while typed in; an icon at its left.
+pub fn field(ui: &mut Ui, p: &Painter, r: Rect, value: &mut String, hint_s: &str, icon: Option<Icon>, password: bool, id: impl std::hash::Hash + std::fmt::Debug) -> Response {
+    let id = ui.scope_id().with(id);
+    let focused = ui.memory(|m| m.has_focus(id));
+    let f = motion::tween_bool(ui.ctx(), id.with("f"), focused, motion::STANDARD, motion::STANDARD);
+    let cr = CornerRadius::same(t::R_CONTROL + 1);
+    p.rect(r, cr, mix(Color32::from_white_alpha(8), Color32::from_white_alpha(14), f), Stroke::new(1.0, mix(t::edge_rest(), alpha(theme::SOFT, 0.55), f)), StrokeKind::Inside);
+    let mut left = r.left() + 10.0;
+    if let Some(i) = icon {
+        icons::paint(p, Rect::from_center_size(pos2(r.left() + 18.0, r.center().y), vec2(15.0, 15.0)), i, mix(t::faint(), t::soft(), f));
+        left = r.left() + 32.0;
+    }
+    let edit = Rect::from_min_max(pos2(left, r.top() + 6.0), pos2(r.right() - 10.0, r.bottom() - 6.0));
+    ui.put(
+        edit,
+        egui::TextEdit::singleline(value).id(id).hint_text(egui::RichText::new(hint_s).color(t::faint())).password(password).frame(egui::Frame::NONE).font(FontId::new(t::BODY, family(""))).text_color(t::text()),
+    )
+}
+
+/// A status dot: steady, or breathing slowly (live: recording, on air).
+pub fn dot(p: &Painter, c: Pos2, color: Color32, r: f32) {
+    p.circle_filled(c, r + 2.5, alpha_of(color, 0.16));
+    p.circle_filled(c, r, color);
+}
+
+/// The modal frame: the scrim over everything and a card rising into the middle, `k` its
+/// shown share (0..1). The card's rect.
+pub fn modal(p: &Painter, full: Rect, size: egui::Vec2, k: f32) -> Rect {
+    let e = Ease::Out.at(k);
+    p.rect_filled(full, CornerRadius::ZERO, Color32::from_black_alpha((140.0 * e) as u8));
+    let s = 0.98 + 0.02 * e;
+    let card = Rect::from_center_size(full.center() + vec2(0.0, 8.0 * (1.0 - e)), size * s);
+    p.add(t::shadow(3).as_shape(card, CornerRadius::same(t::R_OVERLAY)));
+    let a = |v: u8| ((v as f32) * e) as u8;
+    p.rect(card, CornerRadius::same(t::R_OVERLAY), Color32::from_rgba_unmultiplied(16, 17, 22, a(246)), Stroke::new(1.0, Color32::from_white_alpha(a(28))), StrokeKind::Inside);
+    card
+}
+
+/// A toast: words at the bottom middle, rising in and fading out by `k`.
+pub fn toast(p: &Painter, full: Rect, n: usize, words: &str, tone: Tone, k: f32) {
+    let e = Ease::Out.at(k);
+    let g = p.layout_no_wrap(words.to_owned(), FontId::new(t::BODY, family("")), t::text());
+    let w = g.size().x + 44.0;
+    let r = Rect::from_center_size(pos2(full.center().x, full.bottom() - 40.0 - n as f32 * 48.0 + 12.0 * (1.0 - e)), vec2(w, 38.0));
+    p.add(t::shadow(2).as_shape(r, CornerRadius::same(19)));
+    let (_, edge, ink) = tone.lit();
+    let a = (e * 255.0) as u8;
+    p.rect(r, CornerRadius::same(19), Color32::from_rgba_unmultiplied(20, 21, 27, a), Stroke::new(1.0, alpha_of(edge, e * 0.8)), StrokeKind::Inside);
+    p.circle_filled(pos2(r.left() + 18.0, r.center().y), 3.5, alpha_of(ink, e));
+    p.galley(pos2(r.left() + 30.0, r.center().y - g.size().y / 2.0), g, alpha_of(t::text(), e));
+}
