@@ -29,6 +29,7 @@ impl App {
             Overlay::Keys => vec2(760.0, 470.0),
             Overlay::Settings => vec2(600.0, 560.0),
             Overlay::Set => vec2((full.width() - 80.0).min(1180.0), (full.height() - 80.0).min(720.0)),
+            Overlay::Controllers => vec2((full.width() - 80.0).min(1080.0), (full.height() - 80.0).min(680.0)),
         };
         egui::Area::new(egui::Id::unique("overlay-area")).order(egui::Order::Foreground).fixed_pos(full.min).show(&ctx, |ui| {
             let (all, scrim) = ui.allocate_exact_size(full.size(), Sense::click());
@@ -44,6 +45,7 @@ impl App {
                 Overlay::Keys => "Keys",
                 Overlay::Settings => "Settings",
                 Overlay::Set => "Plan a set",
+                Overlay::Controllers => "Controllers",
             };
             kit::text(&pp, inner.left_top() + vec2(0.0, 2.0), Align2::LEFT_TOP, title, t::TITLE, "semi", t::text());
             let close = Rect::from_min_size(pos2(inner.right() - 30.0, inner.top() - 4.0), vec2(30.0, 30.0));
@@ -55,6 +57,7 @@ impl App {
                 Overlay::Keys => keys(&pp, body),
                 Overlay::Settings => self.settings(desk, ui, &pp, body),
                 Overlay::Set => self.set_page(desk, ui, &pp, body),
+                Overlay::Controllers => self.controllers_page(desk, ui, &pp, body),
             }
         });
     }
@@ -126,6 +129,10 @@ impl App {
         let x = r.left() + label_w + 40.0;
         if controllers.is_empty() {
             kit::clipped(p, pos2(x, y + 13.0), "None found: plug one in", 13.0, "", t::muted(), r.right() - x);
+        }
+        let more = Rect::from_min_size(pos2(r.right() - 120.0, y), vec2(120.0, 28.0));
+        if Btn::new("Controllers…").size(11.0).show(ui, p, more, "set-controllers").on_hover_text("What is plugged in, its controls, and the monitor").clicked() {
+            self.overlay = Some(Overlay::Controllers);
         }
         for (i, c) in controllers.iter().take(2).enumerate() {
             let cy = y + 13.0 + i as f32 * 22.0;

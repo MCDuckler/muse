@@ -47,4 +47,15 @@ fn the_rmx_plays_the_booth() {
     assert_eq!(d.snapshot().decks[0].eq[0], 0.5, "a knob far from the booth's is not taken");
     rmx.send(&[0xB0, 0x36, 80]).unwrap();
     assert!(until(&mut d, 1.0, |d| d.snapshot().decks[0].eq[0] > 0.6), "crossing the booth's position, the knob takes over");
+
+    // the controllers page's monitor: each packet as it came and how it was read, and
+    // what the Desk did with each control moved
+    let (packets, lines) = d.control_monitor();
+    let play = packets.iter().find(|p| p.bytes == [0xB0, 0x23, 0x7F]).expect("the PLAY packet kept");
+    assert!(play.from.contains("RMX") && play.read.iter().any(|r| r.starts_with("deck.b.play")), "{play:?}");
+    let did = lines.iter().find(|l| l.id == "deck.b.play").expect("what PLAY did");
+    assert!(!did.did.is_empty(), "{did:?}");
+    assert!(d.controller_layouts().iter().any(|l| l.name.contains("RMX")), "the layouts it knows");
+    d.clear_control_monitor();
+    assert!(d.control_monitor().0.is_empty() && d.control_monitor().1.is_empty());
 }

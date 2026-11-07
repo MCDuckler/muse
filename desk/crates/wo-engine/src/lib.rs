@@ -218,6 +218,9 @@ pub struct Eq {
 
 struct Inner {
     offline: bool,
+    /// Each deck's peaks since the meter last took them (a read in between keeps them:
+    /// the engine's own reading hands its peak over once).
+    peaks: [std::sync::Mutex<(f32, f32)>; DECKS],
 }
 
 impl Drop for Inner {
@@ -256,7 +259,7 @@ impl Engine {
             RUNNING.store(false, Ordering::Release);
             return Err(Error::Start(if why.is_empty() { format!("error {code}") } else { why }));
         }
-        Ok(Engine { inner: Arc::new(Inner { offline: output == Output::Offline }) })
+        Ok(Engine { inner: Arc::new(Inner { offline: output == Output::Offline, peaks: Default::default() }) })
     }
 
     pub fn is_offline(&self) -> bool {
@@ -556,10 +559,22 @@ impl Deck<'_> {
         unsafe { sys::we_deck_brake(self.d, seconds) }
     }
 
+    /// The deck's state now. Its `peak` is the most since the last read; the meter's peak
+    /// (every read's, until taken) is [Deck::take_peak]'s.
     pub fn read(&self) -> DeckState {
         let mut s = sys::we_deck_state::default();
         unsafe { sys::we_deck_read(self.d, &mut s) };
+        if let Some(m) = self._engine.inner.peaks.get(self.d as usize) {
+            let mut m = m.lock().unwrap();
+            *m = (m.0.max(s.peak_l), m.1.max(s.peak_r));
+        }
         s.into()
+    }
+
+    /// The peaks since the last time they were taken, whoever read the deck meanwhile.
+    pub fn take_peak(&self) -> (f32, f32) {
+        let _ = self.read();
+        self._engine.inner.peaks.get(self.d as usize).map(|m| std::mem::take(&mut *m.lock().unwrap())).unwrap_or_default()
     }
 
     /// Where the deck is heard right now, source seconds.

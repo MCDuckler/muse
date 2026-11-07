@@ -19,6 +19,7 @@ pub mod move_player;
 pub mod autodj;
 mod crate_;
 pub mod plan_view;
+pub mod session;
 pub mod set;
 mod fx;
 mod transition;
@@ -126,6 +127,16 @@ pub struct Snapshot {
     pub set_seconds: f64,
     /// The Auto DJ's next few, best fit first.
     pub up_next: Vec<Record>,
+}
+
+/// A control moved on a controller, and what the Desk did with it.
+#[derive(Clone, Debug)]
+pub struct ControlLine {
+    pub at: Instant,
+    pub id: String,
+    pub value: f64,
+    /// The actions it made (none: nothing is bound to it).
+    pub did: Vec<String>,
 }
 
 /// A crate row this frame.
@@ -254,6 +265,16 @@ pub struct Desk {
     hand_queue: Vec<Record>,
     /// The library's next page asked for at this many rows.
     more_asked: Option<usize>,
+    /// What the controllers' moves did, lately (the controllers page).
+    control_lines: std::collections::VecDeque<ControlLine>,
+    /// The booth as it was, kept (session.rs): when last, whether a record was playing then,
+    /// since when nothing has; a resumed deck's place and play, kept until its sound is in;
+    /// what the resuming said (taken once by the window).
+    session_kept: Option<Instant>,
+    session_live: bool,
+    idle_since: Option<Instant>,
+    resume: [Option<(f64, bool)>; 2],
+    resumed: Option<String>,
 }
 
 /// An offline engine rendered in real time on its own thread: a computer with no
@@ -364,6 +385,12 @@ impl Desk {
             set: Default::default(),
             hand_queue: vec![],
             more_asked: None,
+            control_lines: Default::default(),
+            session_kept: None,
+            session_live: false,
+            idle_since: None,
+            resume: [None, None],
+            resumed: None,
             dice: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_nanos() as u64) | 1,
         };
         // the Desk's own saved sign-in; WO_APP_SIGN_IN=1 borrows the WetOwl app's for
@@ -381,6 +408,11 @@ impl Desk {
             desk.engine.deck(DeckId::new(d).unwrap()).set_keylock(true);
         }
         desk.set_crossfader(0.0);
+        // the set that was playing when the Desk last closed, taken up again (not for a
+        // bench or a test's demo; WO_RESUME=off: never)
+        if !autoplay && std::env::var("WO_RESUME").as_deref() != Ok("off") {
+            desk.resume_session();
+        }
         if autoplay {
             let start = desk.slots[0].hands.pads[1].map(|p| p.at).unwrap_or(0.0);
             let a = desk.engine.deck(DeckId::A);
@@ -552,6 +584,7 @@ impl Desk {
             self.changes += 1;
         }
         self.controllers_tick();
+        self.session_tick();
         self.stems_tick();
         self.mind_tick();
         self.feed_stage();
@@ -806,7 +839,7 @@ impl Desk {
                 master: i == self.master,
                 keylock: s.keylock,
                 phase_ms: st.phase_error * 1000.0,
-                peak: st.peak.0.max(st.peak.1),
+                peak: { let (l, r) = self.engine.deck(DeckId::new(i).unwrap()).take_peak(); l.max(r) },
                 gain: s.gain,
                 eq: s.eq,
                 filter: s.filter,
@@ -1247,6 +1280,27 @@ impl Desk {
         self.controls.as_ref().map(|c| c.controllers()).unwrap_or_default()
     }
 
+    /// The controllers page's monitor: the packets as they came and were read, and what
+    /// the Desk did with each control moved — oldest first.
+    pub fn control_monitor(&self) -> (Vec<wo_control::Packet>, Vec<ControlLine>) {
+        (self.controls.as_ref().map(|c| c.monitor()).unwrap_or_default(), self.control_lines.iter().cloned().collect())
+    }
+
+    pub fn clear_control_monitor(&mut self) {
+        if let Some(c) = &self.controls {
+            c.clear_monitor();
+        }
+        self.control_lines.clear();
+    }
+
+    /// The layouts the Desk knows: a controller one of them names is taken up by itself.
+    pub fn controller_layouts(&self) -> Vec<wo_control::Layout> {
+        match &self.controls {
+            Some(c) => c.layouts().to_vec(),
+            None => wo_control::layout::bundled(),
+        }
+    }
+
     /// What the controllers asked of the crate since the last call (browse, load).
     pub fn take_crate_actions(&mut self) -> Vec<wo_control::Action> {
         std::mem::take(&mut self.for_the_crate)
@@ -1259,7 +1313,13 @@ impl Desk {
         }
         for e in events {
             let at = self.positions();
-            for a in self.binding.handle(&e, &at) {
+            let actions = self.binding.handle(&e, &at);
+            // the controllers page's monitor: what the binding made of it
+            if self.control_lines.len() >= wo_control::MONITOR {
+                self.control_lines.pop_front();
+            }
+            self.control_lines.push_back(ControlLine { at: Instant::now(), id: e.id.clone(), value: e.value, did: actions.iter().map(|a| format!("{a:?}")).collect() });
+            for a in actions {
                 self.act(a);
             }
         }

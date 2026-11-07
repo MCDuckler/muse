@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 /// A crate row's facts (the house's, for the fixture rows).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Record {
     pub id: i64,
     pub title: String,
@@ -17,12 +17,13 @@ pub struct Record {
     pub cover: bool,
     pub cover_rgb: Option<u32>,
     /// How loud it is, as the house measured it (none for a record of this computer's).
+    #[serde(default)]
     pub loudness: Loudness,
 }
 
 /// A record's loudness, as the box measured it: the gain that brings it to the house's
 /// reference (−14 LUFS, the one the phones' player turns songs by), and its true peak.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Loudness {
     pub gain_db: Option<f32>,
     pub true_peak_db: Option<f32>,
@@ -52,7 +53,7 @@ impl Loudness {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Audio {
     /// Not on this computer: listed only.
     None,

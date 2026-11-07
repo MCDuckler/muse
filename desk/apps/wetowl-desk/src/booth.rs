@@ -118,7 +118,10 @@ impl App {
             self.overlay = if self.overlay == Some(Overlay::Keys) { None } else { Some(Overlay::Keys) };
         }
         rx = keys.left() - 12.0;
-        let pill = self.status_pill(desk, ui, p, pos2(rx, y), s);
+        let (pill, open_gear) = self.status_pill(desk, ui, p, pos2(rx, y), s);
+        if open_gear {
+            self.overlay = Some(Overlay::Controllers);
+        }
         let auto = Rect::from_min_size(pos2(pill.left() - 12.0 - 108.0, y - 16.0), vec2(108.0, 32.0));
         if Btn::new("Auto DJ").icon(Icon::Dot).tone(Tone::Ok).on(s.auto).show(ui, p, auto, "auto").on_hover_text("The Auto DJ mixes the next record in  (A)").clicked() {
             desk.set_auto(!s.auto);
@@ -127,7 +130,8 @@ impl App {
 
     /// The house, the controllers, the stage and the sound's load as one pill, its right
     /// edge at `right`; the details on hover.
-    fn status_pill(&self, desk: &Desk, ui: &mut Ui, p: &Painter, right: egui::Pos2, s: &Snapshot) -> Rect {
+    /// (A click: the controllers page.)
+    fn status_pill(&self, desk: &Desk, ui: &mut Ui, p: &Painter, right: egui::Pos2, s: &Snapshot) -> (Rect, bool) {
         let house = desk.house().map(|(sv, u)| (sv.trim_start_matches("https://").to_owned(), u.map(str::to_owned)));
         let controllers = desk.controllers();
         let stage = desk.stage();
@@ -163,7 +167,8 @@ impl App {
         let dsp_w = label_width(p, "DSP", 10.5) + 8.0 + 34.0;
         w += dsp_w + 6.0;
         let r = Rect::from_min_size(pos2(right.x - w, right.y - 15.0), vec2(w, 30.0));
-        let resp = ui.interact(r, ui.scope_id().with("status"), Sense::hover());
+        let resp = ui.interact(r, ui.scope_id().with("status"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let clicked = resp.clicked();
         let h = motion::tween_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), motion::QUICK, motion::STANDARD);
         p.rect(r, CornerRadius::same(15), mix(Color32::from_white_alpha(7), Color32::from_white_alpha(14), h), Stroke::new(1.0, mix(t::edge_rest(), t::edge_hover(), h)), StrokeKind::Inside);
         let mut x = r.left() + 14.0;
@@ -206,7 +211,7 @@ impl App {
             });
             line(ui, "DSP", format!("{pct:.0}% of the sound's time, {:.0}% at worst; {} late", s.load.worst * 100.0, s.load.late));
         });
-        r
+        (r, clicked)
     }
 
     pub(crate) fn overviews(&self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot) {

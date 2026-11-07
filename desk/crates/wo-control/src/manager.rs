@@ -2,7 +2,7 @@
 //! and the USB HID devices are looked over for one a layout names (a port by its name,
 //! a device by its vendor and product), each one found is opened and read on its own,
 //! and its events come through one channel. Lights go back the same way.
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -11,6 +11,30 @@ use std::time::Duration;
 
 use crate::decode::{Decoder, Event};
 use crate::layout::{Layout, Protocol, bundled};
+
+/// One packet a controller sent, as it came and as it was read (the controllers page's
+/// monitor: what to watch when new hardware first meets the Desk).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Packet {
+    pub at: std::time::Instant,
+    pub from: String,
+    pub bytes: Vec<u8>,
+    /// The controls it moved, `id value` (none: nothing in the layout says this packet).
+    pub read: Vec<String>,
+}
+
+/// How many packets the monitor keeps.
+pub const MONITOR: usize = 200;
+
+type Monitor = Arc<Mutex<VecDeque<Packet>>>;
+
+fn keep(m: &Monitor, from: &str, bytes: &[u8], events: &[Event]) {
+    let mut m = m.lock().unwrap();
+    if m.len() >= MONITOR {
+        m.pop_front();
+    }
+    m.push_back(Packet { at: std::time::Instant::now(), from: from.to_owned(), bytes: bytes.to_vec(), read: events.iter().map(|e| format!("{} {:.3}", e.id, e.value)).collect() });
+}
 
 /// A controller as the Desk shows it.
 #[derive(Clone, Debug, PartialEq)]
@@ -48,6 +72,8 @@ pub struct Manager {
     events: Receiver<Event>,
     shared: Arc<Mutex<Shared>>,
     stop: Arc<AtomicBool>,
+    monitor: Monitor,
+    layouts: Vec<Layout>,
 }
 
 impl Drop for Manager {
@@ -66,15 +92,30 @@ impl Manager {
         let (tx, rx) = mpsc::channel();
         let shared = Arc::new(Mutex::new(Shared::default()));
         let stop = Arc::new(AtomicBool::new(false));
-        let (s, st) = (shared.clone(), stop.clone());
+        let monitor: Monitor = Arc::new(Mutex::new(VecDeque::new()));
+        let (s, st, m, known) = (shared.clone(), stop.clone(), monitor.clone(), layouts.clone());
         thread::spawn(move || {
             while !st.load(Ordering::Relaxed) {
-                scan_midi(&layouts, &s, &tx);
-                scan_hid(&layouts, &s, &tx);
+                scan_midi(&known, &s, &tx, &m);
+                scan_hid(&known, &s, &tx, &m);
                 thread::sleep(Duration::from_secs(2));
             }
         });
-        Manager { events: rx, shared, stop }
+        Manager { events: rx, shared, stop, monitor, layouts }
+    }
+
+    /// The packets the controllers sent lately, oldest first.
+    pub fn monitor(&self) -> Vec<Packet> {
+        self.monitor.lock().unwrap().iter().cloned().collect()
+    }
+
+    pub fn clear_monitor(&self) {
+        self.monitor.lock().unwrap().clear();
+    }
+
+    /// The layouts the Desk knows (a controller one of them names is taken up by itself).
+    pub fn layouts(&self) -> &[Layout] {
+        &self.layouts
     }
 
     /// Everything the controllers did since the last call.
@@ -110,7 +151,7 @@ impl Manager {
     }
 }
 
-fn scan_midi(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Event>) {
+fn scan_midi(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Event>, monitor: &Monitor) {
     let Ok(probe) = midir::MidiInput::new("WetOwl Desk") else { return };
     let ports: Vec<(midir::MidiInputPort, String)> = probe.ports().into_iter().filter_map(|p| Some((p.clone(), probe.port_name(&p).ok()?))).collect();
     let names: Vec<String> = ports.iter().map(|(_, n)| format!("midi:{n}")).collect();
@@ -129,9 +170,12 @@ fn scan_midi(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Event>
         let Ok(input) = midir::MidiInput::new("WetOwl Desk") else { continue };
         let mut decoder = Decoder::new(layout.clone());
         let tx = tx.clone();
+        let (m, from) = (monitor.clone(), name.clone());
         let controller = Controller { name: name.clone(), layout: layout.name.clone(), trouble: None };
         let link = match input.connect(&port, "WetOwl Desk in", move |_, msg, _| {
-            for e in decoder.decode(msg) {
+            let events = decoder.decode(msg);
+            keep(&m, &from, msg, &events);
+            for e in events {
                 let _ = tx.send(e);
             }
         }, ()) {
@@ -154,7 +198,7 @@ fn midi_output(name: &str) -> Option<midir::MidiOutputConnection> {
     out.connect(&port, "WetOwl Desk out").ok()
 }
 
-fn scan_hid(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Event>) {
+fn scan_hid(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Event>, monitor: &Monitor) {
     let hid_layouts: Vec<&Layout> = layouts.iter().filter(|l| l.protocol == Protocol::Hid).collect();
     if hid_layouts.is_empty() {
         return;
@@ -187,6 +231,7 @@ fn scan_hid(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Event>)
         let (send, lights_rx) = mpsc::channel::<Vec<u8>>();
         let mut decoder = Decoder::new((*layout).clone());
         let (tx, a) = (tx.clone(), alive.clone());
+        let (m, from) = (monitor.clone(), controller.name.clone());
         thread::spawn(move || {
             let mut buf = [0u8; 64];
             while a.load(Ordering::Relaxed) {
@@ -196,7 +241,12 @@ fn scan_hid(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Event>)
                 match device.read_timeout(&mut buf, 50) {
                     Ok(0) => {}
                     Ok(n) => {
-                        for e in decoder.decode(&buf[..n]) {
+                        // (a report that moved nothing is not kept: some send theirs all the time)
+                        let events = decoder.decode(&buf[..n]);
+                        if !events.is_empty() {
+                            keep(&m, &from, &buf[..n], &events);
+                        }
+                        for e in events {
                             let _ = tx.send(e);
                         }
                     }

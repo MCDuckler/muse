@@ -21,6 +21,7 @@ use wo_deskcore::bench::Bench;
 use wo_deskcore::{Desk, Prefs, ShowHand};
 
 mod booth;
+mod controllers;
 mod faves;
 mod gallery;
 mod overlays;
@@ -46,6 +47,8 @@ pub(crate) enum Overlay {
     Settings,
     /// PLAN A SET.
     Set,
+    /// The controllers: what is plugged in, its controls, the monitor.
+    Controllers,
 }
 
 /// How the crate is sorted: by fit (the booth's own order), title, artist, tempo or key;
@@ -216,6 +219,7 @@ impl App {
             Some("keys") => Some(Overlay::Keys),
             Some("settings") => Some(Overlay::Settings),
             Some("set") => Some(Overlay::Set),
+            Some("controllers") => Some(Overlay::Controllers),
             _ => None,
         };
         // --plan: the plan view over the waveforms (screenshots)
@@ -408,6 +412,10 @@ impl App {
         self.stage_picture(ui.ctx(), desk);
         self.glass.update(desk, &self.prefs);
         self.news(desk);
+        // the set taken up again after a restart, said once
+        if let Some(w) = desk.take_resumed() {
+            self.toasts.say(w, ui::tokens::Tone::Ok);
+        }
         let s = desk.snapshot();
         let full = ui.max_rect();
         let p = ui.painter().clone();
