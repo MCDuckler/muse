@@ -12,7 +12,9 @@ struct DemoTransport: Transport {
         func param(_ k: String) -> String? { q.first { $0.name == k }?.value }
 
         if path.hasSuffix("/cover") || path == "/art/remote" {
-            let seed = path.split(separator: "/").compactMap { Int($0) }.first ?? (param("u")?.count ?? 7)
+            // A song's cover in its own colour (cover_color of track n is colours[n - 1]).
+            let n = path.split(separator: "/").compactMap { Int($0) }.first
+            let seed = n.map { path.hasPrefix("/tracks/") ? $0 - 1 : $0 + 3 } ?? (param("u")?.count ?? 7)
             return (DemoData.cover(seed: seed), ok(url, "image/png"))
         }
         let body: Any
