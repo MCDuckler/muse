@@ -40,6 +40,22 @@ struct DemoTransport: Transport {
             body = ["playlist_id": 1, "track_ids": [3, 5, 8, 13, 21]] as [String: Any]
         case ("GET", "/search"):
             body = DemoData.search(param("q") ?? "")
+        case ("GET", "/library/artists/detail"):
+            body = DemoData.artistDetail(param("artist") ?? "Mira Holt")
+        case ("GET", "/library/albums/detail"):
+            body = DemoData.albumDetail(param("album") ?? "Demo Record 1")
+        case ("GET", "/library/tracks"):
+            body = ["items": DemoData.tracks, "total": DemoData.tracks.count] as [String: Any]
+        case ("GET", "/library/albums"):
+            body = DemoData.albums
+        case ("GET", "/library/artists"):
+            body = DemoData.artists
+        case ("GET", "/devices"):
+            body = DemoData.devices
+        case ("GET", _) where path.hasSuffix("/lyrics"):
+            body = ["synced": DemoData.lyrics] as [String: Any]
+        case ("POST", "/playlists/holding"):
+            body = ["holding": ["2": 1, "1": 1]] as [String: Any]
         case (_, _) where path.hasPrefix("/queues/"):
             body = DemoData.queue
         case ("POST", _) where path.hasPrefix("/favourites/"):
@@ -181,6 +197,87 @@ enum DemoData {
         return ["local": Array(l.prefix(6)), "remote": remote]
     }
 
+    static func artistDetail(_ name: String) -> [String: Any] {
+        let mine = tracks.filter { (($0["artists"] as? [String]) ?? []).contains(name) }
+        let records: [[String: Any]] = ["Glass Harbour", "Undertow", "Hollow Bloom", "Live at the Pier"].enumerated().map { i, t in
+            ["remote_id": "r\(i)", "title": t, "cover": "https://cdn-images.dzcdn.net/images/\(i)",
+             "release_date": "\(2024 - i * 2)-03-01", "record_type": i == 3 ? "single" : "album",
+             "tracks": 11 - i, "have": i == 0 ? 4 : 0] as [String: Any]
+        }
+        var top: [[String: Any]] = []
+        for (i, t) in mine.prefix(3).enumerated() {
+            top.append(["remote_id": "t\(i)", "title": t["title"] ?? "", "artists": [name],
+                        "album": "Glass Harbour", "cover": "https://cdn-images.dzcdn.net/t/\(i)",
+                        "duration_ms": 240_000, "track": t] as [String: Any])
+        }
+        top.append(["remote_id": "t9", "title": "Saltwater Hymn", "artists": [name], "album": "Undertow",
+                    "cover": "https://cdn-images.dzcdn.net/t/9", "duration_ms": 251_000] as [String: Any])
+        top.append(["remote_id": "t8", "title": "Small Weather", "artists": [name], "album": "Hollow Bloom",
+                    "cover": "https://cdn-images.dzcdn.net/t/88", "duration_ms": 199_000] as [String: Any])
+        let artist: [String: Any] = ["name": name, "image": "https://cdn-images.dzcdn.net/artist/1", "fans": 48211]
+        return ["artist": artist, "albums": records, "top": top, "tracks": mine]
+    }
+
+    static func albumDetail(_ name: String) -> [String: Any] {
+        let here = tracks.filter { ($0["album"] as? String) == name }
+        var rows: [[String: Any]] = []
+        for (i, t) in here.enumerated() {
+            rows.append(["pos": i * 2 + 1, "title": t["title"] ?? "", "artists": t["artists"] ?? [String](),
+                         "duration_ms": t["duration_ms"] ?? 0, "track": t] as [String: Any])
+            rows.append(["pos": i * 2 + 2, "title": "Interlude \(i + 1)", "artists": t["artists"] ?? [String](),
+                         "duration_ms": 94_000] as [String: Any])
+        }
+        let album: [String: Any] = ["name": name, "artist": (here.first?["artists"] as? [String])?.first ?? "Various",
+                                    "cover": "https://cdn-images.dzcdn.net/album/\(name.count)",
+                                    "release_date": "2023-05-12", "record_type": "album"]
+        return ["album": album, "tracks": rows, "extra": [[String: Any]](), "missing": here.count]
+    }
+
+    static var albums: [String: Any] {
+        let items: [[String: Any]] = (1...8).map { i in
+            ["name": "Demo Record \(i)", "artist": songs[(i * 3) % songs.count].1, "tracks": 4 + i % 5,
+             "year": 2016 + i, "cover_url": "/tracks/\(i * 3)/cover"] as [String: Any]
+        }
+        return ["items": items, "total": items.count]
+    }
+
+    static var artists: [String: Any] {
+        var seen = Set<String>()
+        var items: [[String: Any]] = []
+        for (i, s) in songs.enumerated() where !seen.contains(s.1) {
+            seen.insert(s.1)
+            items.append(["name": s.1, "tracks": 3 + i % 4, "albums": 1 + i % 3, "cover_url": "/tracks/\(i + 1)/cover"] as [String: Any])
+        }
+        items.sort { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
+        return ["items": items, "total": items.count]
+    }
+
+    static var devices: [String: Any] {
+        let me: [String: Any] = ["id": 99, "name": "iPhone (WetOwl native)", "platform": "ios", "this": true, "live": true,
+                                 "playing": true, "position_ms": 74_000, "age_ms": 0]
+        let desk: [String: Any] = ["id": 2, "name": "Linux desk", "platform": "app", "this": false, "live": true,
+                                   "playing": true, "position_ms": 120_000, "age_ms": 2000, "queue": "Now",
+                                   "queue_id": 12, "track": tracks[7]]
+        let web: [String: Any] = ["id": 3, "name": "Firefox on Windows", "platform": "web", "this": false,
+                                  "live": false, "playing": false, "position_ms": 0, "age_ms": 0]
+        return ["this": 99, "devices": [me, desk, web]]
+    }
+
+    static let lyrics = """
+    [00:52.00] Out past the harbour lights
+    [00:57.40] the water keeps its own time
+    [01:02.80] I left a window open
+    [01:08.10] for the weather and the night
+    [01:13.60] Glass on the shoreline
+    [01:18.90] catching every signal fire
+    [01:24.20] we were never really lost
+    [01:29.50] just a little further out
+    [01:35.00]
+    [01:40.30] Hold the line, hold the line
+    [01:45.70] till the morning finds us
+    [01:51.00] Hold the line
+    """
+
     /// A made-up cover: the colour, a disc, the light on it.
     static func cover(seed: Int) -> Data {
         let size = CGSize(width: 300, height: 300)
@@ -244,8 +341,18 @@ enum DemoScreen {
         switch screen {
         case "search": app.tab = .search
         case "library", "playlist": app.tab = .library
-        case "nowplaying", "queue": app.nowPlayingOpen = true
+        case "nowplaying", "queue", "lyrics": app.nowPlayingOpen = true
         case "settings": app.showSettings = true
+        case "artist": app.router.push(.artist("Mira Holt"), on: .home)
+        case "album": app.router.push(.album(AlbumRef(name: "Demo Record 2", artist: nil, remoteId: nil)), on: .home)
+        case "albums":
+            app.tab = .library
+            app.router.push(.albums, on: .library)
+        case "artists":
+            app.tab = .library
+            app.router.push(.artists, on: .library)
+        case "addto":
+            if let t = app.player.current { app.adding = TrackBatch(tracks: [t]) }
         default: app.tab = .home
         }
     }

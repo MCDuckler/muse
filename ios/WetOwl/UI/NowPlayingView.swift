@@ -1,31 +1,43 @@
 import SwiftUI
 
 struct NowPlayingView: View {
+    enum Mode { case cover, lyrics, queue }
+
     @EnvironmentObject private var app: AppModel
     @EnvironmentObject private var player: Player
     @EnvironmentObject private var store: Store
+    @EnvironmentObject private var live: Live
     @Environment(\.dismiss) private var dismiss
-    @State private var showQueue: Bool
+    @State private var mode: Mode
+    @State private var showDevices = false
 
-    init(showQueue: Bool = false) {
-        _showQueue = State(initialValue: showQueue)
+    init(mode: Mode = .cover) {
+        _mode = State(initialValue: mode)
     }
 
     var body: some View {
         GeometryReader { geo in
             VStack(spacing: 0) {
                 header
-                if showQueue {
+                switch mode {
+                case .cover:
+                    cover(geo.size)
+                        .transition(.opacity)
+                case .lyrics:
+                    if let t = player.current {
+                        compactNow(t)
+                        LyricsView(track: t)
+                            .frame(maxHeight: .infinity)
+                            .transition(.opacity)
+                    }
+                case .queue:
                     QueueList()
                         .frame(maxHeight: .infinity)
-                        .transition(.opacity)
-                } else {
-                    cover(geo.size)
                         .transition(.opacity)
                 }
                 Scrubber()
                     .padding(.horizontal, 24)
-                    .padding(.top, showQueue ? 8 : 14)
+                    .padding(.top, mode == .cover ? 14 : 8)
                 TransportRow()
                     .padding(.horizontal, 20)
                     .padding(.vertical, 6)
@@ -33,7 +45,19 @@ struct NowPlayingView: View {
             }
         }
         .background(backdrop.ignoresSafeArea())
+        .overlay(alignment: .bottom) {
+            if let t = app.toast {
+                ToastView(toast: t)
+                    .padding(.bottom, 110)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .allowsHitTesting(false)
+            }
+        }
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showDevices) { DevicesSheet().models(app) }
+        .sheet(item: Binding(get: { app.nowPlayingOpen ? app.adding : nil }, set: { app.adding = $0 })) { b in
+            AddToPlaylistSheet(batch: b).models(app)
+        }
     }
 
     private var backdrop: some View {
@@ -54,37 +78,85 @@ struct NowPlayingView: View {
             .accessibilityLabel("Close")
             Spacer()
             VStack(spacing: 1) {
-                Text("PLAYING FROM")
-                    .font(Theme.label(10))
-                    .tracking(1.2)
-                    .foregroundColor(Theme.faint)
+                HStack(spacing: 4) {
+                    if player.sleepAt != nil || player.sleepAtEnd {
+                        Image(systemName: "moon.fill").font(.system(size: 9))
+                    }
+                    Text("PLAYING FROM")
+                        .font(Theme.label(10))
+                        .tracking(1.2)
+                }
+                .foregroundColor(Theme.faint)
                 Text(player.queue?.name ?? "")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(Theme.soft)
                     .lineLimit(1)
             }
             Spacer()
-            Menu {
-                if let t = player.current {
-                    let fav = store.isFavourite(t.id)
-                    Button { store.toggleFavourite(t.id) } label: {
-                        Label(fav ? "Remove from Favourites" : "Add to Favourites", systemImage: fav ? "heart.slash" : "heart")
-                    }
-                }
-                Button { player.shuffleUpcoming() } label: { Label("Shuffle what's next", systemImage: "shuffle") }
-                Button { app.sendReport(reason: "asked from the player", manual: true) } label: {
-                    Label("Send playback report", systemImage: "ladybug")
-                }
-            } label: {
+            Menu { menu } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(Theme.soft)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
+            .accessibilityLabel("More")
         }
         .padding(.horizontal, 8)
         .padding(.top, 6)
+    }
+
+    @ViewBuilder
+    private var menu: some View {
+        if let t = player.current {
+            Section {
+                Button { app.adding = TrackBatch(tracks: [t]) } label: {
+                    Label("Add to a playlist…", systemImage: "text.badge.plus")
+                }
+                if let a = t.artists.first {
+                    Button { app.goArtist(a) } label: { Label("Go to \(a)", systemImage: "music.mic") }
+                }
+                if let al = t.album, !al.isEmpty {
+                    Button { app.goAlbum(of: t) } label: { Label("Go to the record", systemImage: "square.stack") }
+                }
+                Button { player.startStation(kind: "track", trackId: t.id) } label: {
+                    Label("Start a station", systemImage: "dot.radiowaves.left.and.right")
+                }
+            }
+        }
+        Section {
+            Menu {
+                if player.sleepAt != nil || player.sleepAtEnd {
+                    Button { player.cancelSleep() } label: { Label("Turn off", systemImage: "moon.zzz") }
+                }
+                ForEach([15, 30, 45, 60, 90], id: \.self) { m in
+                    Button("\(m) minutes") { player.sleep(minutes: m) }
+                }
+                Button("End of this song") { player.sleepAtEndOfSong() }
+            } label: {
+                Label(sleepLabel, systemImage: "moon")
+            }
+            Button { player.shuffleUpcoming() } label: { Label("Shuffle what's next", systemImage: "shuffle") }
+        }
+        Section {
+            if let t = player.current {
+                Button(role: .destructive) { player.notForMe(t) } label: {
+                    Label("Not for me", systemImage: "hand.thumbsdown")
+                }
+            }
+            Button { app.sendReport(reason: "asked from the player", manual: true) } label: {
+                Label("Send playback report", systemImage: "ladybug")
+            }
+        }
+    }
+
+    private var sleepLabel: String {
+        if player.sleepAtEnd { return "Sleep: end of song" }
+        if let s = player.sleepAt {
+            let m = max(1, Int((s.timeIntervalSinceNow / 60).rounded(.up)))
+            return "Sleep: \(m) min left"
+        }
+        return "Sleep timer"
     }
 
     private func cover(_ size: CGSize) -> some View {
@@ -93,41 +165,80 @@ struct NowPlayingView: View {
             Spacer(minLength: 6)
             if let t = player.current {
                 CoverView(url: app.api.coverURL(t, small: false), color: t.coverColor, size: side, radius: 10)
+                    .id(t.id)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     .shadow(color: .black.opacity(0.45), radius: 24, y: 12)
                     .scaleEffect(player.isPlaying ? 1 : 0.92)
                     .animation(.spring(response: 0.45, dampingFraction: 0.8), value: player.isPlaying)
+                    .animation(.easeInOut(duration: 0.3), value: t.id)
                     .gesture(
                         DragGesture(minimumDistance: 30).onEnded { v in
                             if v.translation.width < -60 { player.next() }
                             if v.translation.width > 60 { player.previous() }
                         }
                     )
+                    .accessibilityLabel("Cover. Swipe for the next or the last song.")
                 Spacer(minLength: 14)
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(t.name)
-                            .font(.system(size: 21, weight: .bold))
-                            .foregroundColor(Theme.text)
-                            .lineLimit(1)
-                        Text(t.artistLine)
-                            .font(.system(size: 16))
-                            .foregroundColor(Theme.muted)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                    HeartButton(trackId: t.id)
-                }
-                .padding(.horizontal, 24)
+                titleRow(t)
+                    .padding(.horizontal, 24)
             } else {
                 Spacer()
             }
         }
     }
 
+    private func titleRow(_ t: Track) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(t.name)
+                    .font(.system(size: 21, weight: .bold))
+                    .foregroundColor(Theme.text)
+                    .lineLimit(1)
+                Button { app.goArtist(t.artists.first) } label: {
+                    Text(t.artistLine)
+                        .font(.system(size: 16))
+                        .foregroundColor(Theme.muted)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .disabled(t.artists.isEmpty)
+            }
+            Spacer(minLength: 0)
+            HeartButton(trackId: t.id)
+        }
+    }
+
+    /// The song, small, above the lyrics.
+    private func compactNow(_ t: Track) -> some View {
+        HStack(spacing: 12) {
+            CoverView(url: app.api.coverURL(t, small: true), color: t.coverColor, size: 48, radius: 5)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(t.name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(Theme.text)
+                    .lineLimit(1)
+                Text(t.artistLine)
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.muted)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            HeartButton(trackId: t.id)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 6)
+    }
+
     private var bottomRow: some View {
-        HStack {
+        HStack(spacing: 6) {
             AirPlayButton()
-                .frame(width: 44, height: 44)
+                .frame(width: 40, height: 44)
+            modeButton(icon: "hifispeaker.2", on: false, label: "Devices") { showDevices = true }
+                .overlay(alignment: .topTrailing) {
+                    if live.others.contains(where: { $0.playing }) {
+                        Circle().fill(Theme.ok).frame(width: 7, height: 7).offset(x: -6, y: 8)
+                    }
+                }
             Spacer()
             if let w = player.waitingFor {
                 HStack(spacing: 6) {
@@ -139,21 +250,30 @@ struct NowPlayingView: View {
                 }
                 Spacer()
             }
-            Button {
-                withAnimation(.easeInOut(duration: 0.22)) { showQueue.toggle() }
-            } label: {
-                Image(systemName: "list.bullet")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(showQueue ? Theme.ground : Theme.soft)
-                    .frame(width: 36, height: 32)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(showQueue ? Theme.high : Color.clear))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .accessibilityLabel("Queue")
+            modeButton(icon: "quote.bubble", on: mode == .lyrics, label: "Lyrics") { flip(.lyrics) }
+            modeButton(icon: "list.bullet", on: mode == .queue, label: "Queue") { flip(.queue) }
         }
-        .padding(.horizontal, 22)
+        .padding(.horizontal, 18)
         .padding(.bottom, 6)
+    }
+
+    private func flip(_ m: Mode) {
+        Haptics.tap()
+        withAnimation(.easeInOut(duration: 0.22)) { mode = mode == m ? .cover : m }
+    }
+
+    private func modeButton(icon: String, on: Bool, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(on ? Theme.ground : Theme.soft)
+                .frame(width: 36, height: 32)
+                .background(RoundedRectangle(cornerRadius: 8).fill(on ? Theme.high : Color.clear))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 

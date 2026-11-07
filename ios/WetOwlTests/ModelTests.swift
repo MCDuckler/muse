@@ -119,3 +119,56 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(formatTime(.nan), "0:00")
     }
 }
+
+final class BrowseTests: XCTestCase {
+    func testLyricsWithSeveralStampsAndTags() {
+        let lines = LyricsParser.parse("[ar:Someone]\n[00:10.50][01:00.00] chorus\n[00:05.00] verse\n[00:20.00]\n")
+        XCTAssertEqual(lines.map { $0.time }, [5, 10.5, 20, 60])
+        XCTAssertEqual(lines.map { $0.text }, ["verse", "chorus", "", "chorus"])
+        XCTAssertNil(LyricsParser.index(of: lines, at: 2))
+        XCTAssertEqual(LyricsParser.index(of: lines, at: 10.4), 1, "a line lights a moment early")
+        XCTAssertEqual(LyricsParser.index(of: lines, at: 59), 2)
+        XCTAssertEqual(LyricsParser.index(of: lines, at: 500), 3)
+    }
+
+    func testArtistPageKeepsWhatDecodes() throws {
+        let d: ArtistDetail = try API.decode(Data("""
+        {"artist": {"name": "Mira", "image": null, "fans": 12},
+         "albums": [{"remote_id": "1", "title": "A", "have": 2}, {"title": "no id"}],
+         "top": [{"remote_id": "9", "title": "T", "artists": [null, "Mira"], "track": {"id": 4, "title": "T"}}],
+         "tracks": [{"id": 4, "title": "T"}]}
+        """.utf8))
+        XCTAssertEqual(d.artist.name, "Mira")
+        XCTAssertEqual(d.albums.map { $0.title }, ["A"])
+        XCTAssertEqual(d.top.first?.artists, ["Mira"])
+        XCTAssertEqual(d.top.first?.track?.id, 4)
+    }
+
+    func testRecordPagePlaysOnlyWhatIsHere() throws {
+        let d: AlbumDetail = try API.decode(Data("""
+        {"album": {"name": "Lib", "release_name": "Release", "artist": "X"},
+         "tracks": [{"pos": 1, "title": "a", "track": {"id": 1, "title": "a"}}, {"pos": 2, "title": "b"}],
+         "extra": [{"id": 7, "title": "z"}]}
+        """.utf8))
+        XCTAssertEqual(d.album.name, "Release")
+        XCTAssertEqual(d.playable.map { $0.id }, [1, 7])
+    }
+
+    func testDevicesAndPages() throws {
+        let l: DeviceList = try API.decode(Data("""
+        {"this": 3, "devices": [{"id": 3, "name": "iPhone", "this": true}, {"id": 4, "name": "Linux desk", "live": true, "playing": true, "position_ms": 1000}]}
+        """.utf8))
+        XCTAssertEqual(l.this, 3)
+        XCTAssertTrue(l.devices[0].isThis)
+        XCTAssertEqual(l.devices[1].icon, "desktopcomputer")
+        let p: Page<AlbumSummary> = try API.decode(Data(#"{"items": [{"name": "R", "artist": "A", "tracks": 3}], "total": 40}"#.utf8))
+        XCTAssertEqual(p.total, 40)
+        XCTAssertEqual(p.items.first?.id, "A\u{1}R")
+    }
+
+    func testOnlyNewerBuildsAreOffered() {
+        XCTAssertTrue(Updates.isNewer("202611080900", than: "202611071238"))
+        XCTAssertFalse(Updates.isNewer("202611071238", than: "202611071238"))
+        XCTAssertFalse(Updates.isNewer("202611080900", than: "1"), "a build made by hand is never nagged")
+    }
+}

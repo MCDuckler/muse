@@ -1,10 +1,9 @@
 import SwiftUI
 
 struct SearchView: View {
-    let reselect: Reselect
     @EnvironmentObject private var app: AppModel
     @EnvironmentObject private var player: Player
-    @State private var path = NavigationPath()
+    @EnvironmentObject private var router: Router
     @State private var text = ""
     @State private var results: SearchResults?
     @State private var searching = false
@@ -12,7 +11,7 @@ struct SearchView: View {
     @State private var recents: [String] = UserDefaults.standard.stringArray(forKey: Keys.recentSearches) ?? []
 
     var body: some View {
-        NavigationStack(path: $path) {
+        NavigationStack(path: $router.search) {
             List {
                 if text.trimmingCharacters(in: .whitespaces).isEmpty {
                     recentSection
@@ -31,9 +30,8 @@ struct SearchView: View {
             .textInputAutocapitalization(.never)
             .onSubmit(of: .search) { remember(text) }
             .task(id: text) { await search(text) }
-            .navigationDestination(for: PlaylistRef.self) { r in PlaylistView(ref: r) }
+            .navigationDestination(for: Route.self) { RouteView(route: $0) }
         }
-        .onChange(of: reselect) { r in if r.tab == .search { path = NavigationPath() } }
         .onAppear { if DemoScreen.name == "search" && text.isEmpty { text = "light" } }
     }
 
@@ -80,6 +78,34 @@ struct SearchView: View {
         if let r = results {
             let localIds = Set(r.local.map { $0.id })
             let remote = r.remote.filter { !$0.known }
+            let acts = artists(in: r)
+            if !acts.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(acts, id: \.self) { a in
+                            Button { app.go(.artist(a)) } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "music.mic")
+                                        .font(.system(size: 12, weight: .semibold))
+                                    Text(a)
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .lineLimit(1)
+                                }
+                                .foregroundColor(Theme.text)
+                                .padding(.horizontal, 12)
+                                .frame(height: 32)
+                                .background(Capsule().fill(Theme.raised))
+                                .overlay(Capsule().stroke(Theme.edge, lineWidth: 1))
+                            }
+                            .buttonStyle(PressStyle())
+                        }
+                    }
+                    .padding(.horizontal, Theme.gutter)
+                }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 2, trailing: 0))
+            }
             if !r.local.isEmpty {
                 Section {
                     ForEach(r.local) { t in
@@ -183,6 +209,22 @@ struct SearchView: View {
             }
         }
         searching = false
+    }
+
+    /// The acts in the results whose name the query is in, house first.
+    private func artists(in r: SearchResults) -> [String] {
+        let q = text.trimmingCharacters(in: .whitespaces).lowercased()
+        guard q.count >= 2 else { return [] }
+        var seen = Set<String>()
+        var out: [String] = []
+        for a in r.local.flatMap({ $0.artists }) + r.remote.flatMap({ $0.artists }) {
+            let k = a.lowercased()
+            if k.contains(q) || q.contains(k), !seen.contains(k) {
+                seen.insert(k)
+                out.append(a)
+            }
+        }
+        return Array(out.prefix(5))
     }
 
     private func remember(_ q: String) {

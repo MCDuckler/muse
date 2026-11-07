@@ -27,6 +27,8 @@ final class Player: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var isBuffering = false
     @Published private(set) var waitingFor: Track?
+    @Published private(set) var sleepAt: Date?
+    @Published private(set) var sleepAtEnd = false
     let clock = Clock()
 
     private let api: API
@@ -64,6 +66,8 @@ final class Player: ObservableObject {
     private var extendingAt: Int?
     private var recentredAt = Date.distantPast
     private var wantedWhenReady: (track: Track, during: Int?)?
+
+    private var lastStateReport = Date.distantPast
 
     // Now playing on the lock screen
     private var artwork: MPMediaItemArtwork?
@@ -191,6 +195,19 @@ final class Player: ObservableObject {
 
         if isPlaying, let last = lastCursorSent, Date().timeIntervalSince(last.at) > 15 {
             syncCursor()
+        }
+
+        // The sleep timer: the last ten seconds fade out, then it stops.
+        if let s = sleepAt {
+            let left = s.timeIntervalSinceNow
+            if left <= 0 {
+                sleepAt = nil
+                pause()
+                av.volume = 1
+                Log.shared.add("sleep timer: stopped")
+            } else if left < 10 {
+                av.volume = Float(max(0, left / 10))
+            }
         }
     }
 
@@ -326,6 +343,20 @@ final class Player: ObservableObject {
     private func itemEnded(_ item: AVPlayerItem) {
         guard slots[ObjectIdentifier(item)] != nil else { return }
         if ObjectIdentifier(item) == listenItem { listenCompleted = true }
+        if sleepAtEnd, item === av.currentItem {
+            // Asleep at the end of this song: stopped there, the next one waiting.
+            sleepAtEnd = false
+            av.actionAtItemEnd = .advance
+            isPlaying = false
+            if let n = nextIndex(), n != index {
+                start(at: n, autoplay: false)
+            } else {
+                finishListen()
+                updateNowPlaying()
+            }
+            Log.shared.add("sleep timer: end of song")
+            return
+        }
         // The last song of the queue: AVQueuePlayer runs dry and the current item
         // becomes nil, which currentItemChanged takes as the end.
     }
@@ -505,6 +536,7 @@ final class Player: ObservableObject {
         av.play()
         isPlaying = true
         updateNowPlaying()
+        reportState(force: true)
     }
 
     func pause() {
@@ -600,6 +632,20 @@ final class Player: ObservableObject {
         let id = q.id
         let i = index
         Task { try? await api.setCursor(id, index: i, positionMs: ms) }
+        reportState(force: force)
+    }
+
+    /// This device's state for the house's device list (what plays where).
+    private func reportState(force: Bool = false) {
+        guard !demoMode, current != nil else { return }
+        if !force && Date().timeIntervalSince(lastStateReport) < 10 { return }
+        lastStateReport = Date()
+        let playing = isPlaying
+        let tid = current?.id
+        let qid = (queue?.id ?? 0) > 0 ? queue?.id : nil
+        let ms = Int(clock.elapsed * 1000)
+        let item = current?.itemId
+        Task { try? await api.reportState(playing: playing, trackId: tid, queueId: qid, positionMs: ms, itemId: item) }
     }
 
     /// Take the house's queue as the truth without interrupting the song playing.
@@ -717,14 +763,14 @@ final class Player: ObservableObject {
     }
 
     /// The queue to add to; made ("Now") when there is none.
-    private func ensureQueue(named name: String) async throws -> QueueState {
+    private func ensureQueue(named name: String, stationId: Int? = nil) async throws -> QueueState {
         let store = AppModel.shared.store
         if store.queues.isEmpty { await store.refreshQueues() }
         if let found = store.queues.first(where: { $0.name == name && $0.sharedFrom == nil }) {
             return found
         }
         do {
-            let made = try await api.createQueue(name)
+            let made = try await api.createQueue(name, stationId: stationId)
             await store.refreshQueues()
             return made
         } catch let e as APIError where e.status == 409 {
@@ -736,7 +782,7 @@ final class Player: ObservableObject {
 
     /// Play these songs, as the queue called [name] (a playlist's own queue), from
     /// [from]. Sound starts at once; the house is told after.
-    func play(_ tracks: [Track], from: Int = 0, name: String, shuffle: Bool = false) {
+    func play(_ tracks: [Track], from: Int = 0, name: String, shuffle: Bool = false, stationId: Int? = nil) {
         guard !tracks.isEmpty else { return }
         Haptics.tap()
         var list = tracks
@@ -754,18 +800,22 @@ final class Player: ObservableObject {
         enqueue { [weak self] in
             guard let self = self else { return }
             do {
-                var target = try await self.ensureQueue(named: name)
+                var target = try await self.ensureQueue(named: name, stationId: stationId)
                 var state: QueueState
                 do {
                     state = try await self.api.replaceQueueUnconditionally(target.id, trackIds: ids, cursor: self.index)
                 } catch let e as APIError where e.status == 404 {
                     await AppModel.shared.store.refreshQueues()
-                    target = try await self.ensureQueue(named: name)
+                    target = try await self.ensureQueue(named: name, stationId: stationId)
                     state = try await self.api.replaceQueueUnconditionally(target.id, trackIds: ids, cursor: self.index)
                 }
                 guard self.queue?.name == name else { return }
                 self.adopt(state)
                 self.syncCursor(force: true)
+                // Songs not fetched yet: the whole queue ahead of everything else.
+                if tracks.contains(where: { !$0.isReady }) {
+                    try? await self.api.prioritise(state.id)
+                }
                 await AppModel.shared.store.refreshQueues()
             } catch {
                 Log.shared.add("play list: \(error)")
@@ -855,16 +905,21 @@ final class Player: ObservableObject {
                     return
                 }
                 if fresh.isReady {
-                    self.wantedWhenReady = nil
-                    self.waitingFor = nil
-                    guard self.current?.id == w.during else { return }
-                    self.playNowFetched(fresh)
+                    self.wantedArrived(fresh)
                     return
                 }
             }
             self.wantedWhenReady = nil
             self.waitingFor = nil
         }
+    }
+
+    private func wantedArrived(_ fresh: Track) {
+        guard let w = wantedWhenReady, w.track.id == fresh.id else { return }
+        wantedWhenReady = nil
+        waitingFor = nil
+        guard current?.id == w.during else { return }
+        playNowFetched(fresh)
     }
 
     /// It was put on next while it was fetched; now it is here, it plays.
@@ -986,6 +1041,136 @@ final class Player: ObservableObject {
                 AppModel.shared.say(APIError.from(error).message, icon: "exclamationmark.triangle")
             }
         }
+    }
+
+    // MARK: The house, other devices, the sleep timer
+
+    /// Another device changed this queue.
+    func houseChanged(queue id: Int, rev: Int?) {
+        guard let q = queue, q.id == id, rev != q.rev else { return }
+        resync()
+    }
+
+    /// A song the house was fetching has arrived: playable from now on, here too.
+    func trackReady(_ id: Int) {
+        if var q = queue {
+            var changed = false
+            for i in q.items.indices where q.items[i].id == id && q.items[i].streamUrl == nil {
+                q.items[i].streamUrl = "/tracks/\(id)/stream"
+                q.items[i].state = "ready"
+                changed = true
+            }
+            if changed {
+                queue = q
+                if current?.id == id { current = q.track(at: index) }
+                if av.currentItem != nil { prepareNext() }
+            }
+        }
+        if wantedWhenReady?.track.id == id {
+            Task {
+                if let fresh = try? await api.track(id), fresh.isReady { self.wantedArrived(fresh) }
+            }
+        }
+    }
+
+    /// Another device took the music.
+    func yieldToOther() {
+        guard isPlaying else { return }
+        pause()
+        AppModel.shared.say("Playing on another device now", icon: "hifispeaker.2")
+    }
+
+    /// Asked by another device.
+    func perform(_ action: String, queueId: Int?, trackId: Int?, positionMs: Int) {
+        switch action {
+        case "play": play()
+        case "pause", "stop": pause()
+        case "next": next()
+        case "previous": previous()
+        case "seek": seek(to: Double(positionMs) / 1000)
+        case "take":
+            if let q = queueId, let t = trackId {
+                takeOver(queueId: q, trackId: t, positionMs: positionMs)
+            } else {
+                play()
+            }
+        default: break
+        }
+    }
+
+    /// Play this queue from this song and place: handed over from another device.
+    func takeOver(queueId: Int, trackId: Int, positionMs: Int) {
+        Haptics.done()
+        enqueue { [weak self] in
+            guard let self = self else { return }
+            do {
+                let q = try await self.api.queue(queueId)
+                self.queue = q
+                self.remember(q)
+                let at = q.nearest(trackId: trackId, around: q.cursorIndex) ?? q.cursorIndex
+                self.start(at: at, position: Double(positionMs) / 1000, autoplay: true)
+                await AppModel.shared.store.refreshQueues()
+            } catch {
+                AppModel.shared.say(APIError.from(error).message, icon: "exclamationmark.triangle")
+            }
+        }
+    }
+
+    /// A station written from a song, an act or a record, put on at once.
+    func startStation(kind: String, trackId: Int? = nil, artist: String? = nil, album: String? = nil) {
+        Haptics.tap()
+        AppModel.shared.say("Writing a station…", icon: "dot.radiowaves.left.and.right")
+        Task {
+            do {
+                let p = try await api.startStation(kind: kind, trackId: trackId, artist: artist, album: album)
+                let items = p.tracks ?? []
+                guard items.contains(where: { $0.isReady }) else {
+                    AppModel.shared.say("The station is being fetched; try it in a moment", icon: "arrow.down")
+                    return
+                }
+                self.play(items, name: p.name, stationId: p.station?.id)
+                await AppModel.shared.store.refreshPlaylists()
+            } catch {
+                AppModel.shared.say(APIError.from(error).message, icon: "exclamationmark.triangle")
+            }
+        }
+    }
+
+    /// Never offered again; skipped now if it is on.
+    func notForMe(_ t: Track) {
+        Haptics.tap()
+        if current?.id == t.id { next() }
+        Task {
+            do {
+                try await api.dislike(t.id)
+                AppModel.shared.say("Won't be offered again", icon: "hand.thumbsdown")
+            } catch {
+                AppModel.shared.say(APIError.from(error).message, icon: "exclamationmark.triangle")
+            }
+        }
+    }
+
+    func sleep(minutes: Int) {
+        Haptics.tap()
+        cancelSleep(quietly: true)
+        sleepAt = Date().addingTimeInterval(Double(minutes) * 60)
+        AppModel.shared.say("Stops in \(minutes) min", icon: "moon.fill")
+    }
+
+    func sleepAtEndOfSong() {
+        Haptics.tap()
+        cancelSleep(quietly: true)
+        sleepAtEnd = true
+        av.actionAtItemEnd = .pause
+        AppModel.shared.say("Stops at the end of this song", icon: "moon.fill")
+    }
+
+    func cancelSleep(quietly: Bool = false) {
+        sleepAt = nil
+        sleepAtEnd = false
+        av.actionAtItemEnd = .advance
+        av.volume = 1
+        if !quietly { AppModel.shared.say("Sleep timer off", icon: "moon") }
     }
 
     /// Everything off: signed out.

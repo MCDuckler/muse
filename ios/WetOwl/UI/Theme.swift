@@ -218,14 +218,40 @@ struct TrackMenuItems: View {
     @EnvironmentObject private var store: Store
 
     var body: some View {
-        Button { app.player.playNow(track) } label: { Label("Play now", systemImage: "play.fill") }
-        Button { app.player.add(track, next: true) } label: { Label("Play next", systemImage: "text.insert") }
-        Button { app.player.add(track, next: false) } label: { Label("Add to queue", systemImage: "text.append") }
-        let fav = store.isFavourite(track.id)
-        Button { store.toggleFavourite(track.id) } label: {
-            Label(fav ? "Remove from Favourites" : "Add to Favourites", systemImage: fav ? "heart.slash" : "heart")
+        Section {
+            Button { app.player.add(track, next: true) } label: { Label("Play next", systemImage: "text.insert") }
+            Button { app.player.add(track, next: false) } label: { Label("Add to queue", systemImage: "text.append") }
+        }
+        Section {
+            Button { app.adding = TrackBatch(tracks: [track]) } label: {
+                Label("Add to a playlist…", systemImage: "text.badge.plus")
+            }
+            let fav = store.isFavourite(track.id)
+            Button { store.toggleFavourite(track.id) } label: {
+                Label(fav ? "Remove from Favourites" : "Add to Favourites", systemImage: fav ? "heart.slash" : "heart")
+            }
+        }
+        Section {
+            if let a = track.artists.first {
+                Button { app.goArtist(a) } label: { Label("Go to \(a)", systemImage: "music.mic") }
+            }
+            if let al = track.album, !al.isEmpty {
+                Button { app.goAlbum(of: track) } label: { Label("Go to the record", systemImage: "square.stack") }
+            }
+            Button { app.player.startStation(kind: "track", trackId: track.id) } label: {
+                Label("Start a station", systemImage: "dot.radiowaves.left.and.right")
+            }
+        }
+        Button(role: .destructive) { app.player.notForMe(track) } label: {
+            Label("Not for me", systemImage: "hand.thumbsdown")
         }
     }
+}
+
+/// Songs on their way to a playlist (the sheet that asks which).
+struct TrackBatch: Identifiable {
+    let id = UUID()
+    let tracks: [Track]
 }
 
 struct SectionTitle: View {
@@ -323,5 +349,154 @@ struct ToastView: View {
         .background(Capsule().fill(Theme.high))
         .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
         .padding(.horizontal, 24)
+    }
+}
+
+/// Grey rows that breathe while the first answer is on its way.
+struct SkeletonRows: View {
+    var count = 8
+    var cover: CGFloat = Theme.rowCover
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(0..<count, id: \.self) { i in
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Theme.raised)
+                        .frame(width: cover, height: cover)
+                    VStack(alignment: .leading, spacing: 7) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Theme.raised)
+                            .frame(width: CGFloat(110 + (i * 37) % 120), height: 12)
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Theme.panel)
+                            .frame(width: CGFloat(70 + (i * 53) % 80), height: 10)
+                    }
+                    Spacer()
+                }
+                .frame(height: cover + 12)
+            }
+        }
+        .modifier(Shimmer())
+        .accessibilityLabel("Loading")
+    }
+}
+
+struct Shimmer: ViewModifier {
+    @State private var phase: CGFloat = -1
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                GeometryReader { g in
+                    LinearGradient(colors: [.clear, Color.white.opacity(0.06), .clear],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: g.size.width * 0.6)
+                        .offset(x: phase * g.size.width * 1.4)
+                }
+                .allowsHitTesting(false)
+            )
+            .clipped()
+            .onAppear {
+                withAnimation(.linear(duration: 1.3).repeatForever(autoreverses: false)) { phase = 1 }
+            }
+    }
+}
+
+/// Play and Shuffle side by side, with whatever else goes at the end.
+struct PlayShuffleRow<Extra: View>: View {
+    let enabled: Bool
+    let play: () -> Void
+    let shuffle: () -> Void
+    @ViewBuilder var extra: () -> Extra
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: play) {
+                Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PillButton(filled: true))
+            Button(action: shuffle) {
+                Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PillButton(filled: false))
+            extra()
+        }
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.5)
+    }
+}
+
+/// A round icon button in the same family as the pills.
+struct CircleIconButton: View {
+    let icon: String
+    var tint: Color = Theme.high
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(tint)
+                .frame(width: 44, height: 40)
+                .background(Capsule().fill(Theme.raised))
+                .overlay(Capsule().stroke(Theme.edge, lineWidth: 1))
+        }
+        .accessibilityLabel(label)
+    }
+}
+
+/// "1 h 12 min" / "38 min".
+func formatLength(_ seconds: Double) -> String {
+    let m = Int((seconds / 60).rounded())
+    if m >= 60 { return "\(m / 60) h \(m % 60) min" }
+    return "\(max(m, 1)) min"
+}
+
+/// A song known only by name (a record's row, an act's top song).
+struct NamedRow: View {
+    let number: Int?
+    let title: String
+    let subtitle: String?
+    let cover: URL?
+    var here: Track? = nil
+    var playing = false
+
+    @EnvironmentObject private var app: AppModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let n = number {
+                Text("\(n)")
+                    .font(.system(size: 14, weight: .medium).monospacedDigit())
+                    .foregroundColor(playing ? Theme.red : Theme.faint)
+                    .frame(width: 24, alignment: .trailing)
+            } else {
+                CoverView(url: here.flatMap { app.api.coverURL($0, small: true) } ?? cover,
+                          color: here?.coverColor, size: Theme.rowCover)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(playing ? Theme.red : (here == nil ? Theme.soft : Theme.text))
+                    .lineLimit(1)
+                if let s = subtitle, !s.isEmpty {
+                    Text(s)
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.muted)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 4)
+            if here == nil {
+                Image(systemName: "icloud.and.arrow.down")
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.faint)
+                    .frame(width: 28)
+            }
+        }
+        .frame(height: number == nil ? Theme.rowHeight : 48)
+        .contentShape(Rectangle())
     }
 }

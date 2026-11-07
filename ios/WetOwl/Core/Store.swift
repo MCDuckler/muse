@@ -14,6 +14,8 @@ final class Store: ObservableObject {
     @Published private(set) var favouritesPlaylistId: Int?
     @Published private(set) var loadingPlaylists = false
     @Published private(set) var playlistsError: String?
+    /// Moves on when a song arrives, so open lists can redraw it as playable.
+    @Published private(set) var readyTick = 0
 
     private let api: API
     private var lastRefresh = Date.distantPast
@@ -127,6 +129,111 @@ final class Store: ObservableObject {
                 if on { favourites.remove(id) } else { favourites.insert(id) }
                 AppModel.shared.say(APIError.from(error).message, icon: "exclamationmark.triangle")
             }
+        }
+    }
+
+    /// The playlists to reach in one tap: favourites, pinned, then the last opened.
+    var quick: [Playlist] {
+        let fav = playlists.filter { $0.isFavourites }
+        let pinned = playlists.filter { $0.pinned && !$0.isFavourites }
+        let recent = playlists
+            .filter { !$0.pinned && !$0.isFavourites && $0.lastOpenedAt != nil }
+            .sorted { ($0.lastOpenedAt ?? "") > ($1.lastOpenedAt ?? "") }
+        let rest = playlists.filter { !$0.pinned && !$0.isFavourites && $0.lastOpenedAt == nil }
+        return Array((fav + pinned + recent + rest).prefix(6))
+    }
+
+    /// A song the house was fetching has arrived.
+    func markReady(_ id: Int) {
+        func fix(_ list: inout [Track]) -> Bool {
+            var changed = false
+            for i in list.indices where list[i].id == id && list[i].streamUrl == nil {
+                list[i].streamUrl = "/tracks/\(id)/stream"
+                list[i].state = "ready"
+                changed = true
+            }
+            return changed
+        }
+        var any = false
+        for (k, var p) in details {
+            if var ts = p.tracks, fix(&ts) {
+                p.tracks = ts
+                details[k] = p
+                any = true
+            }
+        }
+        var h = history
+        if fix(&h) { history = h; any = true }
+        if any { readyTick += 1 }
+    }
+
+    // MARK: Playlists of your own
+
+    func createPlaylist(_ name: String) async -> Int? {
+        do {
+            let id = try await api.createPlaylist(name)
+            await refreshPlaylists()
+            return id
+        } catch {
+            AppModel.shared.say(APIError.from(error).message, icon: "exclamationmark.triangle")
+            return nil
+        }
+    }
+
+    func rename(_ id: Int, to name: String) async {
+        do {
+            let p = try await api.renamePlaylist(id, name)
+            details[id] = p
+            await refreshPlaylists()
+        } catch {
+            AppModel.shared.say(APIError.from(error).message, icon: "exclamationmark.triangle")
+        }
+    }
+
+    func delete(_ id: Int) async -> Bool {
+        do {
+            try await api.deletePlaylist(id)
+            details[id] = nil
+            DiskCache.remove("playlist-\(id)")
+            playlists.removeAll { $0.id == id }
+            await refreshPlaylists()
+            return true
+        } catch {
+            AppModel.shared.say(APIError.from(error).message, icon: "exclamationmark.triangle")
+            return false
+        }
+    }
+
+    func remove(_ trackIds: [Int], from id: Int) async {
+        do {
+            let p = try await api.removeFromPlaylist(id, trackIds: trackIds)
+            details[id] = p
+            readyTick += 1
+            if id == favouritesPlaylistId { for t in trackIds { favourites.remove(t) } }
+        } catch {
+            AppModel.shared.say(APIError.from(error).message, icon: "exclamationmark.triangle")
+        }
+    }
+
+    /// Put on or take off a playlist from the sheet; the open copy is refetched.
+    func setOn(_ playlistId: Int, trackIds: [Int], _ on: Bool) async -> Bool {
+        do {
+            if on {
+                try await api.addToPlaylist(playlistId, trackIds: trackIds)
+            } else {
+                _ = try await api.removeFromPlaylist(playlistId, trackIds: trackIds)
+            }
+            if playlistId == favouritesPlaylistId {
+                for t in trackIds {
+                    if on { favourites.insert(t) } else { favourites.remove(t) }
+                }
+            }
+            details[playlistId] = nil
+            DiskCache.remove("playlist-\(playlistId)")
+            return true
+        } catch {
+            AppModel.shared.say(APIError.from(error).message, icon: "exclamationmark.triangle")
+            return false
         }
     }
 

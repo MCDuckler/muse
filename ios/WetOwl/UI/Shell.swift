@@ -19,25 +19,19 @@ struct RootView: View {
     }
 }
 
-/// A tab tapped again: back to its top.
-struct Reselect: Equatable {
-    var tab: AppModel.Tab
-    var count: Int
-}
-
 /// Three tabs, each with its own navigation kept alive; the player above the bar.
 struct Shell: View {
     @EnvironmentObject private var app: AppModel
     @EnvironmentObject private var player: Player
-    @State private var reselect = Reselect(tab: .home, count: 0)
+    @EnvironmentObject private var router: Router
     @State private var started = false
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
-                HomeView(reselect: reselect).tabbed(app.tab == .home)
-                SearchView(reselect: reselect).tabbed(app.tab == .search)
-                LibraryView(reselect: reselect).tabbed(app.tab == .library)
+                HomeView().tabbed(app.tab == .home)
+                SearchView().tabbed(app.tab == .search)
+                LibraryView().tabbed(app.tab == .library)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if player.hasSomething {
@@ -46,7 +40,7 @@ struct Shell: View {
             }
             TabBar(selected: app.tab) { tab in
                 if tab == app.tab {
-                    reselect = Reselect(tab: tab, count: reselect.count + 1)
+                    withAnimation { router.popToRoot(tab) }
                 } else {
                     app.tab = tab
                 }
@@ -55,7 +49,7 @@ struct Shell: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.9), value: player.hasSomething)
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .overlay(alignment: .bottom) {
-            if let t = app.toast {
+            if let t = app.toast, !app.nowPlayingOpen {
                 ToastView(toast: t)
                     .padding(.bottom, player.hasSomething ? 128 : 68)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -63,14 +57,33 @@ struct Shell: View {
             }
         }
         .sheet(isPresented: $app.nowPlayingOpen) {
-            NowPlayingView(showQueue: DemoScreen.name == "queue")
+            NowPlayingView(mode: DemoScreen.name == "queue" ? .queue : (DemoScreen.name == "lyrics" ? .lyrics : .cover))
                 .models(app)
+        }
+        .sheet(item: Binding(get: { app.nowPlayingOpen ? nil : app.adding }, set: { app.adding = $0 })) { b in
+            AddToPlaylistSheet(batch: b).models(app)
         }
         .onAppear {
             guard !started else { return }
             started = true
             if app.demo { DemoScreen.setUp(app) }
             app.refresh(force: true)
+        }
+    }
+}
+
+/// Where each tab's stack goes when something is pushed onto it.
+struct RouteView: View {
+    let route: Route
+
+    var body: some View {
+        switch route {
+        case .playlist(let r): PlaylistView(ref: r)
+        case .artist(let n): ArtistView(name: n)
+        case .album(let r): AlbumView(ref: r)
+        case .artists: ArtistsList()
+        case .albums: AlbumsGrid()
+        case .songs: SongsList()
         }
     }
 }
@@ -84,6 +97,9 @@ extension View {
             .environmentObject(app.store)
             .environmentObject(app.offline)
             .environmentObject(app.reach)
+            .environmentObject(app.router)
+            .environmentObject(app.live)
+            .environmentObject(app.updates)
     }
 
     /// Shown, or kept alive but out of the way.
@@ -188,8 +204,15 @@ struct MiniPlayer: View {
             .contentShape(Rectangle())
             .onTapGesture { app.nowPlayingOpen = true }
             .gesture(
-                DragGesture(minimumDistance: 12).onEnded { v in
-                    if v.translation.height < -24 { app.nowPlayingOpen = true }
+                DragGesture(minimumDistance: 14).onEnded { v in
+                    let dx = v.translation.width
+                    let dy = v.translation.height
+                    if abs(dx) > abs(dy), abs(dx) > 50 {
+                        Haptics.tap()
+                        if dx < 0 { player.next() } else { player.previous() }
+                    } else if dy < -24 {
+                        app.nowPlayingOpen = true
+                    }
                 }
             )
             .accessibilityElement(children: .contain)

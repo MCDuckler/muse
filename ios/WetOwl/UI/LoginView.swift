@@ -107,6 +107,8 @@ extension View {
 struct SettingsView: View {
     @EnvironmentObject private var app: AppModel
     @EnvironmentObject private var offline: Offline
+    @EnvironmentObject private var updates: Updates
+    @EnvironmentObject private var live: Live
     @Environment(\.dismiss) private var dismiss
     @State private var coverBytes: Int64 = 0
     @State private var confirmSignOut = false
@@ -115,9 +117,25 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Account") {
-                    row("Signed in as", app.userName)
-                    row("House", app.api.base.replacingOccurrences(of: "https://", with: ""))
+                Section {
+                    HStack(spacing: 14) {
+                        Avatar(name: app.userName, size: 52)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(app.userName)
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundColor(Theme.text)
+                            Text(app.api.base.replacingOccurrences(of: "https://", with: ""))
+                                .font(.system(size: 13))
+                                .foregroundColor(Theme.muted)
+                            HStack(spacing: 5) {
+                                Circle().fill(live.connected ? Theme.ok : Theme.faint).frame(width: 7, height: 7)
+                                Text(live.connected ? "Live with the house" : "Not connected live")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.muted)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 6)
                 }
                 Section {
                     row("Kept songs", "\(offline.files.count) · \(formatBytes(offline.totalBytes))")
@@ -145,8 +163,40 @@ struct SettingsView: View {
                     }
                 }
                 Section {
-                    Button("Send playback report") { app.sendReport(reason: "asked from settings", manual: true) }
                     row("Version", "\(Build.version) (\(Build.number))")
+                    if let u = updates.available {
+                        Button {
+                            updates.install()
+                        } label: {
+                            HStack {
+                                Text("Install \(u.version) (\(u.build))")
+                                Spacer()
+                                Image(systemName: "arrow.down.app.fill").foregroundColor(Theme.blue)
+                            }
+                        }
+                    } else {
+                        Button {
+                            Task { await updates.check(force: true) }
+                        } label: {
+                            HStack {
+                                Text(updates.checking ? "Looking…" : "Look for a new version")
+                                Spacer()
+                                if let l = updates.lastChecked, !updates.checking {
+                                    Text("up to date \(l.formatted(date: .omitted, time: .shortened))")
+                                        .font(.system(size: 13))
+                                        .foregroundColor(Theme.muted)
+                                }
+                            }
+                        }
+                        .disabled(updates.checking)
+                    }
+                } header: {
+                    Text("App")
+                } footer: {
+                    Text("New versions install through SideStore.")
+                }
+                Section {
+                    Button("Send playback report") { app.sendReport(reason: "asked from settings", manual: true) }
                 } header: {
                     Text("Help")
                 } footer: {

@@ -12,6 +12,9 @@ final class AppModel: ObservableObject {
     let offline: Offline
     let reach: Reachability
     let outbox: Outbox
+    let router = Router()
+    let live: Live
+    let updates = Updates()
     let demo: Bool
 
     @Published private(set) var signedIn: Bool
@@ -20,6 +23,8 @@ final class AppModel: ObservableObject {
     @Published var showSettings = false
     @Published private(set) var toast: Toast?
     @Published var tab: Tab = .home
+    /// Songs waiting for the "which playlist?" sheet.
+    @Published var adding: TrackBatch?
 
     enum Tab: Hashable { case home, search, library }
 
@@ -45,11 +50,14 @@ final class AppModel: ObservableObject {
         self.reach = reach
         self.outbox = outbox
         player = Player(api: api, offline: offline, reach: reach, outbox: outbox)
+        live = Live(api: api)
         signedIn = token != nil && !(demo && DemoScreen.name == "login")
         userName = demo ? "chris" : (defaults.string(forKey: Keys.user) ?? "")
         api.onUnauthorized = { [weak self] in
             Task { @MainActor [weak self] in self?.expired() }
         }
+        live.player = player
+        live.store = store
         Theme.configureAppearance()
         Log.shared.add("start \(Build.version) (\(Build.number)) \(Build.device) signedIn=\(signedIn)")
     }
@@ -60,11 +68,14 @@ final class AppModel: ObservableObject {
         switch phase {
         case .active:
             guard signedIn, !demo else { return }
+            live.start()
             let away = Date().timeIntervalSince(lastActive)
             lastActive = Date()
             if away > 20 { refresh() }
         case .background:
             player.willResignActive()
+            // Kept while playing (another device may ask this one to pause); else let go.
+            if !player.isPlaying { live.stop() }
         default:
             break
         }
@@ -77,6 +88,11 @@ final class AppModel: ObservableObject {
             async let all: Void = store.refreshAll(force: force)
             player.resync()
             _ = await (key, all)
+            if !demo {
+                live.start()
+                await live.refreshDevices()
+                await updates.check()
+            }
             await outbox.flush(api)
             await offline.syncAll()
         }
@@ -101,6 +117,7 @@ final class AppModel: ObservableObject {
     }
 
     func signOut() {
+        live.stop()
         player.reset()
         offline.removeAll()
         store.clear()
@@ -117,7 +134,33 @@ final class AppModel: ObservableObject {
         Log.shared.add("token refused: signed out")
         Keychain.delete("token")
         api.token = nil
+        live.stop()
         signedIn = false
+    }
+
+    // MARK: Going places
+
+    /// Open a page on the tab in front, closing the player first if it is up.
+    func go(_ route: Route) {
+        if nowPlayingOpen {
+            nowPlayingOpen = false
+            Task {
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                self.router.push(route, on: self.tab)
+            }
+        } else {
+            router.push(route, on: tab)
+        }
+    }
+
+    func goArtist(_ name: String?) {
+        guard let n = name, !n.isEmpty else { return }
+        go(.artist(n))
+    }
+
+    func goAlbum(of t: Track) {
+        guard let a = t.album, !a.isEmpty else { return }
+        go(.album(AlbumRef(name: a, artist: t.artists.first, remoteId: nil)))
     }
 
     // MARK: Telling the listener things
@@ -174,6 +217,21 @@ final class AppModel: ObservableObject {
             do {
                 let t = try await api.resolve(hit)
                 player.add(t, next: next)
+            } catch {
+                say(APIError.from(error).message, icon: "exclamationmark.triangle")
+            }
+        }
+    }
+
+    /// A song known only by its name (a record's row, an act's top song): found on
+    /// YouTube Music by the house, then played.
+    func playNamed(title: String, artists: [String], album: String?, durationMs: Int?) {
+        Haptics.tap()
+        say("Finding \(title)…", icon: "magnifyingglass")
+        Task {
+            do {
+                let t = try await api.resolve(title: title, artists: artists, album: album, durationMs: durationMs)
+                player.playNow(t)
             } catch {
                 say(APIError.from(error).message, icon: "exclamationmark.triangle")
             }

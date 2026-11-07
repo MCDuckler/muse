@@ -143,9 +143,11 @@ struct Playlist: Decodable, Identifiable, Hashable {
     var ownerName: String?
     var waiting: Int
     var station: StationRef?
+    var lastOpenedAt: String?
+    var editable: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, items, coverUrl, coverVersion, pinned, saved, ownerName, waiting, station
+        case id, name, kind, items, coverUrl, coverVersion, pinned, saved, ownerName, waiting, station, lastOpenedAt, editable
     }
 
     init(from decoder: Decoder) throws {
@@ -170,9 +172,18 @@ struct Playlist: Decodable, Identifiable, Hashable {
         ownerName = c.opt(String.self, .ownerName)
         waiting = c.opt(Int.self, .waiting) ?? 0
         station = c.opt(StationRef.self, .station)
+        lastOpenedAt = c.opt(String.self, .lastOpenedAt)
+        editable = c.opt(Bool.self, .editable)
     }
 
     var isFavourites: Bool { kind == "favourites" }
+
+    /// Songs can be put on it and taken off it here.
+    var canEdit: Bool { editable ?? (!saved && (kind == "local" || kind == "favourites" || kind == "station")) }
+
+    var shownName: String { isFavourites ? "Favourites" : name }
+
+    var totalSeconds: Double { (tracks ?? []).reduce(0) { $0 + $1.seconds } }
     var isStation: Bool { kind == "station" }
 
     var subtitle: String {
