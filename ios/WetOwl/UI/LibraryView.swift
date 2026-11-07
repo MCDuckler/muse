@@ -321,8 +321,12 @@ struct PlaylistView: View {
 
     /// What is known at once (memory, disk, the kept copy), then the house.
     private func open() async {
-        if playlist == nil, let p = store.cachedPlaylist(ref.id) ?? offline.savedList(ref.id) {
-            set(p)
+        if playlist == nil {
+            if let p = await store.cachedPlaylist(ref.id) {
+                set(p)
+            } else if let p = await offline.savedList(ref.id) {
+                set(p)
+            }
         }
         await load()
     }

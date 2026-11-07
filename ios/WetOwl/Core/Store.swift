@@ -84,13 +84,20 @@ final class Store: ObservableObject {
 
     // MARK: One playlist
 
-    func cachedPlaylist(_ id: Int) -> Playlist? {
+    /// The playlist as last seen: memory, else disk (decoded off the main thread: a
+    /// favourites list can be fourteen thousand songs).
+    func cachedPlaylist(_ id: Int) async -> Playlist? {
         if let p = details[id] { return p }
-        if let d = DiskCache.read("playlist-\(id)"), let p: Playlist = try? API.decode(d) {
-            details[id] = p
+        if let p: Playlist = await Store.readCached("playlist-\(id)") {
+            if details[id] == nil { details[id] = p }
             return p
         }
         return nil
+    }
+
+    nonisolated static func readCached<T: Decodable>(_ key: String) async -> T? {
+        guard let d = DiskCache.read(key) else { return nil }
+        return try? API.decode(d)
     }
 
     @discardableResult

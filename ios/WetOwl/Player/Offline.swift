@@ -104,8 +104,12 @@ final class Offline: ObservableObject {
     }
 
     /// The playlist as it was when it was kept: what the list shows with no signal.
-    func savedList(_ playlistId: Int) -> Playlist? {
-        guard let d = try? Data(contentsOf: listsDir.appendingPathComponent("\(playlistId).json")) else { return nil }
+    func savedList(_ playlistId: Int) async -> Playlist? {
+        await Offline.decodeFile(listsDir.appendingPathComponent("\(playlistId).json"))
+    }
+
+    nonisolated static func decodeFile<T: Decodable>(_ url: URL) async -> T? {
+        guard let d = try? Data(contentsOf: url) else { return nil }
         return try? API.decode(d)
     }
 

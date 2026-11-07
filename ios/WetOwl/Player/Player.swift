@@ -632,10 +632,23 @@ final class Player: ObservableObject {
         updateNowPlaying()
     }
 
+    /// The queue on disk for the next start: at most a window of it around the song
+    /// playing, written off the main thread.
     private func remember(_ q: QueueState, quietly: Bool = false) {
         guard q.id > 0 else { return }
         UserDefaults.standard.set(q.id, forKey: Keys.activeQueue)
-        if let d = API.encode(q) { DiskCache.write("queue-\(q.id)", d) }
+        var snap = q
+        let keep = 600
+        if snap.items.count > keep {
+            let here = index - snap.windowFrom
+            let lo = max(0, min(here - keep / 2, snap.items.count - keep))
+            snap.items = Array(snap.items[lo..<(lo + keep)])
+            snap.windowFrom += lo
+        }
+        let key = "queue-\(q.id)"
+        DispatchQueue.global(qos: .utility).async {
+            if let d = API.encode(snap) { DiskCache.write(key, d) }
+        }
     }
 
     /// The queue as the phone last knew it, on screen at once and ready to play.
