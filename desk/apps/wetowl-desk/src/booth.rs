@@ -407,6 +407,14 @@ impl App {
         let room = bpm.left() - chip.right() - 28.0;
         kit::clipped(p, pos2(chip.right() + 10.0, inner.top() + 18.0 + dy), &v.record.title, t::TITLE, "semi", alpha_of(t::text(), k), room);
         kit::clipped(p, pos2(x, inner.top() + 45.0 + dy), &v.record.artist, t::BODY, "", alpha_of(t::muted(), k), bpm.left() - x - 28.0);
+        // what is known of the record: lit where it is there
+        let mut mx = x;
+        for (i, (word, tip)) in [("STEMS", "Its stems: the parts and the stem moves"), ("BEATS", "Its beat grid"), ("FORM", "Its sections: intro, drops, breakdowns"), ("VOICE", "Where it sings")].into_iter().enumerate() {
+            let c = if v.marks[i] { t::soft() } else { alpha_of(t::faint(), 0.6) };
+            let r = kit::text(p, pos2(mx, inner.top() + 66.0), Align2::LEFT_CENTER, word, 8.5, "mono-semi", c);
+            ui.interact(r.expand(2.0), ui.scope_id().with(("mark", d, i)), Sense::hover()).on_hover_text(format!("{tip}: {}", if v.marks[i] { "here" } else { "not known" }));
+            mx = r.right() + 8.0;
+        }
 
         // the body: transport | hot cues | pitch; the loop row under it
         let body = Rect::from_min_max(pos2(inner.left(), inner.top() + 72.0 + 16.0), inner.max);
@@ -716,6 +724,8 @@ impl App {
                     Shelf::All => "All records".to_owned(),
                     Shelf::Playlist { name, .. } => name.clone(),
                     Shelf::Search(q) => format!("“{q}”"),
+                    Shelf::Fits { title, .. } => format!("Fits {title}"),
+                    Shelf::Queue => "The queue".to_owned(),
                 };
                 let n = if lib.loading { "…".to_owned() } else { thousands(lib.total) };
                 format!("{name} · {n}")
@@ -820,6 +830,14 @@ impl App {
         let row_k = |i: usize| if reduced { 1.0 } else { Ease::Out.at((since - i.min(8) as f32 * 0.012) / motion::STANDARD) };
 
         let mut load: Option<Record> = None;
+        let mut queue_it: Option<Record> = None;
+        let mut unqueue: Option<i64> = None;
+        let mut load_on: Option<(usize, Record)> = None;
+        let mut near_end = false;
+        let mut add_to: Option<(i64, Record)> = None;
+        let lists: Vec<(i64, String)> = desk.library().playlists.iter().map(|l| (l.id, l.name.clone())).collect();
+        let on_queue = desk.library().shelf == Shelf::Queue;
+        let free_decks: [bool; 2] = [!s.decks[0].playing, !s.decks[1].playing];
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
         let mut area = egui::ScrollArea::vertical().id_salt("crate").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0));
         if let Some(i) = scroll_to {
@@ -829,6 +847,7 @@ impl App {
         let mut clicked = None;
         let ctx = ui.ctx().clone();
         area.show_rows(&mut child, ROW, rows.len(), |ui, range| {
+            near_end = range.end + 30 >= rows.len();
             let first = range.start;
             let mut origin = None;
             for i in range {
@@ -879,6 +898,35 @@ impl App {
                 if resp.double_clicked() && playable {
                     load = Some(row.record.clone());
                 }
+                // a hand on a record: queue it, or put it on a deck that is free
+                let rec = row.record.clone();
+                resp.context_menu(|ui| {
+                    if on_queue {
+                        if ui.button("Out of the queue").clicked() {
+                            unqueue = Some(rec.id);
+                            ui.close();
+                        }
+                    } else if ui.add_enabled(rec.playable(), egui::Button::new("Queue it for the Auto DJ")).clicked() {
+                        queue_it = Some(rec.clone());
+                        ui.close();
+                    }
+                    if !lists.is_empty() && rec.id > 0 {
+                        ui.menu_button("Add to a playlist", |ui| {
+                            for (pid, name) in lists.iter() {
+                                if ui.button(name).clicked() {
+                                    add_to = Some((*pid, rec.clone()));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
+                    for d in 0..2 {
+                        if ui.add_enabled(playable && free_decks[d], egui::Button::new(format!("On deck {}", ["A", "B"][d]))).clicked() {
+                            load_on = Some((d, rec.clone()));
+                            ui.close();
+                        }
+                    }
+                });
             }
             // the cursor: one highlight that glides between rows
             if let Some(o) = origin
@@ -899,6 +947,25 @@ impl App {
         }
         if let Some(i) = clicked {
             self.cursor = i;
+        }
+        if let Some(r) = queue_it {
+            self.toasts.say(format!("{} queued", r.title), Tone::Neutral);
+            desk.queue_add(r);
+        }
+        if let Some(id) = unqueue {
+            desk.queue_remove(id);
+        }
+        if let Some((pid, r)) = add_to {
+            self.toasts.say(format!("{} added", r.title), Tone::Neutral);
+            desk.add_to_playlist(pid, &r);
+        }
+        if let Some((d, r)) = load_on {
+            self.toasts.say(format!("{} on deck {}", r.title, ["A", "B"][d]), Tone::Deck(d));
+            desk.load_by_hand(d, r);
+        }
+        // the whole library comes a page at a time: the next as the end comes into view
+        if near_end {
+            desk.more_rows();
         }
         if let Some(rec) = load
             && s.mix.is_none()
@@ -964,8 +1031,16 @@ impl App {
         if row(ui, tree.top() + 38.0, "All records", all_n, shelf == Shelf::All, -1) {
             open = Some(Shelf::All);
         }
-        kit::section(p, pos2(tree.left() + 18.0, tree.top() + 84.0), Align2::LEFT_TOP, "Playlists");
-        let list = Rect::from_min_max(pos2(tree.left(), tree.top() + 104.0), pos2(tree.right(), tree.bottom() - 46.0));
+        // the house's best fits for the record playing; the hand's queue
+        if row(ui, tree.top() + 70.0, "Fits the master", String::new(), matches!(shelf, Shelf::Fits { .. }), -2) {
+            self.fits_asked = true;
+        }
+        let queued = desk.queue().len();
+        if row(ui, tree.top() + 102.0, "Queue", if queued > 0 { queued.to_string() } else { String::new() }, shelf == Shelf::Queue, -3) {
+            open = Some(Shelf::Queue);
+        }
+        kit::section(p, pos2(tree.left() + 18.0, tree.top() + 148.0), Align2::LEFT_TOP, "Playlists");
+        let list = Rect::from_min_max(pos2(tree.left(), tree.top() + 168.0), pos2(tree.right(), tree.bottom() - 46.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
         egui::ScrollArea::vertical().id_salt("playlists").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0)).show_rows(&mut child, 32.0, lists.len(), |ui, range| {
             for i in range {
@@ -984,6 +1059,12 @@ impl App {
         let out = Rect::from_min_size(pos2(tree.right() - 88.0, tree.bottom() - 35.0), vec2(76.0, 26.0));
         if Btn::new("Sign out").quiet().size(11.0).show(ui, p, out, "sign-out").on_hover_text(server.clone()).clicked() {
             desk.sign_out();
+        }
+        if self.fits_asked {
+            self.fits_asked = false;
+            self.search.clear();
+            self.searched.clear();
+            desk.open_fits();
         }
         if let Some(s) = open {
             self.search.clear();

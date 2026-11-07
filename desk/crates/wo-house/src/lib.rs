@@ -518,6 +518,32 @@ impl House {
         self.post_json("/booth/feedback", body).map(|_| ())
     }
 
+    /// The records in the library that would follow `from` best (GET /booth/partners),
+    /// coarse, best first; `in_key`: only those in a key that mixes with it.
+    pub fn partners(&self, from: i64, exclude: &[i64], limit: u32, in_key: bool) -> Result<Vec<(Track, f64, String)>> {
+        #[derive(Deserialize)]
+        struct P {
+            track: Track,
+            #[serde(default)]
+            fit: f64,
+            #[serde(default)]
+            why: String,
+        }
+        #[derive(Deserialize)]
+        struct All {
+            #[serde(default)]
+            partners: Vec<P>,
+        }
+        let ex: Vec<String> = exclude.iter().map(|i| i.to_string()).collect();
+        let all: All = self.json(&format!("/booth/partners?from_track={from}&limit={limit}&exclude={}{}", ex.join("%2C"), if in_key { "&in_key=true" } else { "" }))?;
+        Ok(all.partners.into_iter().map(|p| (p.track, p.fit, p.why)).collect())
+    }
+
+    /// Records added to one of this person's playlists (POST /playlists/{id}/items).
+    pub fn add_to_playlist(&self, id: i64, tracks: &[i64]) -> Result<()> {
+        self.post_json(&format!("/playlists/{id}/items"), &serde_json::json!({ "track_ids": tracks })).map(|_| ())
+    }
+
     /// A set built by the house from a pool to a shape (POST /booth/set): the raw
     /// answer (`slots`, `stats`, `curve`).
     pub fn build_set(&self, body: &serde_json::Value) -> Result<serde_json::Value> {

@@ -16,6 +16,10 @@ pub enum Shelf {
     All,
     Playlist { id: i64, name: String },
     Search(String),
+    /// The records that would follow this one best (the house's partners, in key first).
+    Fits { from: i64, title: String },
+    /// The records a hand queued for the Auto DJ, in order.
+    Queue,
 }
 
 /// The library this frame.
@@ -54,6 +58,8 @@ pub(crate) struct Analysed {
 pub(crate) enum Done {
     SignedIn(Result<Box<House>, String>),
     Shelf { turn: u64, rows: Result<(Vec<Record>, i64), String> },
+    /// The next page of the shelf (the whole library), for the shelf's turn.
+    More { turn: u64, rows: Result<(Vec<Record>, i64), String> },
     Playlists(Result<Vec<PlaylistSummary>, String>),
     Analysed { slot: usize, turn: u64, result: Result<Box<Analysed>, String> },
     /// A record's cover, as the stage's cover ground takes it (None: none to be had).
@@ -76,6 +82,15 @@ pub(crate) fn sign_in(tx: &Sender<Done>, server: String, user: String, password:
     });
 }
 
+/// The next page of the whole library, from `offset`.
+pub(crate) fn fetch_more(tx: &Sender<Done>, house: &House, offset: i64, turn: u64) {
+    let (tx, house) = (tx.clone(), house.clone());
+    thread::spawn(move || {
+        let rows = house.tracks("added", offset, 200).map(|p| (p.items.iter().map(Record::from_house).collect(), p.total)).map_err(|e| e.to_string());
+        let _ = tx.send(Done::More { turn, rows });
+    });
+}
+
 /// The shelf's first page (200 records).
 pub(crate) fn fetch_shelf(tx: &Sender<Done>, house: &House, shelf: Shelf, turn: u64) {
     let (tx, house) = (tx.clone(), house.clone());
@@ -90,6 +105,19 @@ pub(crate) fn fetch_shelf(tx: &Sender<Done>, house: &House, shelf: Shelf, turn: 
                 let n = v.len() as i64;
                 (v, n)
             }),
+            // in key first, then the rest, each lot best first
+            Shelf::Fits { from, .. } => house.partners(from, &[from], 24, true).and_then(|keyed| {
+                let rest = house.partners(from, &[from], 30, false)?;
+                let mut v: Vec<wo_house::Track> = keyed.into_iter().map(|p| p.0).collect();
+                for (t, _, _) in rest {
+                    if !v.iter().any(|x| x.id == t.id) {
+                        v.push(t);
+                    }
+                }
+                let n = v.len() as i64;
+                Ok((v, n))
+            }),
+            Shelf::Queue => Ok((vec![], 0)),
         }
         .map(|(tracks, total)| (tracks.iter().map(Record::from_house).collect(), total))
         .map_err(|e| e.to_string());

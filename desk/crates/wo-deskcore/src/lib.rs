@@ -16,6 +16,7 @@ pub mod covers;
 pub mod library;
 pub mod milk;
 pub mod autodj;
+mod crate_;
 pub mod plan_view;
 pub mod set;
 mod fx;
@@ -76,6 +77,9 @@ pub struct DeckView {
     /// the stems are.
     pub part: parts::Part,
     pub stems: parts::Stems,
+    /// What is known of the record (v1's data marks): its stems, its beats, its form
+    /// (sections), its voice (the vocal map).
+    pub marks: [bool; 4],
     /// The hands' state: CUE, the loop, the pitch fader.
     pub cue: Option<f64>,
     pub looped: Option<(f64, f64)>,
@@ -237,6 +241,10 @@ pub struct Desk {
     mind: autodj::Mind,
     /// A set built at the house, and whether the Auto DJ plays it (set.rs).
     set: set::SetState,
+    /// Records a hand queued for the Auto DJ (crate_.rs).
+    hand_queue: Vec<Record>,
+    /// The library's next page asked for at this many rows.
+    more_asked: Option<usize>,
 }
 
 /// An offline engine rendered in real time on its own thread: a computer with no
@@ -345,6 +353,8 @@ impl Desk {
             recent: vec![],
             mind: Default::default(),
             set: Default::default(),
+            hand_queue: vec![],
+            more_asked: None,
             dice: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_nanos() as u64) | 1,
         };
         // the Desk's own saved sign-in; WO_APP_SIGN_IN=1 borrows the WetOwl app's for
@@ -374,6 +384,9 @@ impl Desk {
     /// The Auto DJ's next record: the best fit to the master's on the house's shelf (what
     /// Up next shows first), else the local queue's next.
     fn take_next(&mut self) -> Record {
+        if let Some(r) = self.queued_next() {
+            return r;
+        }
         if let Some(r) = self.set_next() {
             return r;
         }
@@ -799,6 +812,7 @@ impl Desk {
                 decoded: if wave.done { 1.0 } else { (wave.seconds() / length.max(1.0)).min(1.0) as f32 },
                 part: s.stems.part,
                 stems: s.stems.state.clone(),
+                marks: [s.stems.state.ready(), !s.hands.grid.is_empty(), !s.timing.sections.is_empty(), s.vocals.as_ref().is_some_and(|v| v.bars.is_some())],
             }
         };
         let decks = [view(0), view(1)];
@@ -870,7 +884,9 @@ impl Desk {
                 on_deck: (0..2).find(|&d| self.slots[d].record.id == r.id),
             })
             .collect();
-        rows.sort_by_key(|r| (r.on_deck.is_none(), std::cmp::Reverse(r.fits)));
+        if !matches!(self.library.shelf, Shelf::Fits { .. } | Shelf::Queue) || self.house.is_none() {
+            rows.sort_by_key(|r| (r.on_deck.is_none(), std::cmp::Reverse(r.fits)));
+        }
         rows
     }
 
@@ -985,11 +1001,19 @@ impl Desk {
 
     /// A pad pressed: set here when empty, else the record goes there.
     pub fn pad(&mut self, d: usize, n: usize) {
+        let was = self.slots[d].hands.pads[n];
         self.hands(d, |h, t| h.pad(n, t));
+        // a pad set here by a hand is the record's from now on (kept by the house)
+        if was.is_none()
+            && let Some(p) = self.slots[d].hands.pads[n]
+        {
+            self.keep_pad(d, n, Some(p.at));
+        }
     }
 
     pub fn clear_pad(&mut self, d: usize, n: usize) {
         self.slots[d].hands.clear_pad(n);
+        self.keep_pad(d, n, None);
     }
 
     /// A loop of `beats` from the bar (the same again lets go).
@@ -1096,8 +1120,17 @@ impl Desk {
             Shelf::Search(q) if q.trim().is_empty() => Shelf::All,
             s => s,
         };
+        if shelf == Shelf::Queue {
+            self.shelf_gen += 1;
+            self.library.shelf = Shelf::Queue;
+            self.library.loading = false;
+            self.library.rows = self.hand_queue.clone();
+            self.library.total = self.hand_queue.len() as i64;
+            return;
+        }
         let Some(house) = &self.house else { return };
         self.shelf_gen += 1;
+        self.more_asked = None;
         self.library.shelf = shelf.clone();
         self.library.loading = true;
         library::fetch_shelf(&self.done_tx, house, shelf, self.shelf_gen);
@@ -1134,6 +1167,14 @@ impl Desk {
                 }
             }
             Done::Shelf { .. } => {}
+            Done::More { turn, rows } if turn == self.shelf_gen => {
+                if let Ok((rows, total)) = rows {
+                    let have: std::collections::HashSet<i64> = self.library.rows.iter().map(|r| r.id).collect();
+                    self.library.rows.extend(rows.into_iter().filter(|r| !have.contains(&r.id)));
+                    self.library.total = total;
+                }
+            }
+            Done::More { .. } => {}
             Done::Playlists(Ok(lists)) => self.library.playlists = lists,
             Done::Playlists(Err(e)) => self.library.error = Some(e),
             Done::Analysed { slot, turn, result } if turn == self.load_gen[slot] => match result {

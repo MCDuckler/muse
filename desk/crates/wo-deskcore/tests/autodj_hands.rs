@@ -39,6 +39,19 @@ fn the_hands_on_the_auto_dj() {
     assert!(until(&mut d, 15.0, |d| d.snapshot().mix.is_some()), "nothing planned");
     let spb = 60.0 / 128.0;
 
+    // the hand's queue: kept in order, shown on its shelf, taken off by a hand
+    let a = d.snapshot().decks[0].record.clone();
+    let b = d.snapshot().decks[1].record.clone();
+    d.queue_add(a.clone());
+    d.queue_add(b.clone());
+    d.queue_add(a.clone());
+    assert_eq!(d.queue().iter().map(|r| r.id).collect::<Vec<_>>(), vec![a.id, b.id], "once each, in order");
+    d.open_shelf(wo_deskcore::Shelf::Queue);
+    assert_eq!(d.library().rows.len(), 2);
+    d.queue_remove(a.id);
+    assert_eq!(d.library().rows.len(), 1, "the shelf follows the queue");
+    d.queue_remove(b.id);
+
     // the room's word, kept and undone
     d.more_energy(1);
     assert!((d.steer().energy - 0.12).abs() < 1e-9);

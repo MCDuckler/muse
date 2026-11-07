@@ -73,6 +73,8 @@ pub(crate) struct App {
     plan_open: bool,
     /// The set being shaped on the set page.
     set_shape: wo_deskcore::set::SetShape,
+    /// The crate's "Fits the master" pressed (opened once the frame is drawn).
+    fits_asked: bool,
     /// The nudge held, per deck.
     nudge_held: [i8; 2],
     /// The search as typed, when typing last changed it, what the house was last asked.
@@ -229,6 +231,7 @@ impl App {
             auto_tab: 0,
             plan_open: false,
             set_shape: Default::default(),
+            fits_asked: false,
             nudge_held: [0; 2],
             search_at: None,
             searched: String::new(),
