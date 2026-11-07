@@ -71,6 +71,12 @@ pub struct Track {
     pub cover_url: Option<String>,
     #[serde(default)]
     pub cover_color: Option<String>,
+    /// How loud the box measured it (EBU R128): the gain to the house's reference (−14
+    /// LUFS), its true peak (dBFS) — how far it can be turned up before it clips.
+    #[serde(default)]
+    pub gain_db: Option<f64>,
+    #[serde(default)]
+    pub true_peak_db: Option<f64>,
 }
 
 impl Track {

@@ -1204,7 +1204,7 @@ mod tests {
         let beats: Vec<f64> = (0..256).map(|i| 0.1 + i as f64 * spb).collect();
         let mut t = Timing::from_grid(Grid::new(beats, 1), 120.0);
         t.sections = vec![wo_booth::mix::Section { label: "drop".into(), start: 0.0, end: 60.0 }, wo_booth::mix::Section { label: "breakdown".into(), start: 60.0, end: 120.0 }];
-        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 128.0, key: "8A".into(), seconds: 120, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None };
+        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 128.0, key: "8A".into(), seconds: 120, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None, loudness: Default::default() };
         let f = facts_of(&r, &t);
         assert_eq!(f.track_id, None);
         let (origin, period) = f.steady.unwrap();
@@ -1219,7 +1219,7 @@ mod tests {
     #[test]
     fn the_hands_judge_what_is_on_and_undo_it() {
         let mut show = Show::new_in(None, None);
-        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 120.0, key: String::new(), seconds: 200, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None };
+        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 120.0, key: String::new(), seconds: 200, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None, loudness: Default::default() };
         let t = Timing::from_grid(Grid::new((0..400).map(|i| i as f64 * 0.5).collect(), 0), 200.0);
         show.record(0, Some(facts_of(&r, &t)));
         let frame = wo_wire::Frame { a: wo_wire::Deck { playing: true, position_ms: 4000.0, rate: 1.0, level: 1.0, ..Default::default() }, ..Default::default() };
@@ -1260,7 +1260,7 @@ mod tests {
         // a show of its own (none would start from the WetOwl app's)
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&file, r#"{"v":1,"pool":{}}"#).unwrap();
-        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 120.0, key: String::new(), seconds: 200, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None };
+        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 120.0, key: String::new(), seconds: 200, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None, loudness: Default::default() };
         let t = Timing::from_grid(Grid::new((0..400).map(|i| i as f64 * 0.5).collect(), 0), 200.0);
         let frame = |ms: f64| wo_wire::Frame { a: wo_wire::Deck { playing: true, position_ms: ms, rate: 1.0, level: 1.0, ..Default::default() }, ..Default::default() };
         {
@@ -1434,7 +1434,7 @@ mod tests {
         let mut show = Show::new_in(Some(home.clone()), None);
         assert!(show.direct.milk.as_ref().is_some_and(|m| m.library.presets.len() > 500), "the shipped presets");
         let spb = 0.5;
-        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 120.0, key: String::new(), seconds: 200, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None };
+        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 120.0, key: String::new(), seconds: 200, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None, loudness: Default::default() };
         let t = Timing::from_grid(Grid::new((0..400).map(|i| i as f64 * spb).collect(), 0), 200.0);
         let line = show.record(0, Some(facts_of(&r, &t))).expect("the record said");
         assert!(line.starts_with(r#"{"t":"record","deck":"A""#), "{line}");

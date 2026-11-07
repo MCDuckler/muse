@@ -16,6 +16,40 @@ pub struct Record {
     /// The house has a cover for it; the cover's colour (0xRRGGBB).
     pub cover: bool,
     pub cover_rgb: Option<u32>,
+    /// How loud it is, as the house measured it (none for a record of this computer's).
+    pub loudness: Loudness,
+}
+
+/// A record's loudness, as the box measured it: the gain that brings it to the house's
+/// reference (−14 LUFS, the one the phones' player turns songs by), and its true peak.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Loudness {
+    pub gain_db: Option<f32>,
+    pub true_peak_db: Option<f32>,
+}
+
+impl Loudness {
+    /// The most a quiet record is turned up, dB, and how close to full scale its true peak
+    /// may come then.
+    pub const MOST_UP: f32 = 6.0;
+    pub const CEILING_DB: f32 = -1.0;
+
+    /// The deck's level for it, as a multiplier: a loud record turned down to the
+    /// reference; a quiet one up only as far as its true peak leaves room (not at all
+    /// where its peak is not known — turning a record up is turning its clipping up); 1
+    /// where it was never measured.
+    pub fn trim(&self) -> f32 {
+        let Some(g) = self.gain_db else { return 1.0 };
+        let db = if g > 0.0 {
+            match self.true_peak_db {
+                Some(p) => g.min((Self::CEILING_DB - p).max(0.0)).min(Self::MOST_UP),
+                None => 0.0,
+            }
+        } else {
+            g.max(-24.0)
+        };
+        10f32.powf(db / 20.0)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -43,6 +77,7 @@ impl Record {
             audio: if t.ready() { Audio::House { id: t.id } } else { Audio::None },
             cover: t.cover_url.is_some(),
             cover_rgb: t.cover_rgb(),
+            loudness: Loudness { gain_db: t.gain_db.map(|g| g as f32), true_peak_db: t.true_peak_db.map(|p| p as f32) },
         }
     }
 
@@ -95,6 +130,7 @@ pub fn synth_rows() -> Vec<Record> {
             audio: Audio::Synth { seed },
             cover: false,
             cover_rgb: None,
+            loudness: Loudness::default(),
         })
         .collect()
 }
@@ -131,6 +167,7 @@ fn parse_fixture() -> Vec<Record> {
                 audio: Audio::None,
                 cover: false,
                 cover_rgb: None,
+                loudness: Loudness::default(),
             });
         }
     }
@@ -225,5 +262,26 @@ mod tests {
         let f = |i: usize| fits(&rows[i], 159.99, "10B");
         assert!(f(1) > f(3) && f(3) > f(8), "{} {} {}", f(1), f(3), f(8));
         assert!(f(15) > 0, "a record with no key still fits by tempo");
+    }
+}
+
+#[cfg(test)]
+mod loudness_tests {
+    use super::Loudness;
+
+    #[test]
+    fn a_record_is_turned_to_the_house_loudness_and_up_only_into_its_headroom() {
+        let db = |l: Loudness| 20.0 * l.trim().log10();
+        // never measured: as it is
+        assert_eq!(Loudness::default().trim(), 1.0);
+        // a loud club record (−8 LUFS) down 6 dB
+        assert!((db(Loudness { gain_db: Some(-6.0), true_peak_db: Some(0.4) }) + 6.0).abs() < 1e-4);
+        // a quiet one up as far as its peak allows (−4 dBTP: 3 dB to the −1 ceiling)
+        assert!((db(Loudness { gain_db: Some(5.0), true_peak_db: Some(-4.0) }) - 3.0).abs() < 1e-4);
+        // up no more than 6 dB, however much room
+        assert!((db(Loudness { gain_db: Some(10.0), true_peak_db: Some(-20.0) }) - 6.0).abs() < 1e-4);
+        // a quiet one whose peak is not known, or already at the ceiling: not turned up
+        assert_eq!(Loudness { gain_db: Some(4.0), true_peak_db: None }.trim(), 1.0);
+        assert_eq!(Loudness { gain_db: Some(4.0), true_peak_db: Some(-0.5) }.trim(), 1.0);
     }
 }

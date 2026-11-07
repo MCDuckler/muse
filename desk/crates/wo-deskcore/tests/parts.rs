@@ -41,6 +41,7 @@ fn kept_with_stems() -> Option<Record> {
         audio: Audio::File { path: app.join("fetched").join(format!("{id}.m4a")), beats: vec![], bar_one: 0 },
         cover: false,
         cover_rgb: None,
+        loudness: Default::default(),
     })
 }
 

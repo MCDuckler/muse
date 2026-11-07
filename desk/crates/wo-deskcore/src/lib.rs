@@ -34,7 +34,7 @@ pub use backdrop::Backdrop;
 pub use covers::Cover;
 pub use prefs::Prefs;
 pub use library::{GRID_VERDICTS, Library, Shelf, verdict_word};
-pub use records::{Audio, Record};
+pub use records::{Audio, Loudness, Record};
 pub use show::{MilkFilter, FaveEdit, FaveRow, FavesView, SetEdit, SetRow, SetsView, FinishView, LooksGrid, MilkHand, MilkRow, MilkView, MoveRow, MovesView, OwnRows, RotationRow, RotationView, ScenePage, ShowBoard, ShowEdit, ShowHands, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, value_name};
 pub use wo_show::plan::{LEVEL_MOST, LEVEL_STEPS, level_word};
 pub use wo_show::rig::{RigFinish, TransformSet};
@@ -1623,7 +1623,8 @@ impl Desk {
         let (ga, gb) = transition::law(self.crossfader, self.full_law);
         for (d, g) in [(0, ga), (1, gb)] {
             let s = &self.slots[d];
-            let trim = 10f32.powf((s.gain - 0.5) * 24.0 / 20.0);
+            // the hands' gain (±12 dB) over the record brought to the house's loudness
+            let trim = 10f32.powf((s.gain - 0.5) * 24.0 / 20.0) * s.record.loudness.trim();
             self.engine.deck(DeckId::new(d).unwrap()).set_level(s.fader * s.fader * g * trim, 0.03);
         }
     }
