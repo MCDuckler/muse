@@ -461,6 +461,22 @@ impl ShowDoc {
         }
     }
 
+    // ---------------------------------------------------------------- MilkDrop's director
+
+    /// How MilkDrop's director is set on this machine (v1 kept it in the app's preferences):
+    /// `everyBars`, `cutOnDrop`, `accents`, `favouritesOnly`, `minRating`, `locked`.
+    pub fn milk(&self) -> Map<String, Value> {
+        obj(self.raw.get("milk")).cloned().unwrap_or_default()
+    }
+
+    pub fn set_milk(&mut self, m: Map<String, Value>) {
+        if m.is_empty() {
+            self.raw.remove("milk");
+        } else {
+            self.raw.insert("milk".into(), Value::Object(m));
+        }
+    }
+
     // ---------------------------------------------------------------- the favourites, by hand
 
     fn edit_fave(&mut self, id: &str, f: impl Fn(ShowFave) -> ShowFave) {

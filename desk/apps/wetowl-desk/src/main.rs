@@ -111,6 +111,8 @@ pub(crate) struct App {
     /// MilkDrop's library open on the Show page, and what is searched for in it.
     pub(crate) milk_list: bool,
     pub(crate) milk_query: String,
+    /// Which presets the library lists.
+    pub(crate) milk_filter: wo_deskcore::MilkFilter,
     pub(crate) prefs: Prefs,
     pub(crate) sleeves: ui::Sleeves,
     pub(crate) toasts: ui::Toasts,
@@ -279,6 +281,7 @@ impl App {
             prompt: None,
             milk_list: false,
             milk_query: String::new(),
+            milk_filter: Default::default(),
             prefs,
             sleeves: Default::default(),
             toasts: Default::default(),

@@ -379,8 +379,8 @@ impl Stage {
         self.show().finish()
     }
 
-    pub(crate) fn milk_search(&mut self, query: &str, most: usize) -> Vec<crate::show::MilkRow> {
-        self.show().milk_search(query, most)
+    pub(crate) fn milk_search(&mut self, query: &str, most: usize, filter: crate::show::MilkFilter) -> Vec<crate::show::MilkRow> {
+        self.show().milk_search(query, most, filter)
     }
 
     /// The Rust stage, or the WetOwl app's, from the next window on (one open now starts

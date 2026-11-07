@@ -35,7 +35,7 @@ pub use covers::Cover;
 pub use prefs::Prefs;
 pub use library::{Library, Shelf};
 pub use records::{Audio, Record};
-pub use show::{FaveEdit, FaveRow, FavesView, SetEdit, SetRow, SetsView, FinishView, LooksGrid, MilkHand, MilkRow, MilkView, MoveRow, MovesView, OwnRows, RotationRow, RotationView, ScenePage, ShowBoard, ShowEdit, ShowHands, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, value_name};
+pub use show::{MilkFilter, FaveEdit, FaveRow, FavesView, SetEdit, SetRow, SetsView, FinishView, LooksGrid, MilkHand, MilkRow, MilkView, MoveRow, MovesView, OwnRows, RotationRow, RotationView, ScenePage, ShowBoard, ShowEdit, ShowHands, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, value_name};
 pub use wo_show::plan::{LEVEL_MOST, LEVEL_STEPS, level_word};
 pub use wo_show::rig::{RigFinish, TransformSet};
 pub use wo_show::shares::share_word;
@@ -1496,8 +1496,8 @@ impl Desk {
     }
 
     /// The library's presets whose names have `query` in them, up to `most`.
-    pub fn milk_search(&mut self, query: &str, most: usize) -> Vec<MilkRow> {
-        self.stage.milk_search(query, most)
+    pub fn milk_search(&mut self, query: &str, most: usize, filter: MilkFilter) -> Vec<MilkRow> {
+        self.stage.milk_search(query, most, filter)
     }
 
     /// Where a stage window started by hand connects (`wetowl --stage <url>`).

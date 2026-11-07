@@ -289,6 +289,25 @@ pub struct MilkView {
     pub accents: bool,
     pub favourites_only: bool,
     pub trouble: Option<String>,
+    /// When it changes: a new one every so many bars (0: never by the clock), a cut on drops
+    /// and hits, only presets rated so or better.
+    pub every_bars: i64,
+    pub cut_on_drop: bool,
+    pub min_rating: f64,
+    /// How many are favourites, switched off.
+    pub favourites: usize,
+    pub offs: usize,
+}
+
+/// Which presets the library lists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MilkFilter {
+    #[default]
+    All,
+    Favourites,
+    Off,
+    /// The ones the director may pick by their rating.
+    Rated,
 }
 
 /// A preset as the browser lists it.
@@ -319,8 +338,15 @@ pub enum MilkHand {
     /// The director may move on from the hands' pick.
     Release,
     Lock(bool),
+    /// The hold, a tap: held for good — let go; held till the next drop (picked by hand) —
+    /// let the director change it now; the director's — held for good.
+    Hold,
     Accents(bool),
     FavouritesOnly(bool),
+    /// A new one every so many bars (0: never by the clock).
+    Every(i64),
+    CutOnDrop(bool),
+    MinRating(f64),
 }
 
 pub(crate) struct Show {
@@ -458,7 +484,7 @@ impl Show {
             m.set_textures(Some(home.join("textures").to_string_lossy().into_owned()));
             direct.milk = Some(m);
         }
-        Show {
+        let mut show = Show {
             direct,
             facts: [None, None],
             covers: [false; 2],
@@ -480,7 +506,9 @@ impl Show {
             moves: None,
             house: None,
             shelf: Default::default(),
-        }
+        };
+        show.apply_milk();
+        show
     }
 
     /// The show.json written back when it changed (a second after at most), or now.
@@ -582,15 +610,26 @@ impl Show {
             accents: m.accents,
             favourites_only: m.favourites_only,
             trouble: told.and_then(|t| t.trouble.clone()),
+            every_bars: m.every_bars,
+            cut_on_drop: m.cut_on_drop,
+            min_rating: m.min_rating,
+            favourites: m.library.notes.favourites.len(),
+            offs: m.library.notes.off.len(),
         }
     }
 
     /// The presets whose names have `query` in them (all for none), up to `most`.
-    pub(crate) fn milk_search(&self, query: &str, most: usize) -> Vec<MilkRow> {
+    pub(crate) fn milk_search(&self, query: &str, most: usize, filter: MilkFilter) -> Vec<MilkRow> {
         let Some(m) = &self.direct.milk else { return vec![] };
         let on = m.cue().path.as_deref();
+        let (favs, rated, off) = match filter {
+            MilkFilter::All => (false, 0.0, false),
+            MilkFilter::Favourites => (true, 0.0, false),
+            MilkFilter::Off => (false, 0.0, true),
+            MilkFilter::Rated => (false, m.min_rating, false),
+        };
         m.library
-            .search(query, false, 0.0, false, false)
+            .search(query, favs, rated, off, false)
             .into_iter()
             .take(most)
             .map(|p| MilkRow { path: p.path.clone(), name: p.full_name(), favourite: m.library.is_favourite(p), off: m.library.is_off(p), on: Some(p.path.as_str()) == on })
@@ -627,10 +666,78 @@ impl Show {
             }
             MilkHand::Release => m.release(),
             MilkHand::Lock(on) => m.lock(on),
+            MilkHand::Hold => {
+                if m.locked {
+                    m.lock(false);
+                } else if m.held_by_hand {
+                    m.release();
+                } else {
+                    m.lock(true);
+                }
+            }
             MilkHand::Accents(on) => m.set_accents(on),
             MilkHand::FavouritesOnly(on) => m.favourites_only = on,
+            MilkHand::Every(n) => m.every_bars = n.clamp(0, 256),
+            MilkHand::CutOnDrop(on) => m.cut_on_drop = on,
+            MilkHand::MinRating(r) => m.min_rating = r.clamp(0.0, 5.0),
         }
         self.save_notes(false);
+        self.keep_milk();
+    }
+
+    /// MilkDrop's director as set, kept in the show (the Desk's own: v1 kept it per machine).
+    fn keep_milk(&mut self) {
+        use serde_json::Value;
+        let Some(m) = &self.direct.milk else { return };
+        let mut k = serde_json::Map::new();
+        let d = wo_show::milk::MilkDirector::new(Default::default(), None, 0);
+        if m.every_bars != d.every_bars {
+            k.insert("everyBars".into(), m.every_bars.into());
+        }
+        if m.cut_on_drop != d.cut_on_drop {
+            k.insert("cutOnDrop".into(), m.cut_on_drop.into());
+        }
+        if m.accents != d.accents {
+            k.insert("accents".into(), m.accents.into());
+        }
+        if m.favourites_only != d.favourites_only {
+            k.insert("favouritesOnly".into(), m.favourites_only.into());
+        }
+        if m.min_rating != d.min_rating {
+            k.insert("minRating".into(), wo_show::json::f(m.min_rating));
+        }
+        if m.locked {
+            k.insert("locked".into(), Value::Bool(true));
+        }
+        if k != self.direct.doc.milk() {
+            self.direct.doc.set_milk(k);
+            self.doc_dirty = true;
+        }
+    }
+
+    /// MilkDrop's director as the show keeps it set.
+    fn apply_milk(&mut self) {
+        use serde_json::Value;
+        let k = self.direct.doc.milk();
+        let Some(m) = &mut self.direct.milk else { return };
+        if let Some(n) = k.get("everyBars").and_then(Value::as_i64) {
+            m.every_bars = n.clamp(0, 256);
+        }
+        if let Some(b) = k.get("cutOnDrop").and_then(Value::as_bool) {
+            m.cut_on_drop = b;
+        }
+        if let Some(b) = k.get("accents").and_then(Value::as_bool) {
+            m.set_accents(b);
+        }
+        if let Some(b) = k.get("favouritesOnly").and_then(Value::as_bool) {
+            m.favourites_only = b;
+        }
+        if let Some(r) = k.get("minRating").and_then(Value::as_f64) {
+            m.min_rating = r.clamp(0.0, 5.0);
+        }
+        if k.get("locked") == Some(&Value::Bool(true)) {
+            m.lock(true);
+        }
     }
 
     pub(crate) fn cue(&self) -> &Cue {
@@ -1280,6 +1387,45 @@ mod tests {
         assert_eq!(back.direct.director.plan().scene_level(&on), 3.0);
         drop(back);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn milkdrops_hold_goes_round_and_its_director_is_kept_as_set() {
+        let home = std::env::temp_dir().join(format!("wo-show-milk-hold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let file = home.join("show.json");
+        std::fs::write(&file, r#"{"v":1,"pool":{}}"#).unwrap();
+        let mut show = Show::new_in(Some(home.join("milk")), Some(file.clone()));
+        let v = show.milk(None);
+        assert!(v.presets > 500 && v.every_bars == 16 && v.cut_on_drop && !v.locked && !v.held);
+        // the hold: the director's → held for good → let go; picked by hand → let the director
+        show.milk_hand(MilkHand::Hold);
+        assert!(show.milk(None).locked);
+        show.milk_hand(MilkHand::Hold);
+        assert!(!show.milk(None).locked);
+        let path = show.milk_search("", 3, MilkFilter::All)[1].path.clone();
+        show.milk_hand(MilkHand::Pick(path));
+        assert!(show.milk(None).held);
+        show.milk_hand(MilkHand::Hold);
+        let v = show.milk(None);
+        assert!(!v.held && !v.locked, "the director's again");
+        // when it changes, kept
+        show.milk_hand(MilkHand::Every(4));
+        show.milk_hand(MilkHand::CutOnDrop(false));
+        show.milk_hand(MilkHand::MinRating(4.0));
+        show.milk_hand(MilkHand::FavouritesOnly(true));
+        show.milk_hand(MilkHand::Hold);
+        let favs = show.milk_search("", 2000, MilkFilter::Favourites).len();
+        let rated = show.milk_search("", 2000, MilkFilter::Rated).len();
+        assert!(rated < show.milk_search("", 2000, MilkFilter::All).len(), "rated 4+: fewer");
+        assert_eq!(favs, show.milk(None).favourites.min(2000));
+        drop(show);
+        let back = Show::new_in(Some(home.join("milk")), Some(file));
+        let v = back.milk(None);
+        assert_eq!((v.every_bars, v.cut_on_drop, v.min_rating, v.favourites_only, v.locked), (4, false, 4.0, true, true), "kept");
+        drop(back);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

@@ -15,7 +15,7 @@
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Painter, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use wo_deskcore::{Desk, MilkHand, ShowBoard, ShowHand, ShowHands, Snapshot, StageView};
+use wo_deskcore::{Desk, MilkFilter, MilkHand, ShowBoard, ShowHand, ShowHands, Snapshot, StageView};
 
 use crate::App;
 use crate::paint::{label_sized, white};
@@ -621,7 +621,18 @@ impl App {
         kit::section(p, inner.left_top(), Align2::LEFT_TOP, "MilkDrop");
         let m = desk.milk();
         if m.on {
-            kit::text(p, pos2(inner.right(), inner.top() + 6.0), Align2::RIGHT_CENTER, &format!("{:.0} fps", m.fps), 11.0, "mono", t::muted());
+            let fr = kit::text(p, pos2(inner.right(), inner.top() + 6.0), Align2::RIGHT_CENTER, &format!("{:.0} fps", m.fps), 11.0, "mono", t::muted());
+            // the hold, in words
+            let hold = if m.locked {
+                Some(("held for good", t::warm()))
+            } else if m.held {
+                Some(("held till the drop", t::soft()))
+            } else {
+                None
+            };
+            if let Some((w, c)) = hold {
+                kit::text(p, pos2(fr.left() - 12.0, fr.center().y), Align2::RIGHT_CENTER, w, 11.0, "", c);
+            }
         }
         let (words, ink) = if m.presets == 0 {
             ("No presets here".to_owned(), t::faint())
@@ -645,7 +656,18 @@ impl App {
             (Icon::Shuffle, MilkHand::Another, false, "Another, at random"),
             (if m.favourite { Icon::HeartFull } else { Icon::Heart }, MilkHand::Favourite, m.favourite, "A favourite: comes more often"),
             (Icon::Close, MilkHand::Off, false, "Never this one again"),
-            (Icon::Lock, MilkHand::Lock(!m.locked), m.locked, "Held: the director leaves it on"),
+            (
+                Icon::Lock,
+                MilkHand::Hold,
+                m.locked || m.held,
+                if m.locked {
+                    "Held for good: nothing changes it but you — click: let go"
+                } else if m.held {
+                    "Held till the next drop or hit (you picked it) — click: let the director change it now"
+                } else {
+                    "The director changes the preset — click: hold this one for good"
+                },
+            ),
             (Icon::Bolt, MilkHand::Accents(!m.accents), m.accents, "The beat on it (accents)"),
             (Icon::Layers, MilkHand::Release, self.milk_list, "The library"),
         ];
@@ -677,7 +699,7 @@ impl App {
         if k <= 0.0 {
             return;
         }
-        let size = vec2(440.0, 520.0f32.min(card.top() - 80.0).max(300.0));
+        let size = vec2(460.0, 680.0f32.min(card.top() - 80.0).max(420.0));
         let at = pos2((card.right() - size.x).max(12.0), card.top() - size.y - 8.0 + 4.0 * (1.0 - k));
         let area = egui::Area::new(egui::Id::unique("milk-library")).order(egui::Order::Foreground).fixed_pos(at).show(&ctx, |ui| {
             ui.multiply_opacity(k);
@@ -686,16 +708,74 @@ impl App {
             p.add(t::shadow(2).as_shape(r, CornerRadius::same(t::R_OVERLAY)));
             p.rect(r, CornerRadius::same(t::R_OVERLAY), Color32::from_rgb(16, 17, 22), Stroke::new(1.0, white(0.11)), StrokeKind::Inside);
             let inner = r.shrink(t::INSET);
-            kit::section(&p, inner.left_top(), Align2::LEFT_TOP, "MilkDrop presets");
+            kit::section(&p, inner.left_top(), Align2::LEFT_TOP, "MilkDrop");
             let close = Rect::from_min_size(pos2(inner.right() - 26.0, inner.top() - 6.0), vec2(26.0, 26.0));
             if Btn::new("").icon(Icon::Close).quiet().show(ui, &p, close, "milk-close").clicked() {
                 self.milk_list = false;
             }
-            let field = Rect::from_min_size(pos2(inner.left(), inner.top() + 26.0), vec2(inner.width(), 32.0));
+            // when it changes: the record decides — a hit or a drop cuts, a breakdown blends, a
+            // new record too — and the clock, every so many bars
+            let m = desk.milk();
+            let mut y = inner.top() + 24.0;
+            kit::hint(&p, pos2(inner.left(), y + 8.0), Align2::LEFT_CENTER, "When it changes: a hit or a drop cuts, a breakdown blends, a new record too");
+            y += 22.0;
+            let label_w = 96.0;
+            kit::text(&p, pos2(inner.left(), y + 13.0), Align2::LEFT_CENTER, "A new one every", 12.0, "", t::soft());
+            let every = [0, 4, 8, 16, 32, 64];
+            let seg = Rect::from_min_size(pos2(inner.left() + label_w + 4.0, y), vec2(inner.width() - label_w - 4.0, 26.0));
+            if let Some(i) = kit::segmented(ui, &p, seg, &["Never", "4", "8", "16", "32", "64 bars"], every.iter().position(|n| *n == m.every_bars), Tone::Neutral, "milk-every") {
+                desk.milk_hand(MilkHand::Every(every[i]));
+            }
+            y += 32.0;
+            let mut x = inner.left();
+            let toggles: [(&str, bool, MilkHand, &str); 3] = [
+                ("Cut on drops & hits", m.cut_on_drop, MilkHand::CutOnDrop(!m.cut_on_drop), "A drop or a hit cuts to another (else the clock alone)"),
+                ("Move with the beat", m.accents, MilkHand::Accents(!m.accents), "In a loud part the preset's own motion is pushed on the kick, the bar or the snare; a build pushes in, a drop bursts"),
+                ("Favourites only", m.favourites_only, MilkHand::FavouritesOnly(!m.favourites_only), "The director keeps to the starred presets"),
+            ];
+            for (i, (word, on, hand, tip)) in toggles.into_iter().enumerate() {
+                let w = kit::chip_width(&p, word) + 6.0;
+                let cr = Rect::from_min_size(pos2(x, y), vec2(w, 24.0));
+                if kit::chip(ui, &p, cr, word, on, Tone::Neutral, true, ("milk-toggle", i)).on_hover_text(tip).clicked() {
+                    desk.milk_hand(hand);
+                }
+                x += w + 5.0;
+            }
+            y += 32.0;
+            kit::text(&p, pos2(inner.left(), y + 13.0), Align2::LEFT_CENTER, "Rated", 12.0, "", t::soft());
+            let seg = Rect::from_min_size(pos2(inner.left() + label_w + 4.0, y), vec2(inner.width() - label_w - 4.0, 26.0));
+            let rated = m.min_rating.round().clamp(0.0, 5.0) as usize;
+            let resp = ui.interact(Rect::from_min_size(pos2(inner.left(), y), vec2(label_w, 26.0)), ui.scope_id().with("milk-rated-tip"), Sense::hover());
+            resp.on_hover_text("Only presets their author rated this or better (the originals rate themselves 1 to 5; under 3 is mostly the dull ones)");
+            if let Some(i) = kit::segmented(ui, &p, seg, &["Any", "1+", "2+", "3+", "4+", "5"], Some(rated), Tone::Neutral, "milk-rated") {
+                desk.milk_hand(MilkHand::MinRating(i as f64));
+            }
+            y += 36.0;
+            p.line_segment([pos2(inner.left(), y), pos2(inner.right(), y)], Stroke::new(1.0, white(0.06)));
+            y += 10.0;
+            // the presets: searched, filtered
+            let field = Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), 32.0));
             kit::field(ui, &p, field, &mut self.milk_query, "Search the presets", Some(Icon::Search), false, "milk-search");
-            let rows = desk.milk_search(&self.milk_query, 1000);
-            kit::hint(&p, pos2(inner.left(), field.bottom() + 14.0), Align2::LEFT_CENTER, &format!("{} presets · a click puts one on, held until a drop", rows.len()));
-            let list = Rect::from_min_max(pos2(r.left() + 4.0, field.bottom() + 28.0), pos2(r.right() - 4.0, r.bottom() - 8.0));
+            y = field.bottom() + 6.0;
+            let mut x = inner.left();
+            let filters = [
+                (format!("All {}", m.presets), MilkFilter::All, "Every preset"),
+                (format!("♥ {}", m.favourites), MilkFilter::Favourites, "The favourites"),
+                (format!("Off {}", m.offs), MilkFilter::Off, "The ones switched off"),
+                (format!("Rated {}+", m.min_rating.round()), MilkFilter::Rated, "Only what the director may pick by rating"),
+            ];
+            for (word, f, tip) in filters {
+                let w = kit::chip_width(&p, &word) + 6.0;
+                let cr = Rect::from_min_size(pos2(x, y), vec2(w, 22.0));
+                if kit::chip(ui, &p, cr, &word, self.milk_filter == f, Tone::Neutral, true, ("milk-filter", word.as_str())).on_hover_text(tip).clicked() {
+                    self.milk_filter = if self.milk_filter == f { MilkFilter::All } else { f };
+                }
+                x += w + 5.0;
+            }
+            y += 28.0;
+            let rows = desk.milk_search(&self.milk_query, 1000, self.milk_filter);
+            kit::hint(&p, pos2(inner.left(), y + 6.0), Align2::LEFT_CENTER, &format!("{} presets · a click puts one on, held till the next drop", rows.len()));
+            let list = Rect::from_min_max(pos2(r.left() + 4.0, y + 18.0), pos2(r.right() - 4.0, r.bottom() - 8.0));
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
             egui::ScrollArea::vertical().id_salt("milk-rows").auto_shrink([false, false]).show_rows(&mut child, 30.0, rows.len(), |ui, range| {
                 for row in &rows[range] {
