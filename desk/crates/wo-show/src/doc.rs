@@ -183,6 +183,16 @@ impl ShowDoc {
         self.pool().get("darkBeat") == Some(&Value::Bool(true))
     }
 
+    /// The beat before a drop black, or not (as shipped: not, left out).
+    pub fn set_dark_beat(&mut self, on: bool) {
+        self.put("darkBeat", on.then_some(Value::Bool(true)));
+    }
+
+    /// The effects' knobs (the mirrors, the datamosh's grain…), kept.
+    pub fn set_tune(&mut self, tune: &std::collections::BTreeMap<String, f64>) {
+        self.put("tune", (!tune.is_empty()).then(|| Value::Object(tune.iter().map(|(k, v)| (k.clone(), f(*v))).collect())));
+    }
+
     /// The treatments' knobs, by name.
     pub fn tune(&self) -> std::collections::BTreeMap<String, f64> {
         crate::json::knobs(self.pool().get("tune")).into_iter().collect()

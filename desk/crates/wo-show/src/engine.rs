@@ -165,6 +165,23 @@ impl Direct {
         self.macros.tune = self.doc.tune();
         self.macros.dancer = self.doc.dancer().filter(|d| d != "mix");
         self.macros.dancers_off = self.doc.dancers_off();
+        // the hands' taste: what NEXT skipped comes less, the kind of the starred favourites more
+        let (skips, faves) = (self.doc.taste(), self.doc.faves());
+        self.director.taste = (!skips.is_empty() || faves.iter().any(|f| f.stars >= 3)).then(|| -> crate::director::Taste { Box::new(move |c| crate::taste::lean(c, &skips, &faves)) });
+    }
+
+    /// NEXT by the hands: a look of the director's own skipped in its first bars is learnt as
+    /// "not this" (v1: _skipped) — not one the hands put on or hold.
+    pub fn skip(&mut self) {
+        if let Some(c) = self.director.combo().cloned()
+            && !self.director.locked
+            && self.director.combo_bars() < crate::taste::SKIP_BARS as i64
+        {
+            let skips = crate::taste::skipped(&self.doc.taste(), &c);
+            self.doc.set_taste(&skips);
+            self.apply_doc();
+        }
+        self.next(1);
     }
 
     /// A combination put on by the hands (a favourite, a look picked), held until let go:
@@ -528,6 +545,27 @@ mod tests {
             direct.let_go(h);
         }
         assert!(direct.holds().is_empty());
+    }
+
+    #[test]
+    fn next_in_a_looks_first_bars_teaches_not_this_but_not_when_held() {
+        let book = crate::scenes::SceneBook::shipped().only(crate::scenes::DRAWN);
+        let mut direct = Direct::new(&book, ShowDoc::default(), None, 9);
+        let r = record();
+        let room = |ms: f64| Room { a: ShowDeck::derive("A", Some(&r), true, ms, Channel::default(), ShowAudio::default()), b: ShowDeck { name: "B".into(), ..Default::default() }, ..Default::default() };
+        direct.tick(1.0 / 60.0, room(1000.0), Flat::new());
+        let c = direct.director.combo().cloned().unwrap();
+        let before = direct.director.weigh(&c);
+        direct.skip();
+        assert_eq!(direct.doc.taste().len(), 1, "learnt");
+        assert!(direct.director.taste.is_some());
+        let after = direct.director.lean_now(&c, 1.0);
+        assert!(direct.director.taste.as_ref().unwrap()(&c) < 1.0 && after.is_finite() && before.is_finite());
+        // held: NEXT teaches nothing
+        direct.tick(1.0 / 60.0, room(1016.0), Flat::new());
+        direct.hold(true);
+        direct.skip();
+        assert_eq!(direct.doc.taste().len(), 1);
     }
 
     #[test]

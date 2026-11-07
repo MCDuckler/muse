@@ -331,6 +331,15 @@ impl Stage {
         self.show().milk_hand(h);
     }
 
+    /// The rotation, where the Desk directs (with the stage closed too: it is ready when it opens).
+    pub(crate) fn rotation(&mut self) -> crate::show::RotationView {
+        self.show().rotation()
+    }
+
+    pub(crate) fn edit(&mut self, e: crate::show::ShowEdit) {
+        self.show().edit(e);
+    }
+
     pub(crate) fn milk_search(&mut self, query: &str, most: usize) -> Vec<crate::show::MilkRow> {
         self.show().milk_search(query, most)
     }

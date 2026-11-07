@@ -19,6 +19,7 @@ pub mod rig;
 pub mod rng;
 pub mod scenes;
 pub mod scores;
+pub mod shares;
 pub mod state;
 pub mod taste;
 pub mod treat;

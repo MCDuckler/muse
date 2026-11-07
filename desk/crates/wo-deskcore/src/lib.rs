@@ -34,7 +34,11 @@ pub use covers::Cover;
 pub use prefs::Prefs;
 pub use library::{Library, Shelf};
 pub use records::{Audio, Record};
-pub use show::{MilkHand, MilkRow, MilkView, ShowBoard, ShowHands};
+pub use show::{MilkHand, MilkRow, MilkView, RotationRow, RotationView, ShowBoard, ShowEdit, ShowHands};
+pub use wo_show::plan::{LEVEL_MOST, LEVEL_STEPS, level_word};
+pub use wo_show::rig::TransformSet;
+pub use wo_show::shares::share_word;
+pub use wo_show::Mix as ShowMix;
 /// The scenes the Rust stage draws so far.
 pub use wo_show::scenes::DRAWN as RUST_SCENES;
 pub use stage::{Hand as ShowHand, StageView, Thumb};
@@ -1441,6 +1445,16 @@ impl Desk {
 
     pub fn milk_hand(&mut self, h: MilkHand) {
         self.stage.milk_hand(h);
+    }
+
+    /// The show's rotation (the Rust stage's: the Desk directs it).
+    pub fn show_rotation(&mut self) -> Option<RotationView> {
+        self.stage().rust.then(|| self.stage.rotation())
+    }
+
+    /// An edit of the show's rotation, kept.
+    pub fn show_edit(&mut self, e: ShowEdit) {
+        self.stage.edit(e);
     }
 
     /// The library's presets whose names have `query` in them, up to `most`.

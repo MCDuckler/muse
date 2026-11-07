@@ -27,7 +27,9 @@ fn every_page_and_overlay_draws_at_every_size() {
         std::env::set_var("WO_CONTROLLERS", "off");
     }
     let ctx = egui::Context::default();
-    let desk = Desk::open(true);
+    let mut desk = Desk::open(true);
+    // the Rust stage's show: the Desk directs, so the Show page has its hands and its rotation
+    desk.set_rust_stage(true);
     let mut app = App::with(&ctx, desk, None, false);
     let mut t = 0.0f64;
     let mut slowest = (0.0f32, String::new());
@@ -42,8 +44,11 @@ fn every_page_and_overlay_draws_at_every_size() {
                 app.page = page;
                 app.overlay = overlay;
                 for n in 0..8 {
-                    // the booth's plan view over the waveforms for the last frames
+                    // the booth's plan view over the waveforms for the last frames; the Show
+                    // page's rotation, and each of its card's tabs
                     app.plan_open = n >= 4;
+                    app.show_room = usize::from(n >= 4);
+                    app.show_tab = n % 4;
                     t += 1.0 / 60.0;
                     app.desk.lock().unwrap().tick();
                     // as a window gives it: its pixels in points at the zoom (the screen's own

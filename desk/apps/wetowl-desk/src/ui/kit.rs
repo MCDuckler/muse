@@ -373,6 +373,30 @@ pub fn crossfader(ui: &mut Ui, p: &Painter, r: Rect, x: f32, id: impl std::hash:
     resp.dragged().then(|| (x + resp.drag_delta().x / track.width()).clamp(0.0, 1.0))
 }
 
+/// A level slider: a thin track, filled to the value, a small round cap; click or drag to set
+/// (0..1; the caller snaps it to steps). `on` false: drawn faint, still usable. A double click
+/// gives `rest`.
+pub fn hslider(ui: &mut Ui, p: &Painter, r: Rect, k: f32, on: bool, rest: f32, id: impl std::hash::Hash + std::fmt::Debug) -> Option<f32> {
+    let id = ui.scope_id().with(id);
+    let resp = ui.interact(r, id, Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    let shown = motion::spring(ui.ctx(), id.with("k"), k.clamp(0.0, 1.0), 0.05);
+    let h = motion::tween_bool(ui.ctx(), id.with("h"), resp.hovered() || resp.dragged(), motion::QUICK, motion::STANDARD);
+    let track = Rect::from_center_size(r.center(), vec2(r.width() - 14.0, 3.0));
+    p.rect_filled(track, CornerRadius::same(2), col(theme::LINE));
+    let cx = track.left() + shown * track.width();
+    let fill = if on { mix(alpha_of(t::text(), 0.55), t::text(), h) } else { alpha_of(t::soft(), 0.3) };
+    p.rect_filled(Rect::from_min_max(track.min, pos2(cx, track.bottom())), CornerRadius::same(2), fill);
+    p.circle(pos2(cx, r.center().y), 5.5 + 1.0 * h, if on { mix(col(theme::CAP), t::high(), h) } else { col(theme::CAP) }, Stroke::new(1.0, Color32::from_black_alpha(80)));
+    if resp.double_clicked() {
+        return Some(rest);
+    }
+    let at = |x: f32| ((x - track.left()) / track.width()).clamp(0.0, 1.0);
+    if resp.dragged() || resp.clicked() {
+        return resp.interact_pointer_pos().map(|pos| at(pos.x));
+    }
+    None
+}
+
 /// A level meter of `n` segments: up at once, down over 300 ms, the peak held a second.
 pub fn meter(ui: &Ui, p: &Painter, r: Rect, level: f32, n: usize, id: impl std::hash::Hash + std::fmt::Debug) {
     let ctx = ui.ctx();

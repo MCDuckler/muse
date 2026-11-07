@@ -49,6 +49,15 @@ impl App {
         let right_w = 520.0;
         let col_x = main.right() - right_w;
         let left = Rect::from_min_max(main.min, pos2(col_x - g, main.bottom()));
+        // the left: the stage, or the rotation
+        let tabs = Rect::from_min_size(left.min, vec2(220.0, 28.0));
+        if let Some(i) = kit::segmented(ui, p, tabs, &["Stage", "Rotation"], Some(self.show_room), Tone::Neutral, "show-room") {
+            self.show_room = i;
+        }
+        let tip = if self.show_room == 0 { "How often everything comes over a night: the scenes, the backgrounds, the effects, the director's temper" } else { "The stage large, what comes next, the favourites, MilkDrop" };
+        kit::hint(p, pos2(tabs.right() + 14.0, tabs.center().y), Align2::LEFT_CENTER, if self.show_room == 0 { "" } else { "kept in this Desk's show — the stage plays it at once" });
+        ui.interact(tabs, ui.scope_id().with("show-room-tip"), Sense::hover()).on_hover_text(tip);
+        let left = Rect::from_min_max(pos2(left.left(), tabs.bottom() + 10.0), left.max);
         let row_h = (left.height() * 0.24).clamp(160.0, 230.0);
         let pic = Rect::from_min_max(left.min, pos2(left.right(), left.bottom() - row_h - g));
         let row = Rect::from_min_max(pos2(left.left(), pic.bottom() + g), left.max);
@@ -58,8 +67,12 @@ impl App {
         let auto_h = (main.height() * 0.34).clamp(200.0, 300.0);
         let auto = Rect::from_min_max(pos2(col_x, main.bottom() - auto_h), main.max);
         let room = Rect::from_min_max(pos2(col_x, perform.bottom() + g), pos2(main.right(), auto.top() - g));
-        self.big_picture(desk, ui, p, pic, &v, board.as_ref());
-        self.cards(desk, ui, p, row, &v, board.as_ref());
+        if self.show_room == 1 {
+            self.rotation_room(desk, ui, p, left);
+        } else {
+            self.big_picture(desk, ui, p, pic, &v, board.as_ref());
+            self.cards(desk, ui, p, row, &v, board.as_ref());
+        }
         self.judge(desk, ui, p, judge, &v);
         self.perform(desk, ui, p, perform, &v);
         self.room(desk, ui, p, room, &v);
@@ -258,6 +271,10 @@ impl App {
         kit::panel(p, c, false);
         let inner = c.shrink(t::INSET);
         kit::section(p, inner.left_top(), Align2::LEFT_TOP, "Rotation");
+        let er = Rect::from_min_size(pos2(inner.right() - 64.0, inner.top() - 6.0), vec2(64.0, 24.0));
+        if Btn::new("Edit").icon(Icon::ChevronRight).quiet().size(10.5).show(ui, p, er, "rotation-edit").on_hover_text("The rotation: how often everything comes").clicked() {
+            self.show_room = 1;
+        }
         match board.filter(|_| directs) {
             Some(b) if !b.rotation.is_empty() => {
                 let rows = (((inner.height() - 28.0) / 22.0).floor() as usize).max(1);

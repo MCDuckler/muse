@@ -36,6 +36,85 @@ fn read_doc(file: Option<&std::path::Path>) -> ShowDoc {
     file.and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| ShowDoc::parse(&t)).unwrap_or_else(v1_doc)
 }
 
+/// An edit of the show's rotation (the Show page's Rotation; v1: show_room_rotation.dart),
+/// kept in the Desk's show.json.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ShowEdit {
+    /// A scene's level against the others (0..LEVEL_MOST), on or off.
+    SceneLevel(String, f64),
+    SceneOn(String, bool),
+    /// A shared row's value (`ground`, `mask`, `mix`, `fx`; the value's key): its level, on or off.
+    SharedLevel(String, String, f64),
+    SharedOn(String, String, bool),
+    /// Whether a background takes a mask or a blend.
+    Takes(String, String, bool),
+    /// How many changes of scene are datamoshed into, 0..1.
+    Mosh(f64),
+    /// The director's temper, calm (-1) to busy (+1).
+    Bias(f64),
+    /// The beat before a drop, black.
+    DarkBeat(bool),
+    /// The effects' knobs (the kaleidoscope's mirrors, the datamosh's grain…).
+    Transform(wo_show::rig::TransformSet),
+    /// What NEXT taught it, forgotten.
+    ForgetTaste,
+}
+
+/// One row of the rotation: a scene, a background, a mask, a blend, an effect.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RotationRow {
+    pub key: String,
+    pub name: String,
+    /// The fader (kept while off), and whether it is on.
+    pub level: f64,
+    pub on: bool,
+    /// About how much of the night it gets by the plan.
+    pub share: f64,
+    /// On the stage now.
+    pub live: bool,
+    /// Why it cannot come, where it cannot.
+    pub note: Option<String>,
+}
+
+/// The rotation as the Show page draws it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RotationView {
+    pub scenes: Vec<RotationRow>,
+    /// The rows every scene shares: the axis (`ground`…), its title, its hint, its values.
+    pub shared: Vec<(String, String, String, Vec<RotationRow>)>,
+    pub mosh: f64,
+    pub bias: f64,
+    pub dark_beat: bool,
+    /// How many looks NEXT taught it to come less.
+    pub taught: usize,
+    pub transform: wo_show::rig::TransformSet,
+    /// Which masks and blends each background takes: the columns, then per background its
+    /// key, name and a yes per column.
+    pub takes_cols: Vec<String>,
+    pub takes: Vec<(String, String, Vec<bool>)>,
+    /// The shares are being worked out again (the window looks back soon).
+    pub working: bool,
+}
+
+/// A background's name (v1: _groundName).
+pub fn ground_name(key: &str) -> String {
+    match key {
+        "black" => "Black",
+        "white" => "White",
+        "milk" => "MilkDrop",
+        "wash" => "Wash",
+        "pulse.grid" => "Pulse grid",
+        "pulse.rays" => "Pulse rays",
+        "pulse.smoke" => "Pulse smoke",
+        "pulse.stars" => "Pulse stars",
+        "field.drift" => "Drift",
+        "cover" => "Cover",
+        "camera" => "Camera",
+        _ => key,
+    }
+    .to_owned()
+}
+
 /// What the hands set on the show, as the Show page draws it (the Rust stage's).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShowHands {
@@ -200,7 +279,13 @@ pub(crate) struct Show {
     doc_saved: Instant,
     /// A favourite's MilkDrop preset, put on as the favourite lands.
     fave_milk: Option<String>,
+    /// The night's shares by the plan, for what plan and backgrounds, and when worked out.
+    shares: Option<Shares>,
+    /// The shares being worked out on a thread.
+    shares_job: Option<std::sync::mpsc::Receiver<Shares>>,
 }
+
+type Shares = (wo_show::plan::ShowPlan, std::collections::BTreeSet<String>, Instant, wo_show::shares::PlanShares);
 
 impl Drop for Show {
     fn drop(&mut self) {
@@ -300,6 +385,8 @@ impl Show {
             doc_dirty: false,
             doc_saved: Instant::now(),
             fave_milk: None,
+            shares: None,
+            shares_job: None,
         }
     }
 
@@ -470,7 +557,7 @@ impl Show {
         let d = &mut self.direct;
         match h {
             Hand::Hit => d.hit(),
-            Hand::Next => d.next(1),
+            Hand::Next => d.skip(),
             Hand::Previous => d.next(-1),
             Hand::Mosh => d.mosh_next(),
             Hand::Hold(on) => d.hold(*on),
@@ -661,6 +748,159 @@ impl Show {
     pub(crate) fn sets(&self) -> (Vec<wo_wire::SetRef>, Option<String>) {
         let all = self.direct.doc.snapshots().into_iter().map(|s| wo_wire::SetRef { id: s.id, name: s.name }).collect();
         (all, self.direct.doc.snapshot().map(|s| s.id))
+    }
+
+    /// An edit of the rotation, kept.
+    pub(crate) fn edit(&mut self, e: ShowEdit) {
+        use wo_show::json::Named;
+        use wo_show::plan::{LEVEL_MOST, PlanAxis};
+        let before = self.direct.doc.clone();
+        let plan = self.direct.director.plan().clone();
+        let axis = |a: &str| PlanAxis::by_name(a);
+        match e {
+            ShowEdit::SceneLevel(id, v) => self.set_plan(plan.with_scene(&id, Some(v.clamp(0.0, LEVEL_MOST)), None)),
+            ShowEdit::SceneOn(id, on) => {
+                // back on from a level of 0: at 1
+                let p = if on && plan.of(&id).level <= 0.0 { plan.with_scene(&id, Some(1.0), None) } else { plan };
+                self.set_plan(p.with_scene(&id, None, Some(!on)));
+                // off while it is on: on to the next one now
+                if !on && self.direct.director.scene() == Some(id.as_str()) {
+                    self.direct.next(1);
+                }
+            }
+            ShowEdit::SharedLevel(a, v, x) => {
+                if let Some(a) = axis(&a) {
+                    self.set_plan(plan.with_shared(a, &v, Some(x.clamp(0.0, LEVEL_MOST)), false, None));
+                }
+            }
+            ShowEdit::SharedOn(a, v, on) => {
+                if let Some(a) = axis(&a) {
+                    self.set_plan(plan.with_shared(a, &v, None, false, Some(!on)));
+                }
+            }
+            ShowEdit::Takes(g, x, t) => self.set_plan(plan.with_takes(&g, &x, t)),
+            ShowEdit::Mosh(m) => self.direct.doc.set_mosh(m.clamp(0.0, 1.0)),
+            ShowEdit::Bias(b) => self.direct.doc.set_bias(b.clamp(-1.0, 1.0)),
+            ShowEdit::DarkBeat(on) => self.direct.doc.set_dark_beat(on),
+            ShowEdit::Transform(t) => self.direct.doc.set_transform(&t),
+            ShowEdit::ForgetTaste => self.direct.doc.set_taste(&vec![]),
+        }
+        self.direct.apply_doc();
+        if self.direct.doc != before {
+            self.doc_dirty = true;
+        }
+    }
+
+    /// The rotation as the Show page draws it: the levels, and about how much of the night
+    /// each gets (worked out again when the plan or the backgrounds change, a few times a
+    /// second at most while a fader moves).
+    pub(crate) fn rotation(&mut self) -> RotationView {
+        use wo_show::json::Named;
+        use wo_show::plan::{PlanAxis, plan_value};
+        use wo_show::shares::PlanShares;
+        let d = &self.direct;
+        let plan = d.director.plan().clone();
+        let grounds = d.director.grounds_here.clone().unwrap_or_default();
+        // weighing every look takes tens of milliseconds: the first time here, after that on a
+        // thread while the last shares stay up
+        if let Some(rx) = &self.shares_job
+            && let Ok(done) = rx.try_recv()
+        {
+            self.shares = Some(done);
+            self.shares_job = None;
+        }
+        let stale = self.shares.as_ref().is_none_or(|(p, g, _, _)| *p != plan || *g != grounds);
+        if stale && self.shares.is_none() {
+            let s = PlanShares::of(&plan, &d.director.kinds, &grounds, d.director.scores.as_ref(), None);
+            self.shares = Some((plan.clone(), grounds.clone(), Instant::now(), s));
+        } else if stale && self.shares_job.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (kinds, scores) = (d.director.kinds.clone(), d.director.scores.clone());
+            let before = self.shares.as_ref().map(|(_, _, _, s)| s.clone());
+            let (plan, grounds) = (plan.clone(), grounds.clone());
+            std::thread::spawn(move || {
+                let s = PlanShares::of(&plan, &kinds, &grounds, scores.as_ref(), before.as_ref());
+                let _ = tx.send((plan, grounds, Instant::now(), s));
+            });
+            self.shares_job = Some(rx);
+        }
+        let shares = &self.shares.as_ref().expect("worked out").3;
+        let d = &self.direct;
+        let on = d.director.combo();
+        let scenes = d
+            .director
+            .scenes
+            .iter()
+            .filter(|m| DRAWN.contains(&m.id.as_str()))
+            .map(|m| {
+                let sp = plan.of(&m.id);
+                RotationRow {
+                    key: m.id.clone(),
+                    name: d.looks.get(&m.id).map_or(m.id.clone(), |l| l.name.clone()),
+                    level: sp.level,
+                    on: !sp.muted,
+                    share: shares.scenes.get(&m.id).copied().unwrap_or(0.0),
+                    live: d.director.scene() == Some(m.id.as_str()),
+                    note: (sp.weight() > 0.0 && !shares.any_on(&m.id)).then(|| "none of its looks can come by the plan".to_owned()),
+                }
+            })
+            .collect();
+        let row = |a: PlanAxis, key: &str, name: String, note: Option<String>| RotationRow {
+            key: key.to_owned(),
+            name,
+            level: plan.shared_fader(a, key),
+            on: !plan.shared_muted(a, key),
+            share: shares.of_night_by(a, key),
+            live: on.is_some_and(|c| (a == PlanAxis::Fx || !c.world()) && plan_value(c, a) == key),
+            note,
+        };
+        let grounds_rows = wo_show::combos::COMBO_GROUNDS
+            .iter()
+            .filter(|g| **g != "camera")
+            .map(|g| {
+                let note = (!grounds.contains(*g)).then(|| if *g == "milk" { "only with MilkDrop on the stage" } else { "only with a record's cover" }.to_owned());
+                row(PlanAxis::Ground, g, ground_name(g), note)
+            })
+            .collect();
+        let masks = wo_show::Mask::ALL.iter().map(|m| row(PlanAxis::Mask, m.name(), match m { wo_show::Mask::None => "No mask", wo_show::Mask::Keyhole => "Keyhole", _ => "Inverted" }.to_owned(), None)).collect();
+        let mixes = wo_show::Mix::ALL.iter().map(|m| row(PlanAxis::Mix, m.name(), match m { wo_show::Mix::Normal => "Normal", wo_show::Mix::Add => "Add", wo_show::Mix::Screen => "Screen", _ => "Contrast" }.to_owned(), None)).collect();
+        let fxs = wo_show::Fx::ALL
+            .iter()
+            .map(|f| {
+                let name = match f {
+                    wo_show::Fx::None => "No effect",
+                    wo_show::Fx::Kaleidoscope => "Kaleidoscope",
+                    wo_show::Fx::Slit => "Slit-scan",
+                    wo_show::Fx::Both => "Slit + kaleido",
+                    _ => "Datamosh",
+                };
+                row(PlanAxis::Fx, f.name(), name.to_owned(), None)
+            })
+            .collect();
+        let shared = vec![
+            ("ground".to_owned(), "Backgrounds".to_owned(), "under every scene".to_owned(), grounds_rows),
+            ("mask".to_owned(), "Masks".to_owned(), "where the background shows".to_owned(), masks),
+            ("mix".to_owned(), "Blends".to_owned(), "how the scene and the background meet".to_owned(), mixes),
+            ("fx".to_owned(), "Effects".to_owned(), "what is done to the scene over time and space".to_owned(), fxs),
+        ];
+        let takes_cols: Vec<String> = ["keyhole", "inverted", "add", "screen", "contrast"].iter().map(|s| s.to_string()).collect();
+        let takes = wo_show::combos::COMBO_GROUNDS
+            .iter()
+            .filter(|g| **g != "camera")
+            .map(|g| (g.to_string(), ground_name(g), takes_cols.iter().map(|x| plan.takes(g, x)).collect()))
+            .collect();
+        RotationView {
+            scenes,
+            shared,
+            mosh: d.doc.mosh(),
+            bias: d.doc.bias(),
+            dark_beat: d.doc.dark_beat(),
+            taught: d.doc.taste().len(),
+            transform: d.doc.transform(),
+            takes_cols,
+            takes,
+            working: self.shares_job.is_some(),
+        }
     }
 
     /// What the hands' judging said last (counted), and whether UNDO and WIDER have work.
@@ -888,6 +1128,72 @@ mod tests {
         assert_eq!(show.direct.doc.faves().len(), 1);
         assert_eq!(show.sets().0.len(), 1);
         drop(show);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The rotation once its shares are worked out for the plan as it is.
+    fn rotation_settled(show: &mut Show) -> RotationView {
+        let t = Instant::now();
+        loop {
+            let r = show.rotation();
+            if show.shares_job.is_none() && show.shares.as_ref().is_some_and(|s| s.0 == *show.direct.director.plan()) {
+                return r;
+            }
+            assert!(t.elapsed().as_secs() < 10, "the shares never came");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn the_rotation_is_edited_and_its_shares_follow() {
+        let dir = std::env::temp_dir().join(format!("wo-show-rot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("show.json");
+        std::fs::write(&file, r#"{"v":1,"pool":{}}"#).unwrap();
+        let mut show = Show::new_in(None, Some(file.clone()));
+        show.tick(&wo_wire::Frame::default(), None);
+        let r0 = show.rotation();
+        assert_eq!(r0.scenes.len(), DRAWN.iter().filter(|s| r0.scenes.iter().any(|r| r.key == **s)).count());
+        assert!((r0.scenes.iter().map(|r| r.share).sum::<f64>() - 1.0).abs() < 1e-6);
+        assert_eq!(r0.shared.len(), 4);
+        let milk = r0.shared[0].3.iter().find(|r| r.key == "milk").unwrap();
+        assert!(milk.note.is_some() && milk.share == 0.0, "no MilkDrop here");
+        // a scene off: none of the night, and off the stage if it was on
+        let on = show.direct.director.scene().unwrap().to_owned();
+        show.edit(ShowEdit::SceneOn(on.clone(), false));
+        assert_ne!(show.direct.director.scene(), Some(on.as_str()), "stepped on");
+        let r1 = rotation_settled(&mut show);
+        let row = r1.scenes.iter().find(|r| r.key == on).unwrap();
+        assert!(!row.on && row.share == 0.0);
+        // back on at its level; louder
+        show.edit(ShowEdit::SceneOn(on.clone(), true));
+        show.edit(ShowEdit::SceneLevel(on.clone(), 3.0));
+        assert_eq!(show.direct.director.plan().scene_level(&on), 3.0);
+        // a background off, the temper, the datamosh's share, the dark beat, the mirrors
+        show.edit(ShowEdit::SharedOn("ground".into(), "white".into(), false));
+        show.edit(ShowEdit::Bias(0.5));
+        show.edit(ShowEdit::Mosh(0.1));
+        show.edit(ShowEdit::DarkBeat(true));
+        show.edit(ShowEdit::Takes("black".into(), "add".into(), false));
+        let t = wo_show::rig::TransformSet { count: 4, ..Default::default() };
+        show.edit(ShowEdit::Transform(t.clone()));
+        assert_eq!((show.direct.director.bias, show.direct.director.mosh_share), (0.5, 0.1));
+        let r2 = rotation_settled(&mut show);
+        let white = r2.shared[0].3.iter().find(|r| r.key == "white").unwrap();
+        assert!(!white.on && white.share == 0.0);
+        assert!(r2.dark_beat && r2.transform == t);
+        assert!(!r2.takes.iter().find(|(g, _, _)| g == "black").unwrap().2[2], "black never with add");
+        // NEXT in the first bars teaches; forgotten
+        show.hand(&Hand::Next);
+        assert!(show.rotation().taught >= 1);
+        show.edit(ShowEdit::ForgetTaste);
+        assert_eq!(show.rotation().taught, 0);
+        drop(show);
+        let back = Show::new_in(None, Some(file));
+        assert_eq!((back.direct.director.bias, back.direct.doc.dark_beat()), (0.5, true), "kept");
+        assert_eq!(back.direct.director.plan().scene_level(&on), 3.0);
+        drop(back);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
