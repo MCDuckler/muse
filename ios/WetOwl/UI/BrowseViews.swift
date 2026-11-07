@@ -303,9 +303,13 @@ struct AlbumView: View {
                     .multilineTextAlignment(.center)
                 if let a = artist {
                     Button { app.goArtist(a) } label: {
-                        Text(a)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(Theme.red)
+                        HStack(spacing: 3) {
+                            Text(a)
+                                .font(.system(size: 16, weight: .semibold))
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .bold))
+                        }
+                        .foregroundColor(Theme.soft)
                     }
                     .buttonStyle(.plain)
                 }

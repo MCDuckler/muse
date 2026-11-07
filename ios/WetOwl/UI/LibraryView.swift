@@ -147,7 +147,7 @@ struct LibraryLink: View {
             HStack(spacing: 14) {
                 Image(systemName: icon)
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(Theme.red)
+                    .foregroundColor(Theme.soft)
                     .frame(width: 28)
                 Text(title)
                     .font(.system(size: 18, weight: .medium))
