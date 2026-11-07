@@ -20,6 +20,11 @@ pub enum Shelf {
     Fits { from: i64, title: String },
     /// The records a hand queued for the Auto DJ, in order.
     Queue,
+    /// Records that go with what is on (the house's /recommend): `fresh` in hundredths —
+    /// 0 this person's own, 100 new to them; `seeds` the decks' and the queue's.
+    Similar { fresh: u8, seeds: Vec<i64>, exclude: Vec<i64> },
+    /// Records to check by ear: the grid said of, the pads where a DJ leaves them.
+    Check,
 }
 
 /// The library this frame.
@@ -34,12 +39,31 @@ pub struct Library {
     pub signing_in: bool,
     /// The last thing the house said no to, in words.
     pub error: Option<String>,
+    /// A word on a row (why it was picked, what a check said), by record.
+    pub notes: std::collections::HashMap<i64, String>,
+    /// The cue check's records already checked, by record: what their grid was said to be.
+    pub checked: std::collections::HashMap<i64, Option<String>>,
 }
 
 impl Default for Library {
     fn default() -> Self {
-        Library { shelf: Shelf::All, rows: vec![], total: 0, loading: false, playlists: vec![], signing_in: false, error: None }
+        Library { shelf: Shelf::All, rows: vec![], total: 0, loading: false, playlists: vec![], signing_in: false, error: None, notes: Default::default(), checked: Default::default() }
     }
+}
+
+/// The cue check's verdicts on a grid: the house's word, the button's, what it means.
+pub const GRID_VERDICTS: &[(&str, &str, &str)] = &[
+    ("ok", "Grid OK", "The beat, the bars and the four-bar lines are where they should be"),
+    ("double", "×2 fast", "The tempo shown is twice the record's"),
+    ("half", "÷2 slow", "The tempo shown is half the record's"),
+    ("off", "Off beat", "The right tempo, but the beat lines sit between the beats"),
+    ("one", "One wrong", "The beat is right but the bar starts on the wrong beat"),
+    ("other", "Other", "Something else: a wrong tempo, a grid that drifts, no beat at all"),
+];
+
+/// A grid verdict in words.
+pub fn verdict_word(grid: Option<&str>) -> String {
+    GRID_VERDICTS.iter().find(|v| Some(v.0) == grid).map_or("no word on the grid".to_owned(), |v| v.1.to_lowercase())
 }
 
 /// A record's analysis, ready for its deck.
@@ -57,7 +81,7 @@ pub(crate) struct Analysed {
 /// What a worker thread hands back.
 pub(crate) enum Done {
     SignedIn(Result<Box<House>, String>),
-    Shelf { turn: u64, rows: Result<(Vec<Record>, i64), String> },
+    Shelf { turn: u64, rows: Result<(Vec<Record>, i64), String>, notes: Vec<(i64, String)>, checked: Vec<(i64, Option<String>)> },
     /// The next page of the shelf (the whole library), for the shelf's turn.
     More { turn: u64, rows: Result<(Vec<Record>, i64), String> },
     Playlists(Result<Vec<PlaylistSummary>, String>),
@@ -95,6 +119,8 @@ pub(crate) fn fetch_more(tx: &Sender<Done>, house: &House, offset: i64, turn: u6
 pub(crate) fn fetch_shelf(tx: &Sender<Done>, house: &House, shelf: Shelf, turn: u64) {
     let (tx, house) = (tx.clone(), house.clone());
     thread::spawn(move || {
+        let mut notes: Vec<(i64, String)> = vec![];
+        let mut checked: Vec<(i64, Option<String>)> = vec![];
         let rows = match shelf {
             Shelf::All => house.tracks("added", 0, 200).map(|p| (p.items, p.total)),
             Shelf::Playlist { id, .. } => house.playlist(id).map(|p| {
@@ -118,10 +144,45 @@ pub(crate) fn fetch_shelf(tx: &Sender<Done>, house: &House, shelf: Shelf, turn: 
                 Ok((v, n))
             }),
             Shelf::Queue => Ok((vec![], 0)),
+            Shelf::Similar { fresh, seeds, exclude } => house.recommend(&seeds, &exclude, fresh as f64 / 100.0, 30).map(|picks| {
+                let v: Vec<wo_house::Track> = picks
+                    .into_iter()
+                    .filter_map(|p| {
+                        let t = p.track?;
+                        let mut why = vec![];
+                        if p.where_ == "house" {
+                            why.push("new to you, the house has it".to_owned());
+                        }
+                        if !p.why.is_empty() {
+                            why.push(p.why);
+                        }
+                        if !why.is_empty() {
+                            notes.push((t.id, why.join(" · ")));
+                        }
+                        Some(t)
+                    })
+                    .collect();
+                let n = v.len() as i64;
+                (v, n)
+            }),
+            Shelf::Check => house.cue_checks(40).map(|items| {
+                let v: Vec<wo_house::Track> = items
+                    .into_iter()
+                    .map(|c| {
+                        if c.checked_at.is_some() {
+                            notes.push((c.track.id, format!("checked · {}", verdict_word(c.grid.as_deref()))));
+                            checked.push((c.track.id, c.grid));
+                        }
+                        c.track
+                    })
+                    .collect();
+                let n = v.len() as i64;
+                (v, n)
+            }),
         }
         .map(|(tracks, total)| (tracks.iter().map(Record::from_house).collect(), total))
         .map_err(|e| e.to_string());
-        let _ = tx.send(Done::Shelf { turn, rows });
+        let _ = tx.send(Done::Shelf { turn, rows, notes, checked });
     });
 }
 

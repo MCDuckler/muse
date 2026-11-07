@@ -33,7 +33,7 @@ pub mod theme;
 pub use backdrop::Backdrop;
 pub use covers::Cover;
 pub use prefs::Prefs;
-pub use library::{Library, Shelf};
+pub use library::{GRID_VERDICTS, Library, Shelf, verdict_word};
 pub use records::{Audio, Record};
 pub use show::{MilkFilter, FaveEdit, FaveRow, FavesView, SetEdit, SetRow, SetsView, FinishView, LooksGrid, MilkHand, MilkRow, MilkView, MoveRow, MovesView, OwnRows, RotationRow, RotationView, ScenePage, ShowBoard, ShowEdit, ShowHands, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, value_name};
 pub use wo_show::plan::{LEVEL_MOST, LEVEL_STEPS, level_word};
@@ -85,6 +85,8 @@ pub struct DeckView {
     /// What is known of the record (v1's data marks): its stems, its beats, its form
     /// (sections), its voice (the vocal map).
     pub marks: [bool; 4],
+    /// The record is being put on (its audio and analysis on their way).
+    pub loading: bool,
     /// The hands' state: CUE, the loop, the pitch fader.
     pub cue: Option<f64>,
     pub looped: Option<(f64, f64)>,
@@ -132,6 +134,8 @@ pub struct Row {
     pub record: Record,
     pub fits: u8,
     pub on_deck: Option<usize>,
+    /// A word on it: why it was picked, what its check said.
+    pub note: Option<String>,
 }
 
 /// Beat and bar lines across a waveform, x in pixels.
@@ -818,6 +822,7 @@ impl Desk {
                 part: s.stems.part,
                 stems: s.stems.state.clone(),
                 marks: [s.stems.state.ready(), !s.hands.grid.is_empty(), !s.timing.sections.is_empty(), s.vocals.as_ref().is_some_and(|v| v.bars.is_some())],
+                loading: s.loader.as_ref().is_some_and(|h| !h.is_finished()),
             }
         };
         let decks = [view(0), view(1)];
@@ -887,9 +892,10 @@ impl Desk {
                 record: r.clone(),
                 fits: records::fits(r, master_bpm, &key),
                 on_deck: (0..2).find(|&d| self.slots[d].record.id == r.id),
+                note: self.library.notes.get(&r.id).cloned(),
             })
             .collect();
-        if !matches!(self.library.shelf, Shelf::Fits { .. } | Shelf::Queue) || self.house.is_none() {
+        if !matches!(self.library.shelf, Shelf::Fits { .. } | Shelf::Queue | Shelf::Similar { .. } | Shelf::Check) || self.house.is_none() {
             rows.sort_by_key(|r| (r.on_deck.is_none(), std::cmp::Reverse(r.fits)));
         }
         rows
@@ -1162,13 +1168,15 @@ impl Desk {
                 self.library.signing_in = false;
                 self.library.error = Some(e);
             }
-            Done::Shelf { turn, rows } if turn == self.shelf_gen => {
+            Done::Shelf { turn, rows, notes, checked } if turn == self.shelf_gen => {
                 self.library.loading = false;
                 match rows {
                     Ok((rows, total)) => {
                         self.library.rows = rows;
                         self.library.total = total;
                         self.library.error = None;
+                        self.library.notes = notes.into_iter().collect();
+                        self.library.checked = checked.into_iter().collect();
                     }
                     Err(e) => self.library.error = Some(e),
                 }

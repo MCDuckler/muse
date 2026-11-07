@@ -1,6 +1,8 @@
-//! The crate's own shelves and hands (v1's console_crate.dart): the records a hand
-//! queued for the Auto DJ, the house's best fits for the record playing, the whole
-//! library page by page, and the pads a hand set kept on the record at the house.
+//! The crate's own shelves and hands (v1's console_crate.dart, console_check.dart): the
+//! records a hand queued for the Auto DJ, the house's best fits for the record playing,
+//! the records like what is on (some this person's, some new to them), the whole library
+//! page by page, a playlist mixed or queued whole, the records to check by ear, and the
+//! pads a hand set kept on the record at the house.
 use std::thread;
 
 use crate::autodj::LogKind;
@@ -84,6 +86,119 @@ impl Desk {
             }
             library::fetch_playlists(&tx, &house);
         });
+    }
+
+    /// The shelf of records like what is on — the decks' and the next few queued — `fresh`
+    /// in hundredths: 0 this person's own, 50 a mix, 100 new to them.
+    pub fn open_similar(&mut self, fresh: u8) {
+        let mut seeds: Vec<i64> = vec![];
+        for d in [self.master, 1 - self.master] {
+            let id = self.slots[d].record.id;
+            if id > 0 && !seeds.contains(&id) {
+                seeds.push(id);
+            }
+        }
+        for r in &self.hand_queue {
+            if seeds.len() >= 4 {
+                break;
+            }
+            if r.id > 0 && !seeds.contains(&r.id) {
+                seeds.push(r.id);
+            }
+        }
+        let exclude = self.hand_queue.iter().map(|r| r.id).collect();
+        if seeds.is_empty() {
+            self.library.shelf = Shelf::Similar { fresh, seeds, exclude };
+            self.library.rows.clear();
+            self.library.total = 0;
+            self.library.loading = false;
+            return;
+        }
+        self.open_shelf(Shelf::Similar { fresh, seeds, exclude });
+    }
+
+    /// One of the similar waved away: never offered again.
+    pub fn dismiss(&mut self, id: i64) {
+        self.library.rows.retain(|r| r.id != id);
+        self.library.total = self.library.rows.len() as i64;
+        let Some(house) = self.house.clone() else { return };
+        thread::spawn(move || {
+            if let Err(e) = house.dismiss_pick(id) {
+                eprintln!("dismiss {id}: {e}");
+            }
+        });
+    }
+
+    /// The records to check by ear.
+    pub fn open_check(&mut self) {
+        self.open_shelf(Shelf::Check);
+    }
+
+    /// The record on deck `d` checked: what its grid is like (one of GRID_VERDICTS), and
+    /// where its pads were left — each the booth's own place or a hand's — kept at the house
+    /// as the ground truth its grids and pads are measured against.
+    pub fn check(&mut self, d: usize, grid: &str) {
+        let (Some(house), Audio::House { id }) = (self.house.clone(), &self.slots[d].record.audio) else { return };
+        let id = *id;
+        let pads: Vec<(usize, i64, bool)> = self.slots[d].hands.pads.iter().enumerate().filter_map(|(n, p)| p.map(|p| (n + 1, (p.at * 1000.0).round() as i64, p.auto.is_some()))).collect();
+        self.library.checked.insert(id, Some(grid.to_owned()));
+        self.library.notes.insert(id, format!("checked · {}", library::verdict_word(Some(grid))));
+        self.note(LogKind::Hand, format!("Checked: {} — {}", self.slots[d].record.title, library::verdict_word(Some(grid))));
+        let grid = grid.to_owned();
+        thread::spawn(move || {
+            if let Err(e) = house.check_cues(id, &grid, &pads) {
+                eprintln!("check {id}: {e}");
+            }
+        });
+        self.changes += 1;
+    }
+
+    /// A check taken back: the record to be checked again.
+    pub fn uncheck(&mut self, id: i64) {
+        self.library.checked.remove(&id);
+        self.library.notes.remove(&id);
+        let Some(house) = self.house.clone() else { return };
+        thread::spawn(move || {
+            if let Err(e) = house.uncheck_cues(id) {
+                eprintln!("uncheck {id}: {e}");
+            }
+        });
+        self.changes += 1;
+    }
+
+    /// The records the crate shows: the house's shelf, or the records on this computer.
+    fn shelf_rows(&self) -> &[Record] {
+        if self.house.is_some() { &self.library.rows } else { &self.rows }
+    }
+
+    /// The playlist open, mixed by the Auto DJ from now in its order (the records on the
+    /// decks left out); the queue there was kept after it. The Auto DJ on.
+    pub fn mix_shelf(&mut self) {
+        let on: Vec<i64> = self.slots.iter().map(|s| s.record.id).collect();
+        let mut q: Vec<Record> = self.shelf_rows().iter().filter(|r| r.playable() && !on.contains(&r.id)).cloned().collect();
+        let n = q.len();
+        for r in std::mem::take(&mut self.hand_queue) {
+            if !q.iter().any(|x| x.id == r.id) {
+                q.push(r);
+            }
+        }
+        self.hand_queue = q;
+        let name = match &self.library.shelf {
+            Shelf::Playlist { name, .. } => name.clone(),
+            _ => "the shelf".to_owned(),
+        };
+        self.note(LogKind::Hand, format!("Mixing {name}: {n} records queued"));
+        self.set_auto(true);
+        self.queue_shown();
+    }
+
+    /// The shelf's records (playable, not queued already) put at the end of the queue.
+    pub fn queue_shelf(&mut self) -> usize {
+        let rows: Vec<Record> = self.shelf_rows().iter().filter(|r| r.playable() && !self.hand_queue.iter().any(|q| q.id == r.id)).cloned().collect();
+        let n = rows.len();
+        self.hand_queue.extend(rows);
+        self.queue_shown();
+        n
     }
 
     /// A pad set or cleared by a hand kept on the record at the house (`at` none:

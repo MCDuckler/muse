@@ -81,6 +81,9 @@ pub(crate) struct App {
     set_shape: wo_deskcore::set::SetShape,
     /// The crate's "Fits the master" pressed (opened once the frame is drawn).
     fits_asked: bool,
+    /// The crate's "Similar" asked for (at this freshness), and the freshness last chosen.
+    similar_asked: Option<u8>,
+    similar_fresh: u8,
     /// The nudge held, per deck.
     nudge_held: [i8; 2],
     /// The search as typed, when typing last changed it, what the house was last asked.
@@ -230,6 +233,17 @@ impl App {
         if let Some(t) = arg("--show-room") {
             app.show_room = ["stage", "rotation", "favourites"].iter().position(|n| *n == t).unwrap_or(0);
         }
+        // --shelf similar|check|queue|playlist: the crate on that shelf (screenshots, signed in)
+        if let Some(sh) = arg("--shelf") {
+            let mut d = app.desk.lock().unwrap();
+            match sh.as_str() {
+                // (like the house's record 101: a screenshot's decks hold none of the house's)
+                "similar" => d.open_shelf(wo_deskcore::Shelf::Similar { fresh: 50, seeds: vec![101], exclude: vec![] }),
+                "check" => d.open_check(),
+                "queue" => d.open_shelf(wo_deskcore::Shelf::Queue),
+                _ => d.open_shelf(wo_deskcore::Shelf::Playlist { id: 1, name: "Warm up".into() }),
+            }
+        }
         // --show-scene <id>: that scene's page over the rotation (screenshots)
         if let Some(id) = arg("--show-scene") {
             app.show_room = 1;
@@ -264,6 +278,8 @@ impl App {
             plan_open: false,
             set_shape: Default::default(),
             fits_asked: false,
+            similar_asked: None,
+            similar_fresh: 50,
             nudge_held: [0; 2],
             search_at: None,
             searched: String::new(),

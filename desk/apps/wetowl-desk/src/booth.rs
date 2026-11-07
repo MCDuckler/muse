@@ -415,6 +415,22 @@ impl App {
             ui.interact(r.expand(2.0), ui.scope_id().with(("mark", d, i)), Sense::hover()).on_hover_text(format!("{tip}: {}", if v.marks[i] { "here" } else { "not known" }));
             mx = r.right() + 8.0;
         }
+        // what is on its way to this deck (v1's deck_coming): the record being put on, or the
+        // Auto DJ's next, chosen and waiting for this deck to be free
+        let coming = if v.loading {
+            Some(("LOADING".to_owned(), String::new(), t::warm()))
+        } else if s.auto && !v.master && s.mix.is_none() {
+            s.up_next.first().filter(|n| n.id != v.record.id).map(|n| ("NEXT".to_owned(), format!("{} — {}", n.title, n.artist), t::soft()))
+        } else {
+            None
+        };
+        if let Some((word, what, c)) = coming {
+            let wr = kit::text(p, pos2(mx + 10.0, inner.top() + 66.0), Align2::LEFT_CENTER, &word, 8.5, "mono-semi", c);
+            if !what.is_empty() {
+                kit::clipped(p, pos2(wr.right() + 6.0, inner.top() + 66.0), &what, 11.0, "", t::muted(), bpm.left() - wr.right() - 34.0);
+            }
+            ui.interact(wr.expand(2.0), ui.scope_id().with(("coming", d)), Sense::hover()).on_hover_text(if v.loading { "Being put on: its audio and its analysis on their way" } else { "The Auto DJ's next: it goes on this deck once it is free" });
+        }
 
         // the body: transport | hot cues | pitch; the loop row under it
         let body = Rect::from_min_max(pos2(inner.left(), inner.top() + 72.0 + 16.0), inner.max);
@@ -687,6 +703,81 @@ impl App {
         }
     }
 
+    /// The crate's strip for the shelf open: a playlist mixed or queued whole; the similar
+    /// ones this person's, a mix, or new to them; the record on a deck checked by ear.
+    fn crate_strip(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, shelf: &Shelf, s: &Snapshot) {
+        match shelf {
+            Shelf::Playlist { name, .. } => {
+                let mix = Rect::from_min_size(r.min, vec2(104.0, r.height()));
+                if Btn::new("Mix it").icon(Icon::Play).accent(true).size(11.0).show(ui, p, mix, "mix-it").on_hover_text(format!("The Auto DJ mixes {name} from now, in its order (the queue you had kept after it)")).clicked() {
+                    desk.mix_shelf();
+                    self.toasts.say(format!("Mixing {name}"), Tone::Ok);
+                }
+                let all = Rect::from_min_size(pos2(mix.right() + 8.0, r.top()), vec2(112.0, r.height()));
+                if Btn::new("Queue all").icon(Icon::Plus).size(11.0).show(ui, p, all, "queue-all").on_hover_text("Its records at the end of the queue").clicked() {
+                    let n = desk.queue_shelf();
+                    self.toasts.say(format!("{n} queued"), Tone::Neutral);
+                }
+            }
+            Shelf::Similar { fresh, seeds, .. } => {
+                let seg = Rect::from_min_size(r.min, vec2(210.0, r.height()));
+                let freshes = [0u8, 50, 100];
+                let at = freshes.iter().position(|f| f == fresh);
+                if let Some(i) = kit::segmented(ui, p, seg, &["Mine", "Mix", "New"], at, Tone::Neutral, "similar-fresh") {
+                    self.similar_fresh = freshes[i];
+                    self.similar_asked = Some(freshes[i]);
+                }
+                let again = Rect::from_min_size(pos2(seg.right() + 8.0, r.top()), vec2(34.0, r.height()));
+                if Btn::new("").icon(Icon::Undo).size(11.0).show(ui, p, again, "similar-again").on_hover_text("Ask again, for what is on now").clicked() {
+                    self.similar_asked = Some(*fresh);
+                }
+                let words = if seeds.is_empty() { "Nothing on the decks or in the queue yet".to_owned() } else { "Like the records on the decks and the next in the queue · a right click: not for me".to_owned() };
+                kit::clipped(p, pos2(again.right() + 12.0, r.center().y), &words, 11.5, "", t::faint(), r.right() - again.right() - 12.0);
+            }
+            Shelf::Check => {
+                // a record of the list on a deck, not checked yet: its pads, and what its grid is like
+                let lib = desk.library();
+                let ids: Vec<i64> = lib.rows.iter().map(|r| r.id).collect();
+                let on = (0..2).find(|&d| ids.contains(&s.decks[d].record.id) && !lib.checked.contains_key(&s.decks[d].record.id) && s.decks[d].record.id > 0);
+                match on {
+                    Some(d) => {
+                        let v = &s.decks[d];
+                        let pad = |n: usize| match v.pads[n - 1] {
+                            Some(p) => format!("{n} {} {}:{:02}", if p.auto.is_some() { "booth" } else { "yours" }, (p.at / 60.0) as i64, (p.at % 60.0) as i64),
+                            None => format!("{n} —"),
+                        };
+                        let lr = kit::text(p, pos2(r.left(), r.center().y), Align2::LEFT_CENTER, &format!("Deck {} · pads {} · {}", ["A", "B"][d], pad(1), pad(4)), 11.0, "mono", t::deck(d));
+                        let mut x = lr.right() + 12.0;
+                        for (g, word, tip) in wo_deskcore::GRID_VERDICTS {
+                            let w = label_width(p, word, 10.5) + 18.0;
+                            if x + w > r.right() {
+                                break;
+                            }
+                            let br = Rect::from_min_size(pos2(x, r.top()), vec2(w, r.height()));
+                            if Btn::new(word).size(10.5).show(ui, p, br, ("verdict", *g)).on_hover_text(*tip).clicked() {
+                                desk.check(d, g);
+                                self.toasts.say(format!("Checked: {}", wo_deskcore::verdict_word(Some(g))), Tone::Ok);
+                            }
+                            x += w + 5.0;
+                        }
+                    }
+                    None => {
+                        kit::clipped(
+                            p,
+                            pos2(r.left(), r.center().y),
+                            "Load one. Put pad 1 where it is on and pad 4 where you would leave it, then say what its grid is like",
+                            11.5,
+                            "",
+                            t::faint(),
+                            r.width(),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn crate_(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot) {
         kit::panel(p, r, true);
         let tree = Rect::from_min_max(r.min, pos2(r.left() + 232.0, r.bottom()));
@@ -726,6 +817,8 @@ impl App {
                     Shelf::Search(q) => format!("“{q}”"),
                     Shelf::Fits { title, .. } => format!("Fits {title}"),
                     Shelf::Queue => "The queue".to_owned(),
+                    Shelf::Similar { .. } => "Like what is on".to_owned(),
+                    Shelf::Check => format!("Check by ear · {} done", lib.checked.len()),
                 };
                 let n = if lib.loading { "…".to_owned() } else { thousands(lib.total) };
                 format!("{name} · {n}")
@@ -743,7 +836,12 @@ impl App {
         let cx = cols.x;
         let clip = p.with_clip_rect(main.shrink(1.0));
         let p = &clip;
-        let hy = main.top() + 62.0;
+        let strip = matches!(lib.shelf, Shelf::Playlist { .. } | Shelf::Similar { .. } | Shelf::Check) && desk.house().is_some();
+        if strip {
+            let shelf = lib.shelf.clone();
+            self.crate_strip(desk, ui, p, Rect::from_min_size(pos2(main.left() + 14.0, main.top() + 48.0), vec2(main.width() - 28.0, 26.0)), &shelf, s);
+        }
+        let hy = main.top() + if strip { 92.0 } else { 62.0 };
         let heads: [(&str, Option<Sort>, usize, bool); 8] = [
             ("#", None, 0, false),
             ("", None, 1, false),
@@ -837,6 +935,11 @@ impl App {
         let mut add_to: Option<(i64, Record)> = None;
         let lists: Vec<(i64, String)> = desk.library().playlists.iter().map(|l| (l.id, l.name.clone())).collect();
         let on_queue = desk.library().shelf == Shelf::Queue;
+        let on_similar = matches!(desk.library().shelf, Shelf::Similar { .. });
+        let on_check = desk.library().shelf == Shelf::Check;
+        let checked_ids: Vec<i64> = desk.library().checked.keys().copied().collect();
+        let mut dismiss: Option<i64> = None;
+        let mut uncheck: Option<i64> = None;
         let free_decks: [bool; 2] = [!s.decks[0].playing, !s.decks[1].playing];
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
         let mut area = egui::ScrollArea::vertical().id_salt("crate").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0));
@@ -882,7 +985,16 @@ impl App {
                 }
                 let ink = if row.on_deck.is_some() { t::muted() } else if row.record.playable() { t::text() } else { t::muted() };
                 kit::clipped(&p, pos2(tx, y), &row.record.title, 13.0, "", ink, at(3) - tx - 12.0);
-                kit::clipped(&p, pos2(at(3), y), &row.record.artist, 13.0, "", t::muted(), at(4) - at(3) - 12.0);
+                match &row.note {
+                    Some(n) => {
+                        let ar = kit::clipped(&p, pos2(at(3), y - 7.0), &row.record.artist, 12.0, "", t::muted(), at(4) - at(3) - 12.0);
+                        let _ = ar;
+                        kit::clipped(&p, pos2(at(3), y + 8.0), n, 10.5, "", t::faint(), at(4) - at(3) - 12.0);
+                    }
+                    None => {
+                        kit::clipped(&p, pos2(at(3), y), &row.record.artist, 13.0, "", t::muted(), at(4) - at(3) - 12.0);
+                    }
+                }
                 kit::text(&p, pos2(at(5) - 12.0, y), Align2::RIGHT_CENTER, &format!("{:.2}", row.record.bpm), 12.0, "mono", t::text());
                 kit::text(&p, pos2(at(5), y), Align2::LEFT_CENTER, &row.record.key, 12.0, "mono", t::muted());
                 if cols.time {
@@ -908,6 +1020,14 @@ impl App {
                         }
                     } else if ui.add_enabled(rec.playable(), egui::Button::new("Queue it for the Auto DJ")).clicked() {
                         queue_it = Some(rec.clone());
+                        ui.close();
+                    }
+                    if on_similar && ui.button("Not for me: never offered again").clicked() {
+                        dismiss = Some(rec.id);
+                        ui.close();
+                    }
+                    if on_check && checked_ids.contains(&rec.id) && ui.button("Check it again").clicked() {
+                        uncheck = Some(rec.id);
                         ui.close();
                     }
                     if !lists.is_empty() && rec.id > 0 {
@@ -954,6 +1074,12 @@ impl App {
         }
         if let Some(id) = unqueue {
             desk.queue_remove(id);
+        }
+        if let Some(id) = dismiss {
+            desk.dismiss(id);
+        }
+        if let Some(id) = uncheck {
+            desk.uncheck(id);
         }
         if let Some((pid, r)) = add_to {
             self.toasts.say(format!("{} added", r.title), Tone::Neutral);
@@ -1012,7 +1138,7 @@ impl App {
         // painted with the ui's own painter, so rows in the scrolling list are clipped by it
         let row = |ui: &mut Ui, y: f32, name: &str, n: String, on: bool, id: i64| -> bool {
             let p = ui.painter().clone();
-            let rr = Rect::from_min_size(pos2(tree.left() + 10.0, y), vec2(tree.width() - 20.0, 30.0));
+            let rr = Rect::from_min_size(pos2(tree.left() + 10.0, y), vec2(tree.width() - 20.0, 27.0));
             let resp = ui.interact(rr, ui.scope_id().with(("shelf", id)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
             let h = motion::tween_bool(&ctx, resp.id.with("h"), resp.hovered(), motion::QUICK, motion::STANDARD);
             let o = motion::tween_bool(&ctx, resp.id.with("on"), on, motion::STANDARD, motion::STANDARD);
@@ -1032,23 +1158,34 @@ impl App {
             open = Some(Shelf::All);
         }
         // the house's best fits for the record playing; the hand's queue
-        if row(ui, tree.top() + 70.0, "Fits the master", String::new(), matches!(shelf, Shelf::Fits { .. }), -2) {
+        if row(ui, tree.top() + 66.0, "Fits the master", String::new(), matches!(shelf, Shelf::Fits { .. }), -2) {
             self.fits_asked = true;
         }
         let queued = desk.queue().len();
-        if row(ui, tree.top() + 102.0, "Queue", if queued > 0 { queued.to_string() } else { String::new() }, shelf == Shelf::Queue, -3) {
+        if row(ui, tree.top() + 94.0, "Queue", if queued > 0 { queued.to_string() } else { String::new() }, shelf == Shelf::Queue, -3) {
             open = Some(Shelf::Queue);
         }
-        kit::section(p, pos2(tree.left() + 18.0, tree.top() + 148.0), Align2::LEFT_TOP, "Playlists");
-        let list = Rect::from_min_max(pos2(tree.left(), tree.top() + 168.0), pos2(tree.right(), tree.bottom() - 46.0));
+        // like what is on; the records to check by ear
+        if row(ui, tree.top() + 122.0, "Similar", String::new(), matches!(shelf, Shelf::Similar { .. }), -4) {
+            self.similar_asked = Some(self.similar_fresh);
+        }
+        if row(ui, tree.top() + 150.0, "Check by ear", String::new(), shelf == Shelf::Check, -5) {
+            open = Some(Shelf::Check);
+        }
+        kit::section(p, pos2(tree.left() + 18.0, tree.top() + 186.0), Align2::LEFT_TOP, "Playlists");
+        let list = Rect::from_min_max(pos2(tree.left(), tree.top() + 204.0), pos2(tree.right(), tree.bottom() - 46.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
-        egui::ScrollArea::vertical().id_salt("playlists").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0)).show_rows(&mut child, 32.0, lists.len(), |ui, range| {
+        egui::ScrollArea::vertical().id_salt("playlists").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0)).show_rows(&mut child, 28.0, lists.len(), |ui, range| {
             for i in range {
                 let l = &lists[i];
-                let (rr, _) = ui.allocate_exact_size(vec2(list.width(), 32.0), Sense::hover());
+                let (rr, _) = ui.allocate_exact_size(vec2(list.width(), 28.0), Sense::hover());
                 let on = matches!(&shelf, Shelf::Playlist { id, .. } if *id == l.id);
                 if row(ui, rr.top(), &l.name, l.items.to_string(), on, l.id) {
                     open = Some(Shelf::Playlist { id: l.id, name: l.name.clone() });
+                }
+                // the pinned ones (first in the list) marked
+                if l.pinned.unwrap_or(false) {
+                    kit::dot(ui.painter(), pos2(rr.left() + 14.0, rr.center().y), t::soft(), 2.0);
                 }
             }
         });
@@ -1065,6 +1202,11 @@ impl App {
             self.search.clear();
             self.searched.clear();
             desk.open_fits();
+        }
+        if let Some(f) = self.similar_asked.take() {
+            self.search.clear();
+            self.searched.clear();
+            desk.open_similar(f);
         }
         if let Some(s) = open {
             self.search.clear();

@@ -110,6 +110,28 @@ pub struct PlaylistSummary {
     pub pinned: Option<bool>,
 }
 
+/// A record that goes with others (GET /recommend): where it is (`library`: this person's,
+/// `house`: here, not theirs yet), why, the record.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Pick {
+    #[serde(default, rename = "where")]
+    pub where_: String,
+    #[serde(default)]
+    pub why: String,
+    #[serde(default)]
+    pub track: Option<Track>,
+}
+
+/// A record to check by ear, and what was said of it.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CueCheck {
+    pub track: Track,
+    #[serde(default)]
+    pub grid: Option<String>,
+    #[serde(default)]
+    pub checked_at: Option<String>,
+}
+
 /// One playlist, its records with it.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Playlist {
@@ -561,6 +583,57 @@ impl House {
     /// house for the planner to learn from (POST /booth/feedback).
     pub fn feedback(&self, body: &serde_json::Value) -> Result<()> {
         self.post_json("/booth/feedback", body).map(|_| ())
+    }
+
+    /// Records that go with `seeds` (GET /recommend): `fresh` 0..1 how much of the answer is
+    /// not this person's already (0 theirs, 1 new to them); never one of `exclude`. Only the
+    /// ones the house has (a record found elsewhere is not one the Desk can play).
+    pub fn recommend(&self, seeds: &[i64], exclude: &[i64], fresh: f64, limit: u32) -> Result<Vec<Pick>> {
+        #[derive(Deserialize)]
+        struct All {
+            #[serde(default)]
+            items: Vec<Pick>,
+        }
+        let join = |v: &[i64]| v.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("%2C");
+        let mut path = format!("/recommend?seeds={}&fresh={fresh}&limit={limit}", join(seeds));
+        if !exclude.is_empty() {
+            path.push_str(&format!("&exclude={}", join(exclude)));
+        }
+        let all: All = self.json(&path)?;
+        Ok(all.items.into_iter().filter(|p| p.track.is_some()).collect())
+    }
+
+    /// Not for me: a pick never offered to this person again.
+    pub fn dismiss_pick(&self, track_id: i64) -> Result<()> {
+        self.post_json("/recommend/dismiss", &serde_json::json!({"track_id": track_id})).map(|_| ())
+    }
+
+    /// Records to check by ear (GET /booth/check): the same list each time, spread over the
+    /// tempos, each with what was said of it.
+    pub fn cue_checks(&self, n: u32) -> Result<Vec<CueCheck>> {
+        #[derive(Deserialize)]
+        struct All {
+            #[serde(default)]
+            items: Vec<CueCheck>,
+        }
+        Ok(self.json::<All>(&format!("/booth/check?n={n}"))?.items)
+    }
+
+    /// One checked: what its grid is like (ok, double, half, off, one, other), and where the
+    /// pads were left (pad → ms, and whether the booth placed it).
+    pub fn check_cues(&self, id: i64, grid: &str, pads: &[(usize, i64, bool)]) -> Result<()> {
+        let pads: serde_json::Map<String, serde_json::Value> = pads.iter().map(|(n, ms, auto)| (n.to_string(), serde_json::json!({"ms": ms, "auto": auto}))).collect();
+        self.agent
+            .put(format!("{}/booth/check/{id}", self.session.server))
+            .header("Authorization", &format!("Bearer {}", self.session.token))
+            .send_json(serde_json::json!({"grid": grid, "pads": pads}))?;
+        Ok(())
+    }
+
+    /// Checked again: what was said of it taken back.
+    pub fn uncheck_cues(&self, id: i64) -> Result<()> {
+        self.agent.delete(format!("{}/booth/check/{id}", self.session.server)).header("Authorization", &format!("Bearer {}", self.session.token)).call()?;
+        Ok(())
     }
 
     /// The records in the library that would follow `from` best (GET /booth/partners),

@@ -51,6 +51,18 @@ fn the_hands_on_the_auto_dj() {
     d.queue_remove(a.id);
     assert_eq!(d.library().rows.len(), 1, "the shelf follows the queue");
     d.queue_remove(b.id);
+    // the shelf (the two records here) queued whole: each one not queued yet, none twice;
+    // mixed: its records not on a deck first (none here: both are), the queue there was after
+    d.queue_add(a.clone());
+    assert_eq!(d.queue_shelf(), 1);
+    assert_eq!(d.queue_shelf(), 0, "none twice");
+    assert_eq!(d.queue().iter().map(|r| r.id).collect::<Vec<_>>(), vec![a.id, b.id]);
+    d.queue_remove(b.id);
+    d.set_auto(false);
+    d.mix_shelf();
+    assert_eq!(d.queue().iter().map(|r| r.id).collect::<Vec<_>>(), vec![a.id], "the queue there was, kept");
+    assert!(d.snapshot().auto, "the Auto DJ on");
+    d.queue_remove(a.id);
 
     // the room's word, kept and undone
     d.more_energy(1);
