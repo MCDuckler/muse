@@ -162,7 +162,7 @@ struct PlayingBars: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 2) {
             ForEach(0..<3, id: \.self) { i in
-                Bar(index: i, moving: player.isPlaying)
+                Bar(index: i, moving: player.looksPlaying)
             }
         }
         .frame(width: 16, height: 14)

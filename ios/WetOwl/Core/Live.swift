@@ -50,6 +50,7 @@ final class Live: ObservableObject {
     private var task: Task<Void, Never>?
     weak var player: Player?
     weak var store: Store?
+    weak var room: Room?
 
     private static let session: URLSession = {
         let c = URLSessionConfiguration.default
@@ -140,6 +141,8 @@ final class Live: ObservableObject {
             Log.shared.add("live: asked to \(action)")
             player?.perform(action, queueId: int("queue_id"), trackId: int("track_id"),
                             positionMs: int("position_ms") ?? 0)
+        case "jam":
+            room?.handle(obj)
         case "devices":
             Task { await refreshDevices() }
         default:
@@ -170,8 +173,8 @@ final class Live: ObservableObject {
     /// What plays here, on another device.
     func playThere(_ d: DeviceInfo) {
         guard let player = player, let q = player.queue, q.id > 0, let t = player.current else { return }
-        let at = Int(player.clock.elapsed * 1000)
-        player.pause()
+        let at = Int(player.livePosition * 1000)
+        player.pauseHere()
         Haptics.done()
         AppModel.shared.say("Playing on \(d.name)", icon: d.icon)
         Task {

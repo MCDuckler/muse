@@ -8,6 +8,7 @@ struct HomeView: View {
     @EnvironmentObject private var router: Router
     @EnvironmentObject private var live: Live
     @EnvironmentObject private var updates: Updates
+    @EnvironmentObject private var room: Room
     @State private var showDevices = DemoScreen.name == "devices"
 
     var body: some View {
@@ -15,6 +16,11 @@ struct HomeView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 24) {
                     topBar
+                    if let j = room.jam {
+                        JamBanner(jam: j)
+                            .padding(.horizontal, Theme.gutter)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
                     if let u = updates.available {
                         UpdateBanner(release: u)
                             .padding(.horizontal, Theme.gutter)
@@ -36,6 +42,7 @@ struct HomeView: View {
                     recent
                 }
                 .padding(.bottom, 28)
+                .animation(.easeInOut(duration: 0.25), value: room.jam?.id)
             }
             .refreshable { await store.refreshAll(force: true) }
             .background(Theme.ground)
@@ -50,6 +57,18 @@ struct HomeView: View {
         HStack(spacing: 4) {
             Wordmark(height: 28)
             Spacer()
+            Button { app.showJam = true } label: {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: room.inJam ? "person.2.fill" : "person.2")
+                        .font(.system(size: 18))
+                        .foregroundColor(room.inJam ? Theme.high : Theme.soft)
+                    if room.inJam {
+                        Circle().fill(Theme.red).frame(width: 8, height: 8).offset(x: 4, y: -2)
+                    }
+                }
+                .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel(room.inJam ? "Jam, going on" : "Jam")
             Button { showDevices = true } label: {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "hifispeaker.2")
@@ -80,10 +99,10 @@ struct HomeView: View {
                 HStack(spacing: 14) {
                     CoverView(url: app.api.coverURL(t, small: false), color: t.coverColor, size: 72, radius: 6)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(player.isPlaying ? "NOW PLAYING" : "CARRY ON")
+                        Text(room.onAir ? (player.looksPlaying ? "IN THE JAM" : "JAM PAUSED") : (player.looksPlaying ? "NOW PLAYING" : "CARRY ON"))
                             .font(Theme.label(11))
                             .tracking(1.2)
-                            .foregroundColor(player.isPlaying ? Theme.red : Theme.faint)
+                            .foregroundColor(player.looksPlaying ? Theme.red : Theme.faint)
                         Text(t.name)
                             .font(.system(size: 17, weight: .semibold))
                             .foregroundColor(Theme.text)
@@ -92,22 +111,22 @@ struct HomeView: View {
                             .font(.system(size: 13))
                             .foregroundColor(Theme.muted)
                             .lineLimit(1)
-                        Text(q.name)
+                        Text(room.onAir ? "\(room.jam?.title ?? "Jam") · \(q.name)" : q.name)
                             .font(.system(size: 12))
                             .foregroundColor(Theme.faint)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
                     Button { player.toggle() } label: {
-                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                        Image(systemName: player.looksPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: 18, weight: .bold))
                             .foregroundColor(Theme.ground)
-                            .offset(x: player.isPlaying ? 0 : 1.5)
+                            .offset(x: player.looksPlaying ? 0 : 1.5)
                             .frame(width: 46, height: 46)
                             .background(Circle().fill(Theme.high))
                     }
                     .buttonStyle(PressStyle())
-                    .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+                    .accessibilityLabel(player.looksPlaying ? "Pause" : "Play")
                 }
                 .padding(10)
                 MiniProgress()

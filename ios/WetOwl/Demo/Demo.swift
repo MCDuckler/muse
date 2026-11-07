@@ -52,6 +52,16 @@ struct DemoTransport: Transport {
             body = DemoData.artists
         case ("GET", "/devices"):
             body = DemoData.devices
+        case ("GET", "/jams/current"):
+            if let j = DemoData.jam {
+                body = ["jam": j] as [String: Any]
+            } else {
+                body = ["jam": NSNull()] as [String: Any]
+            }
+        case ("GET", "/jams"):
+            body = ["items": DemoData.runningJams] as [String: Any]
+        case ("GET", "/jams/people"):
+            body = ["items": DemoData.people] as [String: Any]
         case ("GET", _) where path.hasSuffix("/lyrics"):
             body = ["synced": DemoData.lyrics] as [String: Any]
         case ("POST", "/playlists/holding"):
@@ -263,6 +273,39 @@ enum DemoData {
         return ["this": 99, "devices": [me, desk, web]]
     }
 
+    /// The jam this account is in, for the screens that show one.
+    static var jam: [String: Any]? {
+        let screen = DemoScreen.name ?? ""
+        guard ["jam", "jamguest", "jamhome", "jamplayer"].contains(screen) else { return nil }
+        let host = screen == "jam" || screen == "jamhome"
+        let hostName = host ? "chris" : "joe"
+        let members: [[String: Any]] = [
+            ["user_id": host ? 1 : 2, "name": hostName, "host": true, "online": true],
+            ["user_id": host ? 2 : 1, "name": host ? "joe" : "chris", "host": false, "online": true],
+            ["user_id": 4, "name": "ida", "host": false, "online": true],
+            ["user_id": 3, "name": "mira", "host": false, "online": false],
+        ]
+        let j: [String: Any] = ["id": 7, "code": "K7MQ2P", "queue_id": 11, "host": hostName, "is_host": host,
+                                "members": members, "listening": 3, "now_playing": tracks[3],
+                                "playback": ["track_id": 4, "item_id": 1003, "position_ms": 74_000, "playing": true,
+                                             "age_ms": 0, "seq": 1] as [String: Any]]
+        return j
+    }
+
+    static let runningJams: [[String: Any]] = [
+        ["id": 8, "code": "Q3RT7Z", "queue_id": 21, "host": "joe", "queue": "Friday warm-up", "listening": 3,
+         "playing": "Signal Fire", "by": "Oskar & The Tide", "joined": false],
+        ["id": 9, "code": "W2HN4D", "queue_id": 31, "host": "mira", "queue": "Now", "listening": 1,
+         "playing": "Slow Comet", "by": "Ida Brenner", "joined": false],
+    ]
+
+    static let people: [[String: Any]] = [
+        ["id": 2, "name": "joe", "online": true],
+        ["id": 4, "name": "ida", "online": true],
+        ["id": 3, "name": "mira", "online": false],
+        ["id": 5, "name": "oskar", "online": false],
+    ]
+
     static let lyrics = """
     [00:52.00] Out past the harbour lights
     [00:57.40] the water keeps its own time
@@ -353,6 +396,10 @@ enum DemoScreen {
             app.router.push(.artists, on: .library)
         case "addto":
             if let t = app.player.current { app.adding = TrackBatch(tracks: [t]) }
+        case "jam", "jamguest", "jamjoin":
+            app.showJam = true
+        case "jamplayer":
+            app.nowPlayingOpen = true
         default: app.tab = .home
         }
     }

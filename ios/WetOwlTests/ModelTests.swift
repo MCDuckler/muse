@@ -172,3 +172,77 @@ final class BrowseTests: XCTestCase {
         XCTAssertFalse(Updates.isNewer("202611080900", than: "1"), "a build made by hand is never nagged")
     }
 }
+
+final class JamTests: XCTestCase {
+    func testTheJamYouAreIn() throws {
+        let j: Jam = try API.decode(Data("""
+        {"id": 7, "code": "K7MQ2P", "queue_id": 11, "host": "joe", "is_host": false,
+         "members": [{"user_id": 2, "name": "joe", "host": true, "online": true},
+                     {"user_id": 1, "name": "chris", "host": false, "online": null},
+                     {"name": "no id"}],
+         "listening": 2, "started_at": "2026-11-07T12:00:00Z",
+         "now_playing": {"id": 4, "title": "Paper Moons"},
+         "playback": {"track_id": 4, "item_id": 1003, "position_ms": 74000, "playing": true, "age_ms": 1500, "seq": 1762500000000}}
+        """.utf8))
+        XCTAssertEqual(j.title, "joe's jam")
+        XCTAssertEqual(j.members.map { $0.name }, ["joe", "chris"], "a member without an id is skipped")
+        XCTAssertFalse(j.members[1].online)
+        XCTAssertEqual(j.nowPlaying?.id, 4)
+        XCTAssertEqual(j.playback?.seconds, 75.5, "a playing room has moved on by the age of the news")
+        XCTAssertEqual(j.playback?.seq, 1_762_500_000_000)
+        XCTAssertEqual(j.crowd, "2 listening")
+
+        let mine: Jam = try API.decode(Data(#"{"id": 8, "code": "Q3RT7Z", "queue_id": 3, "is_host": true, "members": []}"#.utf8))
+        XCTAssertEqual(mine.title, "Your jam")
+        XCTAssertEqual(mine.crowd, "Just you so far")
+    }
+
+    func testRunningJamsAndPeople() throws {
+        let p: Page<RunningJam> = try API.decode(Data("""
+        {"items": [{"id": 8, "code": "Q3RT7Z", "queue_id": 21, "host": "joe", "queue": "Friday", "listening": 3,
+                    "playing": "Signal Fire", "by": null, "joined": false}]}
+        """.utf8))
+        XCTAssertEqual(p.items.first?.nowLine, "Signal Fire")
+        let people: Page<Person> = try API.decode(Data(#"{"items": [{"id": 2, "name": "joe", "online": true, "last_seen": null}]}"#.utf8))
+        XCTAssertEqual(people.items.first?.online, true)
+    }
+
+    func testPlaybackFromALiveEvent() {
+        let pb = JamPlayback(event: ["jam_id": 7, "what": "playback", "track_id": 9, "position_ms": 12_000,
+                                     "playing": false, "item_id": NSNull(), "seq": 5])
+        XCTAssertEqual(pb?.trackId, 9)
+        XCTAssertNil(pb?.itemId)
+        XCTAssertEqual(pb?.seconds, 12)
+        XCTAssertEqual(pb?.playing, false)
+        XCTAssertNil(JamPlayback(event: ["jam_id": 7, "what": "joined"]))
+    }
+
+    func testTheRoomsClock() {
+        XCTAssertEqual(RoomClock.carried(60, playing: true, since: 2.5, length: 200), 62.5)
+        XCTAssertEqual(RoomClock.carried(60, playing: false, since: 30, length: 200), 60, "a paused room stays where it is")
+        XCTAssertEqual(RoomClock.carried(199, playing: true, since: 5, length: 200), 200, "never past the end of the song")
+        XCTAssertEqual(RoomClock.carried(60, playing: true, since: 600, length: 200), 60, "old news is not carried forward")
+        XCTAssertTrue(RoomClock.isStale(4, heard: 5))
+        XCTAssertFalse(RoomClock.isStale(5, heard: 5))
+        XCTAssertFalse(RoomClock.isStale(nil, heard: 5), "a host that does not count is believed")
+        XCTAssertFalse(RoomClock.isStale(1, heard: nil))
+    }
+
+    func testAPickedSongGoesStraightAfterTheOnePlaying() {
+        XCTAssertEqual(RoomClock.nextSlot(for: 9, playing: 4), 5)
+        XCTAssertEqual(RoomClock.nextSlot(for: 1, playing: 4), 4, "lifted out from above, the rows close up")
+        var q = QueueState(id: 1, name: "q", items: (1...6).map { Track(id: $0, title: "\($0)", artists: []) }, cursorIndex: 2)
+        q.move(from: 5, to: RoomClock.nextSlot(for: 5, playing: 2))
+        XCTAssertEqual(q.items.map { $0.id }, [1, 2, 3, 6, 4, 5])
+        q.move(from: 0, to: RoomClock.nextSlot(for: 0, playing: 2))
+        XCTAssertEqual(q.items.map { $0.id }, [2, 3, 1, 6, 4, 5], "song 3 (playing) is now row 1, the pick row 2")
+    }
+
+    func testTheHostsCountOnlyGoesUp() {
+        let t = Date(timeIntervalSince1970: 1_000)
+        XCTAssertEqual(RoomClock.nextSeq(after: 0, now: t), 1_000_000)
+        XCTAssertEqual(RoomClock.nextSeq(after: 1_000_000, now: t), 1_000_001, "two in the same millisecond")
+        XCTAssertTrue(RoomClock.justAhead(hostOn: 200, hostAt: 195, hereAt: 2))
+        XCTAssertFalse(RoomClock.justAhead(hostOn: 200, hostAt: 120, hereAt: 2))
+    }
+}

@@ -29,7 +29,16 @@ final class Player: ObservableObject {
     @Published private(set) var waitingFor: Track?
     @Published private(set) var sleepAt: Date?
     @Published private(set) var sleepAtEnd = false
+    /// In somebody else's jam without sound: the room's song and clock on screen, the
+    /// speaker out of it.
+    @Published private(set) var silentRoom = false
+    /// Whether the room is playing, for a phone following it without sound.
+    @Published private(set) var roomPlaying = false
     let clock = Clock()
+    /// The jam, when there is one; a guest's buttons reach the host through it.
+    weak var room: Room?
+    /// A phone call or another app has the sound.
+    private(set) var interrupted = false
 
     private let api: API
     private let offline: Offline
@@ -68,6 +77,7 @@ final class Player: ObservableObject {
     private var wantedWhenReady: (track: Track, during: Int?)?
 
     private var lastStateReport = Date.distantPast
+    private var lastFollowSeek = Date.distantPast
 
     // Now playing on the lock screen
     private var artwork: MPMediaItemArtwork?
@@ -91,6 +101,19 @@ final class Player: ObservableObject {
     // MARK: State everybody reads
 
     var hasSomething: Bool { current != nil }
+
+    /// What the play button shows: this phone's player, or the room it follows quietly.
+    var looksPlaying: Bool { silentRoom ? roomPlaying : isPlaying }
+
+    /// The engine's position as of now, not as of the last tick.
+    var livePosition: Double {
+        guard av.currentItem != nil, pendingSeek == nil else { return clock.elapsed }
+        let t = av.currentTime().seconds
+        return t.isFinite ? t : clock.elapsed
+    }
+
+    /// Following somebody else's jam: this phone's buttons are requests to the host.
+    private var asGuest: Bool { room?.isGuest == true }
 
     func isCurrent(index i: Int) -> Bool { queue != nil && i == index }
 
@@ -202,7 +225,8 @@ final class Player: ObservableObject {
             let left = s.timeIntervalSinceNow
             if left <= 0 {
                 sleepAt = nil
-                pause()
+                pauseHere()
+                room?.soundStoppedHere()
                 av.volume = 1
                 Log.shared.add("sleep timer: stopped")
             } else if left < 10 {
@@ -224,6 +248,7 @@ final class Player: ObservableObject {
             isPlaying = false
             syncCursor(force: true)
             updateNowPlaying()
+            room?.playerMoved()
         }
     }
 
@@ -234,6 +259,7 @@ final class Player: ObservableObject {
         switch type {
         case .began:
             Log.shared.add("interruption began")
+            interrupted = true
             wasPlayingBeforeInterruption = isPlaying
             if isPlaying {
                 isPlaying = false
@@ -242,7 +268,13 @@ final class Player: ObservableObject {
         case .ended:
             let opts = AVAudioSession.InterruptionOptions(rawValue: info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
             Log.shared.add("interruption ended resume=\(opts.contains(.shouldResume))")
-            if opts.contains(.shouldResume) && wasPlayingBeforeInterruption { play() }
+            interrupted = false
+            if asGuest {
+                // The room went on without this phone; back to where it is now.
+                if opts.contains(.shouldResume) { room?.rejoin() }
+            } else if opts.contains(.shouldResume) && wasPlayingBeforeInterruption {
+                playHere()
+            }
             wasPlayingBeforeInterruption = false
         @unknown default:
             break
@@ -261,6 +293,8 @@ final class Player: ObservableObject {
                 isPlaying = false
                 syncCursor(force: true)
                 updateNowPlaying()
+                room?.playerMoved()
+                room?.soundStoppedHere()
             }
         }
     }
@@ -355,6 +389,7 @@ final class Player: ObservableObject {
                 updateNowPlaying()
             }
             Log.shared.add("sleep timer: end of song")
+            room?.soundStoppedHere()
             return
         }
         // The last song of the queue: AVQueuePlayer runs dry and the current item
@@ -427,6 +462,7 @@ final class Player: ObservableObject {
             clock.duration = slot.track.seconds
             syncCursor(force: true)
             updateNowPlaying()
+            room?.playerMoved()
         }
         forgetAllBut(av.items())
         prepareNext()
@@ -514,18 +550,61 @@ final class Player: ObservableObject {
         if position > 1 { pendingSeek = (ObjectIdentifier(item), position) }
         prepareNext()
         if autoplay {
-            play()
+            playHere()
         } else {
             isPlaying = false
         }
         syncCursor(force: true)
         updateNowPlaying()
         keepUp()
+        room?.playerMoved()
     }
 
     // MARK: Transport
 
+    // The buttons, wherever they are pressed (the screen, the lock screen, headphones,
+    // another device). In somebody else's jam they ask the host's player instead.
+
     func play() {
+        if asGuest { room?.ask("play"); return }
+        playHere()
+    }
+
+    func pause() {
+        if asGuest { room?.ask("pause"); return }
+        pauseHere()
+    }
+
+    func toggle() {
+        if asGuest {
+            room?.ask(looksPlaying ? "pause" : "play")
+            return
+        }
+        Haptics.tap()
+        isPlaying ? pauseHere() : playHere()
+    }
+
+    func next() {
+        if asGuest { room?.ask("next"); return }
+        nextHere()
+    }
+
+    func previous() {
+        if asGuest { room?.ask("previous"); return }
+        previousHere()
+    }
+
+    func seek(to seconds: Double) {
+        if asGuest {
+            room?.ask("seek", positionMs: Int(max(0, seconds) * 1000))
+            return
+        }
+        seekHere(seconds)
+    }
+
+    // This phone's own player, whatever a room says.
+
+    func playHere() {
         guard queue != nil, !demoMode else { return }
         if av.currentItem == nil {
             start(at: index, position: clock.elapsed, autoplay: true)
@@ -537,39 +616,36 @@ final class Player: ObservableObject {
         isPlaying = true
         updateNowPlaying()
         reportState(force: true)
+        room?.playerMoved()
     }
 
-    func pause() {
+    func pauseHere() {
         av.pause()
         isPlaying = false
         syncCursor(force: true)
         updateNowPlaying()
+        room?.playerMoved()
     }
 
-    func toggle() {
-        Haptics.tap()
-        isPlaying ? pause() : play()
-    }
-
-    func next() {
+    private func nextHere() {
         guard queue != nil else { return }
         if let n = playableIndex(from: index + 1, direction: 1) {
             start(at: n, autoplay: isPlaying)
         }
     }
 
-    func previous() {
+    private func previousHere() {
         guard queue != nil else { return }
         if clock.elapsed > 3 {
-            seek(to: 0)
+            seekHere(0)
         } else if let p = playableIndex(from: index - 1, direction: -1) {
             start(at: p, autoplay: isPlaying, direction: -1)
         } else {
-            seek(to: 0)
+            seekHere(0)
         }
     }
 
-    func seek(to seconds: Double) {
+    private func seekHere(_ seconds: Double) {
         let s = max(0, seconds)
         clock.elapsed = s
         guard let item = av.currentItem else {
@@ -584,10 +660,19 @@ final class Player: ObservableObject {
         }
         lastTickTime = nil
         syncCursor(force: true)
+        room?.playerMoved()
     }
 
-    /// A row of the queue tapped.
+    /// A row of the queue tapped. A guest's goes next for everybody and is skipped to.
     func jump(to i: Int) {
+        if asGuest {
+            guard i != index, let t = queue?.track(at: i) else { return }
+            Haptics.tap()
+            let target = RoomClock.nextSlot(for: i, playing: index)
+            if i != target { move(from: i, to: target) }
+            enqueue { [weak self] in await self?.room?.send("next", trackId: t.id) }
+            return
+        }
         Haptics.tap()
         start(at: i, autoplay: true)
     }
@@ -622,6 +707,12 @@ final class Player: ObservableObject {
 
     private func syncCursor(force: Bool = false) {
         guard let q = queue, q.id > 0, !demoMode else { return }
+        // A guest's place is the host's to keep: two players writing one cursor drag
+        // each other back.
+        if asGuest {
+            reportState(force: force)
+            return
+        }
         let ms = Int(clock.elapsed * 1000)
         if !force, let l = lastCursorSent, l.index == index, abs(l.ms - ms) < 3000 { return }
         lastCursorSent = (index, ms, Date())
@@ -682,7 +773,8 @@ final class Player: ObservableObject {
     /// playing, written off the main thread.
     private func remember(_ q: QueueState, quietly: Bool = false) {
         guard q.id > 0 else { return }
-        UserDefaults.standard.set(q.id, forKey: Keys.activeQueue)
+        // Following a jam is not choosing its queue: the next start is on this phone's own.
+        if !asGuest { UserDefaults.standard.set(q.id, forKey: Keys.activeQueue) }
         var snap = q
         let keep = 600
         if snap.items.count > keep {
@@ -728,6 +820,7 @@ final class Player: ObservableObject {
             } else if fresh.rev != self.queue?.rev || fresh.total != self.queue?.total {
                 self.adopt(fresh)
             }
+            if self.asGuest { self.room?.rejoin() }
         }
     }
 
@@ -784,6 +877,13 @@ final class Player: ObservableObject {
     /// [from]. Sound starts at once; the house is told after.
     func play(_ tracks: [Track], from: Int = 0, name: String, shuffle: Bool = false, stationId: Int? = nil) {
         guard !tracks.isEmpty else { return }
+        if asGuest {
+            // In somebody's jam: what is started is for the room, one song at a time.
+            let pick = shuffle ? tracks.filter { isPlayable($0) }.randomElement() ?? tracks[0]
+                               : tracks[max(0, min(from, tracks.count - 1))]
+            room?.putOn(pick)
+            return
+        }
         Haptics.tap()
         var list = tracks
         var at = max(0, min(from, tracks.count - 1))
@@ -826,6 +926,10 @@ final class Player: ObservableObject {
 
     /// One song, now, keeping the rest of the queue: in after the one playing.
     func playNow(_ t: Track) {
+        if asGuest {
+            room?.putOn(t)
+            return
+        }
         guard isPlayable(t) else {
             add(t, next: true)
             waitUntilReady(t)
@@ -874,10 +978,11 @@ final class Player: ObservableObject {
         let id = q.id
         let i = index
         let ms = Int(clock.elapsed * 1000)
+        let guest = asGuest
         enqueue { [weak self] in
             guard let self = self else { return }
             do {
-                if next { try? await self.api.setCursor(id, index: i, positionMs: ms) }
+                if next && !guest { try? await self.api.setCursor(id, index: i, positionMs: ms) }
                 let state = try await self.api.addToQueue(id, trackIds: [t.id], next: next)
                 guard self.queue?.id == id else { return }
                 self.adopt(state)
@@ -946,6 +1051,8 @@ final class Player: ObservableObject {
 
     func remove(at i: Int) {
         guard var q = queue, q.id > 0 else { return }
+        // Playing for everybody: skipped first, by whoever is keeping time.
+        if asGuest && i == index { return }
         if i == index {
             if let n = playableIndex(from: i + 1, direction: 1) {
                 start(at: n, autoplay: isPlaying)
@@ -1001,9 +1108,10 @@ final class Player: ObservableObject {
         let id = q.id
         let i = index
         let ms = Int(clock.elapsed * 1000)
+        let guest = asGuest
         enqueue { [weak self] in
             guard let self = self else { return }
-            try? await self.api.setCursor(id, index: i, positionMs: ms)
+            if !guest { try? await self.api.setCursor(id, index: i, positionMs: ms) }
             if let state = try? await self.api.shuffleQueue(id), self.queue?.id == id {
                 self.adopt(state)
                 AppModel.shared.say("Shuffled what's next", icon: "shuffle")
@@ -1028,7 +1136,7 @@ final class Player: ObservableObject {
 
     /// Switch to another of the listener's queues, where it was left.
     func switchTo(_ id: Int) {
-        guard id != queue?.id else { return }
+        guard id != queue?.id, !asGuest else { return }
         Haptics.tap()
         enqueue { [weak self] in
             guard let self = self else { return }
@@ -1076,7 +1184,7 @@ final class Player: ObservableObject {
     /// Another device took the music.
     func yieldToOther() {
         guard isPlaying else { return }
-        pause()
+        pauseHere()
         AppModel.shared.say("Playing on another device now", icon: "hifispeaker.2")
     }
 
@@ -1100,6 +1208,10 @@ final class Player: ObservableObject {
 
     /// Play this queue from this song and place: handed over from another device.
     func takeOver(queueId: Int, trackId: Int, positionMs: Int) {
+        if asGuest, queueId != queue?.id {
+            AppModel.shared.say("Leave the jam first", icon: "person.2")
+            return
+        }
         Haptics.done()
         enqueue { [weak self] in
             guard let self = self else { return }
@@ -1182,6 +1294,8 @@ final class Player: ObservableObject {
         current = nil
         index = 0
         isPlaying = false
+        silentRoom = false
+        roomPlaying = false
         clock.elapsed = 0
         clock.duration = 0
         UserDefaults.standard.removeObject(forKey: Keys.activeQueue)
@@ -1190,6 +1304,162 @@ final class Player: ObservableObject {
 
     func willResignActive() {
         syncCursor(force: true)
+    }
+
+    // MARK: Jams
+
+    enum Following { case same, moved, missing, cantPlay }
+
+    /// The host carrying out what somebody in the room asked for.
+    func obey(_ action: String, positionMs: Int, trackId: Int?) {
+        switch action {
+        case "play": if !isPlaying { playHere() }
+        case "pause": if isPlaying { pauseHere() }
+        case "previous": previousHere()
+        case "seek": seekHere(Double(positionMs) / 1000)
+        case "next":
+            guard let t = trackId, let q = queue, q.id > 0 else {
+                nextHere()
+                return
+            }
+            // A guest picked a song and put it next: the queue first, so it is here.
+            let id = q.id
+            enqueue { [weak self] in
+                guard let self = self else { return }
+                if let fresh = try? await self.api.queue(id, around: self.index), self.queue?.id == id {
+                    self.adopt(fresh)
+                }
+                if let row = self.queue?.nearest(trackId: t, around: self.index + 1), row > self.index,
+                   let picked = self.queue?.track(at: row), self.isPlayable(picked) {
+                    self.start(at: row, autoplay: true)
+                } else {
+                    self.nextHere()
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    /// Be where the room is: its song, at [at] seconds, playing or not. With [sound]
+    /// off, the song and the clock on screen only.
+    func followRoom(trackId: Int, itemId: Int?, at: Double, playing: Bool, sound: Bool) -> Following {
+        guard !demoMode, let q = queue else { return .same }
+        roomPlaying = playing
+        let byRow = itemId.flatMap { q.index(ofItem: $0) }
+        guard let row = byRow ?? q.nearest(trackId: trackId, around: index) else { return .missing }
+        let here = q.track(at: row)
+        let playable = here.map { isPlayable($0) } ?? false
+        if !sound || !playable {
+            if av.currentItem != nil || isPlaying { silenceForRoom() }
+            silentRoom = true
+            if index != row || current?.id != trackId {
+                index = row
+                current = here
+                clock.duration = here?.seconds ?? 0
+                updateNowPlaying()
+            }
+            clock.elapsed = at
+            return sound && !playable ? .cantPlay : .same
+        }
+        silentRoom = false
+        let onAnother = index != row || current?.id != trackId || av.currentItem == nil
+        if onAnother {
+            // Ran into the next song a moment before the host: wait for it.
+            if playing, av.currentItem != nil, row == index - 1,
+               RoomClock.justAhead(hostOn: here?.seconds ?? 0, hostAt: at, hereAt: livePosition) {
+                return .same
+            }
+            start(at: row, position: at, autoplay: playing)
+            return .moved
+        }
+        if !playing {
+            if isPlaying {
+                av.pause()
+                isPlaying = false
+                updateNowPlaying()
+            }
+            if abs(livePosition - at) > 0.4 { seekHere(at) }
+            return .same
+        }
+        var result = Following.same
+        if abs(livePosition - at) > 1.5, Date().timeIntervalSince(lastFollowSeek) > 6 {
+            lastFollowSeek = Date()
+            seekHere(at)
+            result = .moved
+        }
+        if !isPlaying {
+            activateSession()
+            lastPlayCall = Date()
+            av.play()
+            isPlaying = true
+            updateNowPlaying()
+        }
+        return result
+    }
+
+    /// The room's queue, on this phone, nothing playing yet.
+    func enterRoom(_ q: QueueState) {
+        guard !demoMode else { return }
+        finishListen()
+        av.pause()
+        av.removeAllItems()
+        forgetAllBut([])
+        pendingSeek = nil
+        isPlaying = false
+        queue = q
+        index = q.cursorIndex
+        current = q.track(at: index)
+        clock.duration = current?.seconds ?? 0
+        clock.elapsed = Double(q.positionMs) / 1000
+        silentRoom = true
+        remember(q)
+        updateNowPlaying()
+    }
+
+    /// Following without sound from here on.
+    func silenceForRoom() {
+        finishListen()
+        av.pause()
+        av.removeAllItems()
+        forgetAllBut([])
+        pendingSeek = nil
+        isPlaying = false
+        silentRoom = true
+        updateNowPlaying()
+    }
+
+    /// Out of the room: this phone's own queue back, where it was left, not playing.
+    func leaveRoom() {
+        finishListen()
+        av.pause()
+        av.removeAllItems()
+        forgetAllBut([])
+        pendingSeek = nil
+        isPlaying = false
+        silentRoom = false
+        roomPlaying = false
+        queue = nil
+        current = nil
+        index = 0
+        clock.elapsed = 0
+        clock.duration = 0
+        restore()
+        updateNowPlaying()
+        Task {
+            // Once the room has let go (asGuest is false by then).
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            self.resync()
+        }
+    }
+
+    func showRoomTime(_ s: Double) {
+        guard silentRoom else { return }
+        clock.elapsed = s
+    }
+
+    func setRoomPlaying(_ on: Bool) {
+        roomPlaying = on
     }
 
     // MARK: Lock screen

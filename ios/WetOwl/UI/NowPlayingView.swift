@@ -7,6 +7,7 @@ struct NowPlayingView: View {
     @EnvironmentObject private var player: Player
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var live: Live
+    @EnvironmentObject private var room: Room
     @Environment(\.dismiss) private var dismiss
     @State private var mode: Mode
     @State private var showDevices = false
@@ -58,6 +59,9 @@ struct NowPlayingView: View {
         .sheet(item: Binding(get: { app.nowPlayingOpen ? app.adding : nil }, set: { app.adding = $0 })) { b in
             AddToPlaylistSheet(batch: b).models(app)
         }
+        .sheet(isPresented: Binding(get: { app.nowPlayingOpen && app.showJam }, set: { app.showJam = $0 })) {
+            JamSheet().models(app)
+        }
     }
 
     private var backdrop: some View {
@@ -77,20 +81,49 @@ struct NowPlayingView: View {
             }
             .accessibilityLabel("Close")
             Spacer()
-            VStack(spacing: 1) {
-                HStack(spacing: 4) {
-                    if player.sleepAt != nil || player.sleepAtEnd {
-                        Image(systemName: "moon.fill").font(.system(size: 9))
+            if room.onAir, let j = room.jam {
+                Button { app.showJam = true } label: {
+                    VStack(spacing: 1) {
+                        HStack(spacing: 5) {
+                            LiveDot(size: 6)
+                            Text(j.listening > 1 ? "JAM · \(j.listening) LISTENING" : "JAM")
+                                .font(Theme.label(10))
+                                .tracking(1.2)
+                                .foregroundColor(Theme.red)
+                        }
+                        HStack(spacing: 4) {
+                            Text(j.title)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(Theme.soft)
+                                .lineLimit(1)
+                            if room.isGuest && !room.listening {
+                                Image(systemName: "speaker.slash.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(Theme.muted)
+                            }
+                        }
                     }
-                    Text("PLAYING FROM")
-                        .font(Theme.label(10))
-                        .tracking(1.2)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
                 }
-                .foregroundColor(Theme.faint)
-                Text(player.queue?.name ?? "")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Theme.soft)
-                    .lineLimit(1)
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(j.title). Open the jam")
+            } else {
+                VStack(spacing: 1) {
+                    HStack(spacing: 4) {
+                        if player.sleepAt != nil || player.sleepAtEnd {
+                            Image(systemName: "moon.fill").font(.system(size: 9))
+                        }
+                        Text("PLAYING FROM")
+                            .font(Theme.label(10))
+                            .tracking(1.2)
+                    }
+                    .foregroundColor(Theme.faint)
+                    Text(player.queue?.name ?? "")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Theme.soft)
+                        .lineLimit(1)
+                }
             }
             Spacer()
             Menu { menu } label: {
@@ -121,6 +154,17 @@ struct NowPlayingView: View {
                 }
                 Button { player.startStation(kind: "track", trackId: t.id) } label: {
                     Label("Start a station", systemImage: "dot.radiowaves.left.and.right")
+                }
+            }
+        }
+        Section {
+            Button { app.showJam = true } label: {
+                Label(room.inJam ? "The jam…" : "Listen together…", systemImage: "person.2")
+            }
+            if room.isGuest {
+                Button { room.setListening(!room.listening) } label: {
+                    Label(room.listening ? "Stop playing it here" : "Play it here too",
+                          systemImage: room.listening ? "speaker.slash" : "speaker.wave.2")
                 }
             }
         }
@@ -168,8 +212,8 @@ struct NowPlayingView: View {
                     .id(t.id)
                     .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     .shadow(color: .black.opacity(0.45), radius: 24, y: 12)
-                    .scaleEffect(player.isPlaying ? 1 : 0.92)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.8), value: player.isPlaying)
+                    .scaleEffect(player.looksPlaying ? 1 : 0.92)
+                    .animation(.spring(response: 0.45, dampingFraction: 0.8), value: player.looksPlaying)
                     .animation(.easeInOut(duration: 0.3), value: t.id)
                     .gesture(
                         DragGesture(minimumDistance: 30).onEnded { v in
@@ -237,6 +281,12 @@ struct NowPlayingView: View {
                 .overlay(alignment: .topTrailing) {
                     if live.others.contains(where: { $0.playing }) {
                         Circle().fill(Theme.ok).frame(width: 7, height: 7).offset(x: -6, y: 8)
+                    }
+                }
+            modeButton(icon: room.inJam ? "person.2.fill" : "person.2", on: false, label: "Jam") { app.showJam = true }
+                .overlay(alignment: .topTrailing) {
+                    if room.inJam {
+                        Circle().fill(Theme.red).frame(width: 7, height: 7).offset(x: -6, y: 8)
                     }
                 }
             Spacer()
@@ -370,16 +420,16 @@ struct TransportRow: View {
                     if player.isPlaying && player.isBuffering {
                         ProgressView().tint(Theme.ground)
                     } else {
-                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                        Image(systemName: player.looksPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: 28, weight: .semibold))
                             .foregroundColor(Theme.ground)
-                            .offset(x: player.isPlaying ? 0 : 2)
+                            .offset(x: player.looksPlaying ? 0 : 2)
                     }
                 }
                 .frame(width: 68, height: 68)
             }
             .buttonStyle(PressStyle())
-            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+            .accessibilityLabel(player.looksPlaying ? "Pause" : "Play")
             Spacer()
             Button { player.next() } label: {
                 Image(systemName: "forward.fill")
@@ -406,6 +456,7 @@ struct TransportRow: View {
 /// to move, swipe to take out.
 struct QueueList: View {
     @EnvironmentObject private var player: Player
+    @EnvironmentObject private var room: Room
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var app: AppModel
 
@@ -439,8 +490,10 @@ struct QueueList: View {
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 12))
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button(role: .destructive) { player.remove(at: row.index) } label: {
-                                Label("Remove", systemImage: "minus.circle")
+                            if !(room.isGuest && row.index == player.index) {
+                                Button(role: .destructive) { player.remove(at: row.index) } label: {
+                                    Label("Remove", systemImage: "minus.circle")
+                                }
                             }
                         }
                     }
@@ -466,34 +519,54 @@ struct QueueList: View {
 
     private func queueHeader(_ q: QueueState) -> some View {
         HStack {
-            Menu {
-                ForEach(store.queues) { other in
-                    Button {
-                        player.switchTo(other.id)
-                    } label: {
-                        if other.id == q.id {
-                            Label(other.name, systemImage: "checkmark")
-                        } else {
-                            Text(other.sharedFrom.map { "\(other.name) (\($0))" } ?? other.name)
-                        }
+            if room.isGuest, let j = room.jam {
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 5) {
+                        LiveDot(size: 6)
+                        Text("\(j.hostName.uppercased())'S JAM")
+                            .font(Theme.label(10))
+                            .tracking(1.1)
+                            .foregroundColor(Theme.red)
                     }
-                }
-            } label: {
-                HStack(spacing: 4) {
                     Text(q.name)
                         .font(.system(size: 17, weight: .bold))
                         .foregroundColor(Theme.text)
                         .lineLimit(1)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(Theme.muted)
                 }
+            } else {
+                queueMenu(q)
             }
             Spacer()
             Text("\(player.index + 1) of \(q.total)")
                 .font(.system(size: 13, weight: .medium).monospacedDigit())
                 .foregroundColor(Theme.muted)
         }
-        .frame(height: 36)
+        .frame(minHeight: 36)
+    }
+
+    private func queueMenu(_ q: QueueState) -> some View {
+        Menu {
+            ForEach(store.queues) { other in
+                Button {
+                    player.switchTo(other.id)
+                } label: {
+                    if other.id == q.id {
+                        Label(other.name, systemImage: "checkmark")
+                    } else {
+                        Text(other.sharedFrom.map { "\(other.name) (\($0))" } ?? other.name)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(q.name)
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundColor(Theme.text)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(Theme.muted)
+            }
+        }
     }
 }

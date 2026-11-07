@@ -63,6 +63,9 @@ struct Shell: View {
         .sheet(item: Binding(get: { app.nowPlayingOpen ? nil : app.adding }, set: { app.adding = $0 })) { b in
             AddToPlaylistSheet(batch: b).models(app)
         }
+        .sheet(isPresented: Binding(get: { app.showJam && !app.nowPlayingOpen }, set: { app.showJam = $0 })) {
+            JamSheet().models(app)
+        }
         .onAppear {
             guard !started else { return }
             started = true
@@ -99,6 +102,7 @@ extension View {
             .environmentObject(app.reach)
             .environmentObject(app.router)
             .environmentObject(app.live)
+            .environmentObject(app.room)
             .environmentObject(app.updates)
     }
 
@@ -155,6 +159,7 @@ struct TabBar: View {
 struct MiniPlayer: View {
     @EnvironmentObject private var app: AppModel
     @EnvironmentObject private var player: Player
+    @EnvironmentObject private var room: Room
 
     var body: some View {
         if let t = player.current {
@@ -165,10 +170,18 @@ struct MiniPlayer: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(Theme.text)
                         .lineLimit(1)
-                    Text(t.artistLine)
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.muted)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        if room.onAir {
+                            Image(systemName: "person.2.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(Theme.red)
+                                .accessibilityLabel("In a jam")
+                        }
+                        Text(t.artistLine)
+                            .font(.system(size: 13))
+                            .foregroundColor(Theme.muted)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 4)
                 Button { player.toggle() } label: {
@@ -176,7 +189,7 @@ struct MiniPlayer: View {
                         if player.isPlaying && player.isBuffering {
                             ProgressView().tint(Theme.high)
                         } else {
-                            Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                            Image(systemName: player.looksPlaying ? "pause.fill" : "play.fill")
                                 .font(.system(size: 22, weight: .semibold))
                         }
                     }
@@ -185,7 +198,7 @@ struct MiniPlayer: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(PressStyle())
-                .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+                .accessibilityLabel(player.looksPlaying ? "Pause" : "Play")
                 Button { player.next() } label: {
                     Image(systemName: "forward.fill")
                         .font(.system(size: 19, weight: .semibold))

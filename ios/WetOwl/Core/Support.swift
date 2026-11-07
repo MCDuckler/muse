@@ -9,6 +9,8 @@ enum Keys {
     static let user = "wo.user"
     static let activeQueue = "wo.activeQueue"
     static let recentSearches = "wo.recentSearches"
+    static let jamListening = "wo.jamListening"
+    static let jamHostedHere = "wo.jamHostedHere"
 }
 
 @MainActor

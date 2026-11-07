@@ -109,9 +109,9 @@ jobs:
             done
             xcrun simctl shutdown "$udid" || true
           }
-          shoot "${{ steps.sim.outputs.small }}" se login home search library playlist nowplaying queue lyrics settings artist album albums artists devices addto
+          shoot "${{ steps.sim.outputs.small }}" se login home search library playlist nowplaying queue lyrics settings artist album albums artists devices addto jam jamguest jamjoin jamhome jamplayer
           if [ -n "${{ steps.sim.outputs.big }}" ]; then
-            shoot "${{ steps.sim.outputs.big }}" big home nowplaying artist
+            shoot "${{ steps.sim.outputs.big }}" big home nowplaying artist jam
           fi
           ls -la shots
 

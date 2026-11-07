@@ -14,6 +14,7 @@ final class AppModel: ObservableObject {
     let outbox: Outbox
     let router = Router()
     let live: Live
+    let room: Room
     let updates = Updates()
     let demo: Bool
 
@@ -21,6 +22,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var userName: String
     @Published var nowPlayingOpen = false
     @Published var showSettings = false
+    @Published var showJam = false
     @Published private(set) var toast: Toast?
     @Published var tab: Tab = .home
     /// Songs waiting for the "which playlist?" sheet.
@@ -51,6 +53,8 @@ final class AppModel: ObservableObject {
         self.outbox = outbox
         player = Player(api: api, offline: offline, reach: reach, outbox: outbox)
         live = Live(api: api)
+        room = Room(api: api)
+        room.demo = demo
         signedIn = token != nil && !(demo && DemoScreen.name == "login")
         userName = demo ? "chris" : (defaults.string(forKey: Keys.user) ?? "")
         api.onUnauthorized = { [weak self] in
@@ -58,6 +62,8 @@ final class AppModel: ObservableObject {
         }
         live.player = player
         live.store = store
+        live.room = room
+        room.attach(player)
         Theme.configureAppearance()
         Log.shared.add("start \(Build.version) (\(Build.number)) \(Build.device) signedIn=\(signedIn)")
     }
@@ -74,8 +80,9 @@ final class AppModel: ObservableObject {
             if away > 20 { refresh() }
         case .background:
             player.willResignActive()
-            // Kept while playing (another device may ask this one to pause); else let go.
-            if !player.isPlaying { live.stop() }
+            // Kept while playing (another device may ask this one to pause) or keeping a
+            // jam's time; else let go.
+            if !player.isPlaying && !room.keepsTime { live.stop() }
         default:
             break
         }
@@ -87,7 +94,8 @@ final class AppModel: ObservableObject {
             async let key: Void = refreshKey()
             async let all: Void = store.refreshAll(force: force)
             player.resync()
-            _ = await (key, all)
+            async let jam: Void = room.refresh()
+            _ = await (key, all, jam)
             if !demo {
                 live.start()
                 await live.refreshDevices()
@@ -118,6 +126,7 @@ final class AppModel: ObservableObject {
 
     func signOut() {
         live.stop()
+        room.reset()
         player.reset()
         offline.removeAll()
         store.clear()
