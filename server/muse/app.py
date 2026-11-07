@@ -19,7 +19,7 @@ from fastapi import (Body, Depends, FastAPI, Form, Header, HTTPException, Reques
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import beats_worker
+from . import beats_worker, loudness, queue_fetch
 from . import (
     auth, catalog, config, db, direct_worker, discover, enrich_worker, exits, failures,
                follows, heavy, jobs, progress, routes_discover,
@@ -91,6 +91,11 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
               if start_workers else None)
 
     listener = beats_worker.BeatsWorker(cfg) if start_workers else None
+    # every record measured by the box: the ones just added or fetched unmeasured at once,
+    # the rest of the library worked through quietly (loudness.py)
+    measurer = loudness.LoudnessWorker(cfg) if start_workers else None
+    # the playback queues' songs fetched without anybody pressing play (queue_fetch.py)
+    queues_ahead = queue_fetch.QueueFetcher(cfg) if start_workers else None
 
     # YouTube through somebody's phone: the songs that phone's person is about to play.
     exits.configure(cfg, publish)
@@ -106,6 +111,10 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             direct.start()
         if listener:
             listener.start()
+        if measurer:
+            measurer.start()
+        if queues_ahead:
+            queues_ahead.start()
         # Stations of the old shape (a queue) become playlists, once.
         try:
             from . import stations as _stations
@@ -132,6 +141,10 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
             direct.stop()
         if listener:
             listener.stop()
+        if measurer:
+            measurer.stop()
+        if queues_ahead:
+            queues_ahead.stop()
         await exits.stop_proxy()
         _loop = None
 
@@ -502,6 +515,9 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         t = catalog.track_row(track_id)
         if not t or not t.get("path"):
             raise HTTPException(404, "not ready" if t else "no such track")
+        # fetched, and not measured by the box yet: measured now
+        if loudness.unmeasured(t):
+            loudness.soon(track_id)
         return _range_response(pathlib.Path(t["path"]), request, etag=t["sha256"])
 
     @app.get("/tracks/{track_id}/stem/{name}")
@@ -814,11 +830,15 @@ def create_app(configuration: config.Config, start_workers: bool = False) -> Fas
         db.run(
             """update tracks set state='ready', fail_reason=null,
                       duration_ms=coalesce(%s,duration_ms),
-                      loudness_lufs=%s, gain_db=%s
+                      loudness_lufs=coalesce(%s, loudness_lufs), gain_db=coalesce(%s, gain_db),
+                      true_peak_db=null, loudness_at=null, loudness_version=null
                 where id=%s""",
             (_number(info, "duration_ms", int), _number(info, "loudness_lufs", float),
              _number(info, "gain_db", float), track_id),
         )
+        # What the computer measured stands until the box has measured the file itself:
+        # at once, ahead of the library (loudness.py)
+        loudness.soon(track_id)
         jobs.finish(job_id)
         progress.clear(track_id)
         # Artwork and canonical metadata are a separate concern from getting the audio,

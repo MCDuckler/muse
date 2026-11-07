@@ -12,7 +12,7 @@ import tempfile
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import audiofile, branding, catalog, db, images, storage
+from . import audiofile, branding, catalog, db, images, loudness, storage
 from .deps import cfg, current_user, user_or_key
 from .routes_accounts import is_admin
 
@@ -57,7 +57,8 @@ def upload(audio: UploadFile, user: dict = Depends(current_user)):
         if audiofile.needs_transcode(info):
             canonical = audiofile.to_m4a(raw, tmp_dir / "out.m4a")
             info = {**audiofile.probe(canonical), "transcoded_from": info["codec"]}
-        lufs, gain = audiofile.loudness(canonical)
+        loud = loudness.measure(canonical)
+        lufs, gain = (loud or {}).get("lufs"), (loud or {}).get("gain_db")
 
         title = meta.get("title") or pathlib.Path(audio.filename or "Unknown").stem
         row = db.one(
@@ -69,6 +70,7 @@ def upload(audio: UploadFile, user: dict = Depends(current_user)):
              (fp or {}).get("fingerprint")),
         )
         track_id = row["id"]
+        loudness.remember(track_id, loud)
 
         with canonical.open("rb") as fh:
             digest, path, stored = storage.store_stream(cfg().audio_dir, fh, ".m4a")

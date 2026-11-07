@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pathlib
 
-from . import db, failures, jobs, progress, sources, storage
+from . import db, failures, jobs, loudness, progress, sources, storage
 
 
 def land(cfg, job_id: int, track_id: int, path: pathlib.Path, publish=None,
@@ -20,7 +20,8 @@ def land(cfg, job_id: int, track_id: int, path: pathlib.Path, publish=None,
     if report:
         report("measuring")
     info = sources.probe(path)
-    lufs, gain = sources.loudness(path)
+    # measured here, by the box's own measure (loudness.py)
+    loud = loudness.measure(path)
     if report:
         report("storing")
     with path.open("rb") as fh:
@@ -35,10 +36,11 @@ def land(cfg, job_id: int, track_id: int, path: pathlib.Path, publish=None,
     db.run(
         """update tracks set state='ready', fail_reason=null, fail_code=null,
                   duration_ms=coalesce(%s,duration_ms),
-                  loudness_lufs=%s, gain_db=%s
+                  loudness_lufs=coalesce(%s, loudness_lufs), gain_db=coalesce(%s, gain_db)
             where id=%s""",
-        (info.get("duration_ms"), lufs, gain, track_id),
+        (info.get("duration_ms"), (loud or {}).get("lufs"), (loud or {}).get("gain_db"), track_id),
     )
+    loudness.remember(track_id, loud)
     jobs.finish(job_id)
     progress.clear(track_id)
     # Artwork and canonical metadata are a separate concern from getting the audio,

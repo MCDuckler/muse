@@ -181,6 +181,57 @@ def promote(track_id: int, priority: int = PRIORITY_NOW) -> bool:
     return False
 
 
+def fetch_queued(track_ids: list[int], priority: int = PRIORITY_QUEUE) -> int:
+    """Records in somebody's playback queue fetched to the box ahead of the downloads
+    nobody is waiting on: a job made for each one not here yet, or one already waiting
+    moved up — in the order given (the queue's), so the next song comes first. Not one
+    that is here, on its way, or failed (asking again is the hands', promote). How many
+    were made or moved up."""
+    n = 0
+    for tid in dict.fromkeys(track_ids):
+        t = db.one("select state from tracks where id=%s", (tid,))
+        if not t or t["state"] != "pending":
+            continue
+        moved = db.one(
+            """update jobs set priority=%s
+                where kind in ('ingest','ingest_direct') and state='pending'
+                  and (payload->>'track_id')::int = %s and priority > %s
+                returning id""",
+            (priority, tid, priority))
+        if moved:
+            n += 1
+            continue
+        on_its_way = db.one(
+            """select 1 from jobs
+                where kind in ('ingest','ingest_direct')
+                  and (state='pending' or (state='leased' and leased_until > now()))
+                  and (payload->>'track_id')::int = %s""",
+            (tid,))
+        if on_its_way:
+            continue
+        if queue(tid, priority=priority):
+            n += 1
+    return n
+
+
+def fetch_queues_ahead(days: int = 14, ahead: int = 200) -> int:
+    """Every playback queue used lately, its songs from the one playing on fetched to the
+    box (fetch_queued): a song that reached a queue by a way that asked for nothing —
+    a station's radio, a client that sent the whole queue, one from before — is not left
+    waiting until somebody presses play on it."""
+    rows = db.all_(
+        """select i.track_id
+             from queue_items i
+             join queues q on q.id = i.queue_id
+             join tracks t on t.id = i.track_id
+            where q.updated_at > now() - make_interval(days => %s)
+              and i.pos >= q.cursor_index and i.pos < q.cursor_index + %s
+              and t.state = 'pending'
+            order by q.updated_at desc, i.pos""",
+        (days, ahead))
+    return fetch_queued([r["track_id"] for r in rows])
+
+
 def promote_run(track_ids: list[int], priority: int = PRIORITY_NOW) -> int:
     """What is about to be played, in the order it will be played.
 

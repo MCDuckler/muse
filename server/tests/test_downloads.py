@@ -662,8 +662,9 @@ def test_the_queue_you_are_listening_to_goes_first(client, hdr):
     client.post(f"/queues/{q['id']}/items", headers=hdr,
                 json={"track_ids": [mine["id"]]})
 
+    # added to the queue: moved up then and there, so prioritising has nothing left to move
     out = client.post(f"/queues/{q['id']}/prioritise", headers=hdr).json()
-    assert out["moved"] == 1
+    assert out["moved"] == 0
 
     order = [r["id"] for r in db.all_(
         """select (payload->>'track_id')::int as id from jobs

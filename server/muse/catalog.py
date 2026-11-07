@@ -136,6 +136,8 @@ def public(t: dict) -> dict:
         "discovered_via": t.get("discovered_via"),
         "gain_db": t["gain_db"],
         "loudness_lufs": t["loudness_lufs"],
+        # How far it can be turned up before it clips (dBFS), where the box measured it.
+        "true_peak_db": t.get("true_peak_db"),
         "bytes": t.get("bytes"),
         "provider_id": t.get("provider_id"),
         "stream_url": f"/tracks/{t['id']}/stream" if t.get("path") else None,

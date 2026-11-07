@@ -993,3 +993,10 @@ alter table stations alter column queue_id drop not null;
 create unique index if not exists stations_playlist_key on stations(playlist_id);
 create unique index if not exists stations_queue_key on stations(queue_id);
 alter table queues add column if not exists station_id int references stations(id) on delete set null;
+
+-- How loud each record is, as this box measured it (loudness.py): its true peak too, when
+-- it was measured and by which version of the measure (null: never by the box — a number
+-- a computer in the pool handed in, or none).
+alter table tracks add column if not exists true_peak_db real;
+alter table tracks add column if not exists loudness_at timestamptz;
+alter table tracks add column if not exists loudness_version int;
