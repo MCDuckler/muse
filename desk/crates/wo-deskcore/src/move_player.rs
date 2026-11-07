@@ -137,7 +137,7 @@ impl MovePlayer {
                         depth += z;
                         n += 1;
                     }
-                    for t in mesh.tris.chunks_exact(3) {
+                    for t in mesh.tris.as_chunks::<3>().0 {
                         let [a, bb, c] = [t[0] as usize, t[1] as usize, t[2] as usize];
                         let z = (place[mesh.src[a] as usize].2 + place[mesh.src[bb] as usize].2 + place[mesh.src[c] as usize].2) as f32;
                         tri_depth.push((z, [base + a as u32, base + bb as u32, base + c as u32]));
@@ -163,7 +163,7 @@ impl MovePlayer {
             let beat = k as f64 * f.beats as f64 / n as f64;
             for b in self.bodies(model, id, beat, false, cell_w as f32, cell_h as f32) {
                 let ink = if b.model == model { 235 } else { 150 };
-                for t in b.tris.chunks_exact(3) {
+                for t in b.tris.as_chunks::<3>().0 {
                     let p = [b.at[t[0] as usize], b.at[t[1] as usize], b.at[t[2] as usize]];
                     fill(&mut px, w, h, k as u32 * cell_w, cell_w, p, ink);
                 }

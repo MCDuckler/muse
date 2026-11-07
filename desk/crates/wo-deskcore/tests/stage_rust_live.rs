@@ -80,6 +80,12 @@ fn the_desk_directs_the_rust_stage() {
     assert!(v.told.look.is_some());
     d.show(ShowHand::LetGo);
     until(&mut d, "let go", 5, |_, v| v.told.holds == 0);
+    // KEEP: a favourite, with the stage's picture beside the Desk's show.json
+    d.show(ShowHand::Keep);
+    let faves = home.join("config").join("wetowl-desk").join("faves");
+    let kept = d.show_faves().kept.expect("just kept");
+    until(&mut d, "the favourite's picture", 5, |_, _| faves.join(format!("{kept}.png")).is_file());
+    assert!(d.show_faves().faves[0].picture.is_some());
 
     // the screens: one filled, then a window again
     let v = until(&mut d, "the screens told", 10, |_, v| !v.told.screens.is_empty());

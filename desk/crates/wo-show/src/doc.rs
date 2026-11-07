@@ -30,6 +30,8 @@ pub struct ShowSnapshot {
     pub rev: i64,
     pub owner: Option<String>,
     pub mine: bool,
+    /// A shared one's last saver (as the house says; not kept in show.json).
+    pub updated_by: Option<String>,
 }
 
 impl ShowSnapshot {
@@ -46,7 +48,36 @@ impl ShowSnapshot {
             rev: j.get("rev").and_then(Value::as_i64).unwrap_or(0),
             owner: j.get("owner").and_then(Value::as_str).map(str::to_owned),
             mine: j.get("mine") != Some(&Value::Bool(false)),
+            updated_by: None,
         })
+    }
+
+    /// A shared one as the house lists it (`id` a number there, `s:<id>` here; its setup in
+    /// `doc`).
+    pub fn from_server(j: &Value) -> Option<ShowSnapshot> {
+        let o = j.as_object()?;
+        let id = o.get("id")?.as_i64()?;
+        Some(ShowSnapshot {
+            id: format!("s:{id}"),
+            name: o.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            setup: o.get("doc").and_then(|d| obj(d.get("setup"))).cloned().unwrap_or_default(),
+            rev: o.get("rev").and_then(Value::as_i64).unwrap_or(0),
+            owner: o.get("owner").and_then(Value::as_str).map(str::to_owned),
+            mine: o.get("mine") == Some(&Value::Bool(true)),
+            updated_by: o.get("updated_by").and_then(Value::as_str).map(str::to_owned),
+        })
+    }
+
+    /// Its number at the house, where it is shared.
+    pub fn server_id(&self) -> Option<i64> {
+        self.id.strip_prefix("s:")?.parse().ok()
+    }
+
+    /// What the house keeps of it.
+    pub fn doc(&self) -> Value {
+        let mut m = Map::new();
+        m.insert("setup".into(), Value::Object(self.setup.clone()));
+        Value::Object(m)
     }
 
     pub fn to_json(&self) -> Value {
@@ -352,7 +383,7 @@ impl ShowDoc {
 
     /// The show as it is, kept as a new set of this device's, and it the one on.
     pub fn save_as(&mut self, name: &str, id: &str) -> ShowSnapshot {
-        let s = ShowSnapshot { id: id.into(), name: name.trim().into(), setup: self.setup(), rev: 0, owner: None, mine: true };
+        let s = ShowSnapshot { id: id.into(), name: name.trim().into(), setup: self.setup(), rev: 0, owner: None, mine: true, updated_by: None };
         let mut all: Vec<Value> = self.snapshots().iter().map(ShowSnapshot::to_json).collect();
         all.push(s.to_json());
         self.raw.insert("snapshots".into(), Value::Array(all));
@@ -360,9 +391,95 @@ impl ShowDoc {
         s
     }
 
-    /// Whether the show changed since the set on was put on.
+    /// Whether the show changed since the set on was put on (with none on: since as
+    /// shipped).
     pub fn changed_since_set(&self) -> bool {
-        self.snapshot().is_some_and(|s| s.setup != self.setup())
+        match self.snapshot() {
+            Some(s) => s.setup != self.setup(),
+            None => !self.setup().is_empty(),
+        }
+    }
+
+    fn put_snapshots(&mut self, all: &[ShowSnapshot]) {
+        self.raw.insert("snapshots".into(), Value::Array(all.iter().map(ShowSnapshot::to_json).collect()));
+    }
+
+    /// `s` the one on, as it is (its setup not put into the pool): a shared one after it was
+    /// saved or followed.
+    pub fn take(&mut self, s: &ShowSnapshot) {
+        self.raw.insert("snapshot".into(), s.to_json());
+    }
+
+    /// The show as it is over the set on, kept here (a shared one is the house's to save).
+    pub fn save_set(&mut self) -> Option<ShowSnapshot> {
+        let on = self.snapshot().filter(|s| !s.shared())?;
+        let next = ShowSnapshot { setup: self.setup(), ..on };
+        let all: Vec<ShowSnapshot> = self.snapshots().into_iter().map(|k| if k.id == next.id { next.clone() } else { k }).collect();
+        self.put_snapshots(&all);
+        self.take(&next);
+        Some(next)
+    }
+
+    /// One kept here renamed.
+    pub fn rename_set(&mut self, id: &str, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let all: Vec<ShowSnapshot> = self.snapshots().into_iter().map(|k| if k.id == id { ShowSnapshot { name: name.into(), ..k } } else { k }).collect();
+        self.put_snapshots(&all);
+        if let Some(on) = self.snapshot().filter(|s| s.id == id) {
+            self.take(&ShowSnapshot { name: name.into(), ..on });
+        }
+    }
+
+    /// One kept here forgotten (the show stays as it is; with it on, none is).
+    pub fn forget_set(&mut self, id: &str) {
+        let all: Vec<ShowSnapshot> = self.snapshots().into_iter().filter(|k| k.id != id).collect();
+        self.put_snapshots(&all);
+        if self.snapshot().is_some_and(|s| s.id == id) {
+            self.raw.remove("snapshot");
+        }
+    }
+
+    /// One kept here put on the house: no longer kept here, the shared one on in its place.
+    pub fn shared_set(&mut self, was: &str, shared: &ShowSnapshot) {
+        let on = self.snapshot().is_some_and(|s| s.id == was);
+        self.forget_set(was);
+        if on {
+            self.take(shared);
+        }
+    }
+
+    /// A shared one taken off the house: kept here as `here`.
+    pub fn unshared_set(&mut self, was: &str, here: &ShowSnapshot) {
+        let mut all = self.snapshots();
+        all.push(here.clone());
+        self.put_snapshots(&all);
+        if self.snapshot().is_some_and(|s| s.id == was) {
+            self.take(here);
+        }
+    }
+
+    // ---------------------------------------------------------------- the favourites, by hand
+
+    fn edit_fave(&mut self, id: &str, f: impl Fn(ShowFave) -> ShowFave) {
+        let all: Vec<ShowFave> = self.faves().into_iter().map(|x| if x.id == id { f(x) } else { x }).collect();
+        self.set_faves(&all);
+    }
+
+    /// One rated (0: not rated).
+    pub fn rate_fave(&mut self, id: &str, stars: u8) {
+        self.edit_fave(id, |x| ShowFave { stars: stars.min(5), ..x });
+    }
+
+    pub fn rename_fave(&mut self, id: &str, name: &str) {
+        self.edit_fave(id, |x| ShowFave { name: name.trim().into(), ..x });
+    }
+
+    pub fn forget_fave(&mut self, id: &str) {
+        let all: Vec<ShowFave> = self.faves().into_iter().filter(|x| x.id != id).collect();
+        self.set_faves(&all);
     }
 }
 
@@ -419,6 +536,45 @@ mod tests {
         assert_eq!(d.strength(), 0.4);
         d.set_strength(1.0);
         assert!(d.to_value()["pool"].get("strength").is_none(), "whole as shipped: left out");
+    }
+
+    #[test]
+    fn sets_are_saved_renamed_forgotten_shared_and_faves_rated() {
+        let mut d = ShowDoc::default();
+        assert!(!d.changed_since_set(), "as shipped");
+        d.set_bias(0.5);
+        assert!(d.changed_since_set(), "none on: other than as shipped");
+        let club = d.save_as("Club", "l:1");
+        assert!(!d.changed_since_set());
+        d.set_mosh(0.2);
+        assert!(d.changed_since_set());
+        let saved = d.save_set().unwrap();
+        assert_eq!(saved.setup.get("mosh").and_then(Value::as_f64), Some(0.2));
+        assert!(!d.changed_since_set() && d.snapshots()[0].setup == saved.setup);
+        d.rename_set(&club.id, "  Club night ");
+        assert_eq!((d.snapshots()[0].name.as_str(), d.snapshot().unwrap().name.as_str()), ("Club night", "Club night"));
+        // shared: the house's own takes its place; taken back: kept here again
+        let j = serde_json::json!({"id": 7, "name": "Club night", "doc": saved.doc(), "rev": 1, "owner": "joe", "mine": true, "updated_by": "joe"});
+        let shared = ShowSnapshot::from_server(&j).unwrap();
+        assert_eq!((shared.id.as_str(), shared.server_id(), shared.rev, shared.setup.clone()), ("s:7", Some(7), 1, saved.setup.clone()));
+        d.shared_set(&club.id, &shared);
+        assert!(d.snapshots().is_empty() && d.snapshot().unwrap().id == "s:7");
+        assert!(d.save_set().is_none(), "a shared one is the house's to save");
+        let here = ShowSnapshot { id: "l:2".into(), rev: 0, owner: None, updated_by: None, ..shared.clone() };
+        d.unshared_set("s:7", &here);
+        assert_eq!(d.snapshot().unwrap().id, "l:2");
+        d.forget_set("l:2");
+        assert!(d.snapshots().is_empty() && d.snapshot().is_none());
+        // favourites: rated, named, forgotten
+        let c = crate::combos::Combo::new("black", "kinetic", "raw");
+        d.keep_fave(ShowFave { id: "a".into(), at: "2026-11-07T10:00:00Z".into(), combo: c.clone(), milk: None, shot: None, type3d: None, stars: 0, name: String::new() });
+        d.keep_fave(ShowFave { id: "b".into(), at: "2026-11-07T11:00:00Z".into(), combo: c, milk: None, shot: None, type3d: None, stars: 0, name: String::new() });
+        d.rate_fave("a", 4);
+        d.rename_fave("b", " The hexagons ");
+        let f = d.faves();
+        assert_eq!((f[0].id.as_str(), f[0].name.as_str(), f[1].stars), ("b", "The hexagons", 4));
+        d.forget_fave("a");
+        assert_eq!(d.faves().len(), 1);
     }
 
     #[test]

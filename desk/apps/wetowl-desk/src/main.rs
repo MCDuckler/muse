@@ -21,6 +21,7 @@ use wo_deskcore::bench::Bench;
 use wo_deskcore::{Desk, Prefs, ShowHand};
 
 mod booth;
+mod faves;
 mod gallery;
 mod overlays;
 mod paint;
@@ -99,11 +100,14 @@ pub(crate) struct App {
     pub(crate) strobe: bool,
     /// The Show page's card under PERFORM: the hands (0), the dancers (1), the sets (2), the screen (3).
     pub(crate) show_tab: usize,
-    /// The Show page's left: the stage (0), the rotation (1).
+    /// The Show page's left: the stage (0), the rotation (1), the favourites (2).
     pub(crate) show_room: usize,
     /// A scene's page open over the rotation, and the page's own state.
     pub(crate) show_scene: Option<String>,
     pub(crate) scene_ui: scene::SceneUi,
+    /// The favourites room's filters and pictures; a name being asked for.
+    pub(crate) faves_ui: faves::FavesUi,
+    pub(crate) prompt: Option<faves::Prompt>,
     /// MilkDrop's library open on the Show page, and what is searched for in it.
     pub(crate) milk_list: bool,
     pub(crate) milk_query: String,
@@ -222,7 +226,7 @@ impl App {
             app.show_tab = ["hands", "dancers", "sets", "screen"].iter().position(|n| *n == t).unwrap_or(0);
         }
         if let Some(t) = arg("--show-room") {
-            app.show_room = ["stage", "rotation"].iter().position(|n| *n == t).unwrap_or(0);
+            app.show_room = ["stage", "rotation", "favourites"].iter().position(|n| *n == t).unwrap_or(0);
         }
         // --show-scene <id>: that scene's page over the rotation (screenshots)
         if let Some(id) = arg("--show-scene") {
@@ -271,6 +275,8 @@ impl App {
             show_room: 0,
             show_scene: None,
             scene_ui: Default::default(),
+            faves_ui: Default::default(),
+            prompt: None,
             milk_list: false,
             milk_query: String::new(),
             prefs,
@@ -394,6 +400,7 @@ impl App {
             self.draw(desk, ui, &p, full, &s);
         }
         self.overlays(desk, ui, full);
+        self.prompt_window(desk, ui.ctx(), full);
         self.toasts.draw(ui.ctx(), full);
         // repaint while anything moves; else a few times a second (the set's clock, a search
         // pausing), and at once when the clock's thread hears of a change

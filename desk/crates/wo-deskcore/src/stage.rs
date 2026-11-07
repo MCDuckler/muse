@@ -35,6 +35,8 @@ pub(crate) struct Stage {
     hello: Option<String>,
     /// The Desk's director (ShowWire v2), from the first frame a stage reads.
     show: Option<crate::show::Show>,
+    /// The house, for the show's shared sets.
+    house: Option<wo_house::House>,
     /// What each deck's facts were made from, to make them again only on a change.
     facts_key: [Option<FactsKey>; 2],
     /// Each deck's cover as the wire carries it (wo_wire::cover), for stages now and to come.
@@ -281,7 +283,7 @@ impl Stage {
         }
         self.facts_key[deck] = Some(key);
         let f = facts();
-        let line = self.show.get_or_insert_with(crate::show::Show::new).record(deck, Some(f));
+        let line = self.show().record(deck, Some(f));
         if let (Some(line), Some(w)) = (line, &self.wire) {
             w.keep(["record.A", "record.B"][deck], line);
         }
@@ -307,14 +309,35 @@ impl Stage {
     /// The director's frame: its cue to the stages when it changed.
     pub(crate) fn direct(&mut self, frame: &wo_wire::Frame) {
         let milk = self.wire.as_ref().and_then(wo_wire::Server::shown).and_then(|s| s.milk);
-        let line = self.show.get_or_insert_with(crate::show::Show::new).tick(frame, milk.as_ref());
+        let line = self.show().tick(frame, milk.as_ref());
         if let (Some(line), Some(w)) = (line, &self.wire) {
             w.keep("cue", line);
         }
     }
 
     fn show(&mut self) -> &mut crate::show::Show {
-        self.show.get_or_insert_with(crate::show::Show::new)
+        let house = self.house.clone();
+        self.show.get_or_insert_with(|| {
+            let mut s = crate::show::Show::new();
+            s.house = house;
+            s
+        })
+    }
+
+    /// The house (signed in, or not): the show's shared sets.
+    pub(crate) fn set_show_house(&mut self, house: Option<wo_house::House>) {
+        if let Some(s) = &mut self.show {
+            s.house = house.clone();
+        }
+        self.house = house;
+    }
+
+    pub(crate) fn sets(&mut self) -> crate::show::SetsView {
+        self.show().sets_view()
+    }
+
+    pub(crate) fn faves(&mut self) -> crate::show::FavesView {
+        self.show().faves_view()
     }
 
     pub(crate) fn milk(&mut self) -> crate::show::MilkView {
@@ -377,6 +400,12 @@ impl Stage {
     pub(crate) fn hand(&mut self, h: Hand) {
         if let Some(s) = &mut self.show {
             s.hand(&h);
+            // KEEP: the stage's picture kept with it
+            if h == Hand::Keep
+                && let (Some(id), Some((_, t))) = (s.last_kept(), self.wire.as_ref().and_then(wo_wire::Server::thumb))
+            {
+                s.keep_picture(&id, &t);
+            }
         }
         match &h {
             Hand::Blackout(on) => self.blackout = *on,

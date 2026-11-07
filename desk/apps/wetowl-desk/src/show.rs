@@ -50,11 +50,11 @@ impl App {
         let col_x = main.right() - right_w;
         let left = Rect::from_min_max(main.min, pos2(col_x - g, main.bottom()));
         // the left: the stage, or the rotation
-        let tabs = Rect::from_min_size(left.min, vec2(220.0, 28.0));
-        if let Some(i) = kit::segmented(ui, p, tabs, &["Stage", "Rotation"], Some(self.show_room), Tone::Neutral, "show-room") {
+        let tabs = Rect::from_min_size(left.min, vec2(330.0, 28.0));
+        if let Some(i) = kit::segmented(ui, p, tabs, &["Stage", "Rotation", "Favourites"], Some(self.show_room), Tone::Neutral, "show-room") {
             self.show_room = i;
         }
-        let tip = if self.show_room == 0 { "How often everything comes over a night: the scenes, the backgrounds, the effects, the director's temper" } else { "The stage large, what comes next, the favourites, MilkDrop" };
+        let tip = "The stage large · how often everything comes over a night · what was kept with KEEP";
         kit::hint(p, pos2(tabs.right() + 14.0, tabs.center().y), Align2::LEFT_CENTER, if self.show_room == 0 { "" } else { "kept in this Desk's show — the stage plays it at once" });
         ui.interact(tabs, ui.scope_id().with("show-room-tip"), Sense::hover()).on_hover_text(tip);
         let left = Rect::from_min_max(pos2(left.left(), tabs.bottom() + 10.0), left.max);
@@ -67,7 +67,9 @@ impl App {
         let auto_h = (main.height() * 0.34).clamp(200.0, 300.0);
         let auto = Rect::from_min_max(pos2(col_x, main.bottom() - auto_h), main.max);
         let room = Rect::from_min_max(pos2(col_x, perform.bottom() + g), pos2(main.right(), auto.top() - g));
-        if self.show_room == 1 {
+        if self.show_room == 2 && v.rust {
+            self.faves_room(desk, ui, p, left);
+        } else if self.show_room >= 1 {
             self.scene_ui.tempo = s.decks.iter().any(|d| d.playing).then_some(s.master_bpm);
             self.rotation_room(desk, ui, p, left);
         } else {
@@ -339,6 +341,17 @@ impl App {
                 ui.ctx().request_repaint_after(Duration::from_millis(250));
             }
             let mut right = inner.right();
+            // just kept: its stars, there and then
+            if v.rust && v.told.said.as_deref().is_some_and(|w| w.starts_with("Kept: ")) {
+                let fv = desk.show_faves();
+                if let Some(f) = fv.kept.as_ref().and_then(|k| fv.faves.iter().find(|f| &f.id == k)) {
+                    let at = pos2(inner.right() - 84.0, y);
+                    if let Some(n) = crate::faves::stars(ui, p, at, f.stars, 7.0, "kept-stars") {
+                        desk.show_edit(wo_deskcore::ShowEdit::Fave(wo_deskcore::FaveEdit::Stars(f.id.clone(), n)));
+                    }
+                    right = at.x - 16.0;
+                }
+            }
             if v.told.undo {
                 let br = Rect::from_min_size(pos2(inner.right() - 84.0, y - if compact { 11.0 } else { 13.0 }), vec2(84.0, if compact { 22.0 } else { 26.0 }));
                 if Btn::new("Undo").icon(Icon::Undo).quiet().size(11.0).enabled(shown > 0.5).show(ui, p, br, "show-undo").clicked() {
@@ -552,22 +565,17 @@ impl App {
     }
 
     fn sets_tab(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, v: &StageView, on: bool) {
+        if v.rust {
+            self.sets_panel(desk, ui, p, r);
+            return;
+        }
+        // a WetOwl app's stage: its own sets, switched between
         let mut sets: Vec<(String, String)> = vec![(String::new(), "As shipped".to_owned())];
         sets.extend(v.told.sets.iter().map(|s| (s.id.clone(), s.name.clone())));
         let on_set = v.told.set.clone().unwrap_or_default();
-        let (y, picked) = chips(ui, p, r, on, &sets, &on_set, "set");
+        let (_, picked) = chips(ui, p, r, on, &sets, &on_set, "set");
         if let Some(id) = picked {
             desk.show(ShowHand::Set(id));
-        }
-        let note = if v.hands.as_ref().is_some_and(|h| h.set_changed) {
-            "changed since it was put on"
-        } else if v.told.sets.is_empty() {
-            "a set keeps the plan, the effects, the temper and the finish"
-        } else {
-            ""
-        };
-        if !note.is_empty() {
-            kit::hint(p, pos2(r.left(), y + 16.0), Align2::LEFT_CENTER, note);
         }
     }
 

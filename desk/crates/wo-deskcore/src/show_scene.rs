@@ -707,6 +707,8 @@ impl Show {
                 self.direct.doc.set_tune(&tune);
             }
             E::Finish(f) => self.direct.doc.set_finish(f.as_ref()),
+            E::Set(x) => self.edit_set(x),
+            E::Fave(x) => self.edit_fave(x),
             E::Strength(s) => self.direct.doc.set_strength(s),
             _ => {}
         }

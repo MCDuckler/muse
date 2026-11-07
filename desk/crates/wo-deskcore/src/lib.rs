@@ -35,7 +35,7 @@ pub use covers::Cover;
 pub use prefs::Prefs;
 pub use library::{Library, Shelf};
 pub use records::{Audio, Record};
-pub use show::{FinishView, LooksGrid, MilkHand, MilkRow, MilkView, MoveRow, MovesView, OwnRows, RotationRow, RotationView, ScenePage, ShowBoard, ShowEdit, ShowHands, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, value_name};
+pub use show::{FaveEdit, FaveRow, FavesView, SetEdit, SetRow, SetsView, FinishView, LooksGrid, MilkHand, MilkRow, MilkView, MoveRow, MovesView, OwnRows, RotationRow, RotationView, ScenePage, ShowBoard, ShowEdit, ShowHands, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, value_name};
 pub use wo_show::plan::{LEVEL_MOST, LEVEL_STEPS, level_word};
 pub use wo_show::rig::{RigFinish, TransformSet};
 pub use wo_show::shares::share_word;
@@ -1113,6 +1113,7 @@ impl Desk {
 
     pub fn sign_out(&mut self) {
         wo_house::Session::forget();
+        self.stage.set_show_house(None);
         self.house = None;
         self.stage.set_house(None);
         self.library = Library::default();
@@ -1145,6 +1146,7 @@ impl Desk {
         self.covers.forget();
         library::fetch_playlists(&self.done_tx, &house);
         self.stage.set_house(Some(wo_wire::House { server: house.session.server.clone(), token: house.session.token.clone() }));
+        self.stage.set_show_house(Some(house.clone()));
         self.house = Some(house);
         self.open_shelf(Shelf::All);
     }
@@ -1480,6 +1482,17 @@ impl Desk {
     /// The finish over every scene, the blend's strength, the slit-scan's knobs.
     pub fn show_finish(&mut self) -> FinishView {
         self.stage.finish()
+    }
+
+    /// The show's sets: this Desk's and the shared ones, the one on (the shared ones listed
+    /// again now and then while this is asked).
+    pub fn show_sets(&mut self) -> SetsView {
+        self.stage.sets()
+    }
+
+    /// The favourites, the one on, the one just kept.
+    pub fn show_faves(&mut self) -> FavesView {
+        self.stage.faves()
     }
 
     /// The library's presets whose names have `query` in them, up to `most`.

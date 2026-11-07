@@ -474,6 +474,51 @@ impl House {
         Ok(())
     }
 
+    // ------------------------------------------------------------- the show's shared sets
+
+    fn authed(&self, b: ureq::RequestBuilder<ureq::typestate::WithBody>) -> ureq::RequestBuilder<ureq::typestate::WithBody> {
+        b.header("Authorization", &format!("Bearer {}", self.session.token))
+    }
+
+    /// The show's shared sets, every account's, the newest saved first (each: id, name, doc,
+    /// rev, owner, mine, updated_by, updated_at).
+    pub fn show_snapshots(&self) -> Result<Vec<serde_json::Value>> {
+        let v: serde_json::Value = self.json("/booth/show/snapshots")?;
+        Ok(v.get("snapshots").and_then(|s| s.as_array()).cloned().unwrap_or_default())
+    }
+
+    /// A set shared with everyone: the one kept, as the list has it.
+    pub fn share_show_snapshot(&self, name: &str, doc: &serde_json::Value) -> Result<serde_json::Value> {
+        self.post_json("/booth/show/snapshots", &serde_json::json!({"name": name, "doc": doc}))
+    }
+
+    /// A shared set saved over — if `rev` is still its revision. Stale: Ok(Err(it as kept)).
+    pub fn save_show_snapshot(&self, id: i64, doc: &serde_json::Value, rev: i64, name: Option<&str>) -> Result<std::result::Result<serde_json::Value, serde_json::Value>> {
+        let mut body = serde_json::json!({"doc": doc, "rev": rev});
+        if let Some(n) = name {
+            body["name"] = n.into();
+        }
+        let mut r = self
+            .authed(self.agent.put(format!("{}/booth/show/snapshots/{id}", self.session.server)))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(&body)?;
+        let status = r.status().as_u16();
+        let v: serde_json::Value = r.body_mut().read_json().unwrap_or_default();
+        match status {
+            200..=299 => Ok(Ok(v)),
+            409 => Ok(Err(v.get("detail").cloned().unwrap_or(v))),
+            c => Err(Error::Status(c)),
+        }
+    }
+
+    /// A set this account shared, taken away from everyone.
+    pub fn unshare_show_snapshot(&self, id: i64) -> Result<()> {
+        self.agent.delete(format!("{}/booth/show/snapshots/{id}", self.session.server)).header("Authorization", &format!("Bearer {}", self.session.token)).call()?;
+        Ok(())
+    }
+
     /// What this person thought of the booth's mixes, newest first (the thumbs, the hands
     /// on the plan): for the planner's taste.
     pub fn feedback_list(&self, limit: u32) -> Result<Vec<wo_booth::taste::FeedbackRow>> {

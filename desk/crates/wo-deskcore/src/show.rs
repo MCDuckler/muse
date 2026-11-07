@@ -18,6 +18,9 @@ use crate::records::{Audio, Record};
 
 #[path = "show_scene.rs"]
 mod scene;
+#[path = "show_sets.rs"]
+mod sets;
+pub use sets::{FaveEdit, FaveRow, FavesView, SetEdit, SetRow, SetsView};
 pub use scene::{FinishView, LooksGrid, MoveRow, MovesView, OwnRows, ScenePage, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, tune_rows};
 
 /// The WetOwl app's show.json (read, never written); the show as shipped where there is none.
@@ -92,6 +95,9 @@ pub enum ShowEdit {
     Finish(Option<wo_show::rig::RigFinish>),
     /// How strong the blend is, 0..1.
     Strength(f64),
+    // ---- the sets, the favourites
+    Set(SetEdit),
+    Fave(FaveEdit),
 }
 
 /// One row of the rotation: a scene, a background, a mask, a blend, an effect.
@@ -350,6 +356,10 @@ pub(crate) struct Show {
     page_said: Option<String>,
     /// The dancers' moves, read once.
     moves: Option<Vec<MoveRow>>,
+    /// The house (signed in): the shared sets.
+    pub(crate) house: Option<wo_house::House>,
+    /// The sets shared at the house, the favourite on, UNDO.
+    shelf: sets::Shelf,
 }
 
 type PageKey = (
@@ -468,6 +478,8 @@ impl Show {
             page: None,
             page_said: None,
             moves: None,
+            house: None,
+            shelf: Default::default(),
         }
     }
 
@@ -504,6 +516,7 @@ impl Show {
     /// One frame of the Desk, with what the stage said of its MilkDrop: the director's cue, as
     /// a line when it changed.
     pub(crate) fn tick(&mut self, frame: &wo_wire::Frame, milk: Option<&MilkShown>) -> Option<String> {
+        self.poll_sets();
         let now = Instant::now();
         let dt = self.last.map_or(1.0 / 60.0, |t| (now - t).as_secs_f64().min(0.25));
         self.last = Some(now);
@@ -677,17 +690,11 @@ impl Show {
                 d.apply_doc();
             }
             Hand::Set(id) => {
-                let name = if id.is_empty() {
-                    d.doc.use_shipped();
-                    Some("As shipped".to_owned())
-                } else {
-                    d.doc.snapshots().into_iter().find(|s| &s.id == id).map(|s| {
-                        d.doc.use_set(&s);
-                        s.name
-                    })
-                };
-                if let Some(name) = name {
-                    d.apply_doc();
+                // this Desk's, or a shared one (changes not saved put aside, with an UNDO)
+                let to = if id.is_empty() { Some(None) } else { self.set_by_id(id).map(Some) };
+                if let Some(to) = to {
+                    let name = to.as_ref().map_or("As shipped".to_owned(), |s| s.name.clone());
+                    self.use_set(to.as_ref());
                     self.judged.before = None;
                     self.judged.never = None;
                     self.say(format!("Set: {name}"));
@@ -707,6 +714,7 @@ impl Show {
             Hand::Keep => self.keep(),
             Hand::Fave(id) => {
                 if let Some(f) = self.direct.doc.faves().into_iter().find(|f| &f.id == id) {
+                    self.shelf.fave_on = Some(f.id.clone());
                     let words = if f.name.is_empty() { combo_words(&f.combo, &self.direct.looks) } else { f.name.clone() };
                     self.direct.put_on(f.combo, None);
                     self.fave_milk = f.milk;
@@ -827,7 +835,7 @@ impl Show {
 
     /// This Desk's sets (id, name), and the one on.
     pub(crate) fn sets(&self) -> (Vec<wo_wire::SetRef>, Option<String>) {
-        let all = self.direct.doc.snapshots().into_iter().map(|s| wo_wire::SetRef { id: s.id, name: s.name }).collect();
+        let all = self.direct.doc.snapshots().into_iter().chain(self.shelf_shared()).map(|s| wo_wire::SetRef { id: s.id, name: s.name }).collect();
         (all, self.direct.doc.snapshot().map(|s| s.id))
     }
 
@@ -1048,6 +1056,7 @@ impl Show {
         let milk = self.direct.milk.as_ref().and_then(|m| m.preset().map(|p| p.full_name()));
         let words = combo_words(&c, &self.direct.looks);
         let fave = wo_show::faves::ShowFave { id: wo_show::faves::ShowFave::new_id(micros), at, combo: c, milk, shot: None, type3d: None, stars: 0, name: String::new() };
+        self.shelf.kept = Some(fave.id.clone());
         self.direct.doc.keep_fave(fave);
         self.faves_kept += 1;
         self.say(format!("Kept: {words}"));
@@ -1253,7 +1262,7 @@ mod tests {
         show.edit(ShowEdit::DarkBeat(true));
         show.edit(ShowEdit::Takes("black".into(), "add".into(), false));
         let t = wo_show::rig::TransformSet { count: 4, ..Default::default() };
-        show.edit(ShowEdit::Transform(t.clone()));
+        show.edit(ShowEdit::Transform(t));
         assert_eq!((show.direct.director.bias, show.direct.director.mosh_share), (0.5, 0.1));
         let r2 = rotation_settled(&mut show);
         let white = r2.shared[0].3.iter().find(|r| r.key == "white").unwrap();

@@ -48,7 +48,7 @@ fn every_page_and_overlay_draws_at_every_size() {
                     // page's rotation, and each of its card's tabs; a scene's page (the
                     // dancers', with their moves), one square's masks and blends open
                     app.plan_open = n >= 4;
-                    app.show_room = usize::from(n >= 4);
+                    app.show_room = if n == 7 { 2 } else { usize::from(n >= 4) };
                     app.show_tab = n % 4;
                     app.show_scene = match n {
                         8 | 9 => Some("kinetic".into()),
