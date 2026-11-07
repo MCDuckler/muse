@@ -81,6 +81,13 @@ fn hand_of(j: &serde_json::Value) -> Option<Hand> {
         "set" => Hand::Set(s("id").unwrap_or_default()),
         "screen" => Hand::Screen(s("name")?),
         "fave" => Hand::Fave(s("id")?),
+        "level" => Hand::Level(j.get("v")?.as_f64()? as f32),
+        "hue" => Hand::Hue(j.get("v")?.as_f64()? as f32),
+        "effect" => Hand::Effect(s("fx")),
+        "under" => Hand::Under(s("ground")),
+        "landon" => Hand::LandOn(s("at")?),
+        "dancer" => Hand::Dancer(s("id")),
+        "dancerOn" => Hand::DancerOn(s("id")?, on),
         _ => return None,
     })
 }
@@ -133,7 +140,9 @@ mod tests {
         assert_eq!(said(&record("A", None)), Said::Record("A".into(), None));
         let c = Cue { scene: Some("glide".into()), k: 0.25, ..Default::default() };
         assert_eq!(said(&cue(&c)), Said::Cue(Box::new(c)));
-        for h in [Hand::Hit, Hand::Hold(false), Hand::Screen("HDMI-1".into()), Hand::Set(String::new()), Hand::Full(true), Hand::Fave("f-17".into())] {
+        for h in [Hand::Hit, Hand::Hold(false), Hand::Screen("HDMI-1".into()), Hand::Set(String::new()), Hand::Full(true), Hand::Fave("f-17".into()),
+            Hand::Level(0.5), Hand::Hue(0.125), Hand::Effect(Some("slit".into())), Hand::Effect(None), Hand::Under(Some("milk".into())), Hand::Under(None),
+            Hand::LandOn("phrase".into()), Hand::Dancer(None), Hand::Dancer(Some("joe".into())), Hand::DancerOn("chris".into(), false)] {
             assert_eq!(said(&crate::hand(h.clone())), Said::Hand(h));
         }
         let f = Frame { a: Deck { track_id: Some(3), playing: true, position_ms: 1000.0, rate: 1.0, level: 1.0, ..Default::default() }, ..Default::default() };

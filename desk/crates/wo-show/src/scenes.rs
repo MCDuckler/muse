@@ -29,6 +29,9 @@ pub fn grounds_drawn(milk: bool, cover: bool) -> std::collections::BTreeSet<Stri
     g
 }
 
+/// The dancers (their rigs under assets/show/dance/<id>), by id and name: wo-dance's models.
+pub const DANCERS: &[(&str, &str)] = &[("chris", "Chris"), ("joe", "Joe")];
+
 /// The scenes the Rust stage draws (plan §1): the rest stay v1's until they are ported, or not.
 pub const IN_SCOPE: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift", "milk", "fluid", "veins", "dance-art", "type3d"];
 

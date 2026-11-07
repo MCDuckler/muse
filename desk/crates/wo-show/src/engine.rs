@@ -12,7 +12,7 @@ use crate::deck::{Flat, ShowAudio, ShowDeck};
 use crate::director::Director;
 use crate::doc::ShowDoc;
 use crate::events::{EventKind, ShowEvent, events_between};
-use crate::rig::{Look, ShowRig};
+use crate::rig::{Look, Quantise, ShowRig};
 use crate::scenes::SceneBook;
 use crate::state::{Dynamics, Genome, ShowMacros, ShowMix, ShowPalette, ShowState, palette_for};
 
@@ -102,6 +102,31 @@ pub fn master_of(current: &str, a: &ShowDeck, b: &ShowDeck) -> String {
     if loud(oth) > loud(cur) + 0.2 || (loud(cur) == 0.0 && loud(oth) > 0.0) { oth.name.clone() } else { cur.name.clone() }
 }
 
+/// How long a look put on waits for its moment before it lands anyway (a record with no
+/// grid, a deck stopped meanwhile), seconds (v1: launchPatience).
+pub const LAUNCH_PATIENCE: f64 = 20.0;
+
+/// A look the hands put on, waiting for the master's next beat, bar or phrase.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Launch {
+    pub combo: crate::Combo,
+    pub at: Quantise,
+    asked: f64,
+}
+
+/// What the hands hold over the director (v1: ShowHold).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hold {
+    /// The look on (HOLD, a favourite put on).
+    Look,
+    /// One background under every scene.
+    Ground,
+    /// An effect over whatever comes.
+    Effect,
+    /// A look waiting for its moment.
+    Pending,
+}
+
 /// The Desk's half: the decisions.
 pub struct Direct {
     pub director: Director,
@@ -117,6 +142,7 @@ pub struct Direct {
     hit_at: Option<f64>,
     clock: f64,
     last: Cue,
+    launch: Option<Launch>,
 }
 
 impl Direct {
@@ -125,10 +151,86 @@ impl Direct {
         let mut director = Director::new(book.metas(), seed);
         director.kinds = book.kinds();
         director.set_scores(scores);
-        director.set_plan(doc.plan());
-        director.mosh_share = doc.mosh();
-        director.bias = doc.bias();
-        Direct { director, looks: book.looks(), doc, held_fx: None, macros: ShowMacros::default(), milk: None, master: "A".into(), prev: None, hit_at: None, clock: 0.0, last: Cue::default() }
+        let mut d = Direct { director, looks: book.looks(), doc, held_fx: None, macros: ShowMacros::default(), milk: None, master: "A".into(), prev: None, hit_at: None, clock: 0.0, last: Cue::default(), launch: None };
+        d.apply_doc();
+        d
+    }
+
+    /// The document's say into the director and the hands' numbers: the plan, the temper,
+    /// the datamosh's share, the treatments' knobs, who dances (after a set is put on, too).
+    pub fn apply_doc(&mut self) {
+        self.director.set_plan(self.doc.plan());
+        self.director.mosh_share = self.doc.mosh();
+        self.director.bias = self.doc.bias();
+        self.macros.tune = self.doc.tune();
+        self.macros.dancer = self.doc.dancer().filter(|d| d != "mix");
+        self.macros.dancers_off = self.doc.dancers_off();
+    }
+
+    /// A combination put on by the hands (a favourite, a look picked), held until let go:
+    /// landing on the master's next beat, bar or phrase (LAND ON, or `at`) — now where it
+    /// says now, or nothing plays.
+    pub fn put_on(&mut self, c: crate::Combo, at: Option<Quantise>) {
+        let at = at.unwrap_or_else(|| self.doc.quantise());
+        let playing = self.prev.as_ref().is_some_and(|p| p.master().playing);
+        if at == Quantise::Now || !playing {
+            self.launch = None;
+            self.director.play(c, crate::director::SceneChange::Cut);
+        } else {
+            self.launch = Some(Launch { combo: c, at, asked: self.clock });
+        }
+    }
+
+    /// What waits for its moment.
+    pub fn pending(&self) -> Option<&Launch> {
+        self.launch.as_ref()
+    }
+
+    /// A launch landing on its moment (or after [LAUNCH_PATIENCE]).
+    fn land(&mut self, said: &[ShowEvent]) {
+        let Some(l) = &self.launch else { return };
+        let due = said.iter().any(|e| {
+            e.master
+                && match l.at {
+                    Quantise::Beat => matches!(e.kind, EventKind::Beat | EventKind::Bar | EventKind::Phrase),
+                    Quantise::Bar => matches!(e.kind, EventKind::Bar | EventKind::Phrase),
+                    Quantise::Phrase => e.kind == EventKind::Phrase,
+                    Quantise::Now => true,
+                }
+        });
+        if !due && self.clock - l.asked < LAUNCH_PATIENCE {
+            return;
+        }
+        if let Some(l) = self.launch.take() {
+            self.director.play(l.combo, crate::director::SceneChange::Cut);
+        }
+    }
+
+    /// What the hands hold now.
+    pub fn holds(&self) -> Vec<Hold> {
+        let mut h = vec![];
+        if self.director.locked {
+            h.push(Hold::Look);
+        }
+        if self.director.held_ground.is_some() {
+            h.push(Hold::Ground);
+        }
+        if self.held_fx.is_some() {
+            h.push(Hold::Effect);
+        }
+        if self.launch.is_some() {
+            h.push(Hold::Pending);
+        }
+        h
+    }
+
+    pub fn let_go(&mut self, h: Hold) {
+        match h {
+            Hold::Look => self.hold(false),
+            Hold::Ground => self.director.held_ground = None,
+            Hold::Effect => self.held_fx = None,
+            Hold::Pending => self.launch = None,
+        }
     }
 
     /// The effect on: the hands' held, or the combination's.
@@ -155,12 +257,15 @@ impl Direct {
 
     /// The performer's NEXT (`by` 1) and PREVIOUS (-1): the scene beside this one among those
     /// the director may use, cut to.
+    /// A launch still waiting is forgotten: the newer choice stands.
     pub fn next(&mut self, by: i64) {
+        self.launch = None;
         self.director.next(by, crate::director::SceneChange::Cut);
     }
 
     /// Another scene now, datamoshed into (the hands' MOSH).
     pub fn mosh_next(&mut self) {
+        self.launch = None;
         self.director.next(1, crate::director::SceneChange::Mosh);
     }
 
@@ -186,6 +291,8 @@ impl Direct {
         let dark = self.doc.dark_beat() && m.playing && m.drop_beats_away.is_some_and(|w| w > 0.0 && w <= 1.0);
         let state = ShowState { dt, a, b, master_name: self.master.clone(), audio, mix, macros: self.macros.clone(), extra, ..Default::default() };
         let mut said = events_between(self.prev.as_ref(), &state);
+        // a launch landing on its moment; then the director's word on the scene
+        self.land(&said);
         let (scene, from, k) = self.director.direct(&state, &said);
         if self.director.take_hit() {
             self.hit_at = Some(self.clock);
@@ -377,6 +484,50 @@ mod tests {
         direct.mosh_next();
         let (c3, _) = direct.tick(1.0 / 60.0, room(200_000.0), Flat::new());
         assert_eq!(c3.mosh, n + 1, "MOSH moshed");
+    }
+
+    #[test]
+    fn a_look_put_on_lands_on_the_bar_and_the_holds_let_go() {
+        let book = crate::scenes::SceneBook::shipped().only(crate::scenes::DRAWN);
+        let mut direct = Direct::new(&book, ShowDoc::default(), None, 5);
+        let r = record();
+        let room = |ms: f64| Room { a: ShowDeck::derive("A", Some(&r), true, ms, Channel::default(), ShowAudio::default()), b: ShowDeck { name: "B".into(), ..Default::default() }, ..Default::default() };
+        // 128 BPM: a bar is 1875 ms; start just past a bar's one
+        let mut ms = 1875.0 * 4.0 + 100.0;
+        let (c0, _) = direct.tick(1.0 / 60.0, room(ms), Flat::new());
+        let other = direct.director.weighted(c0.scene.as_deref().unwrap()).into_iter().map(|(c, _)| c).chain(direct.looks.keys().filter(|k| Some(k.as_str()) != c0.scene.as_deref()).filter_map(|k| direct.director.weighted(k).into_iter().next().map(|(c, _)| c))).find(|c| Some(c.scene.as_str()) != c0.scene.as_deref()).expect("another scene's look");
+        assert_eq!(direct.doc.quantise(), Quantise::Bar, "as shipped");
+        direct.put_on(other.clone(), None);
+        assert!(direct.holds().contains(&Hold::Pending));
+        // waits within the bar…
+        let mut landed_at = None;
+        for i in 1..240 {
+            ms += 1000.0 / 60.0;
+            let (c, _) = direct.tick(1.0 / 60.0, room(ms), Flat::new());
+            if c.scene.as_deref() == Some(other.scene.as_str()) {
+                landed_at = Some(i);
+                break;
+            }
+        }
+        // …and lands on the next bar's one (~1.77 s on: 107 frames)
+        let i = landed_at.expect("landed within four seconds");
+        assert!((100..=112).contains(&i), "on the bar: frame {i}");
+        assert!(direct.held() && direct.pending().is_none());
+        // NOW lands at once
+        direct.director.play(direct.director.weighted(c0.scene.as_deref().unwrap())[0].0.clone(), crate::director::SceneChange::Cut);
+        direct.put_on(other.clone(), Some(Quantise::Now));
+        assert!(direct.pending().is_none());
+        assert_eq!(direct.director.combo(), Some(&other));
+        // the holds: the look, a ground, an effect; LET GO ALL
+        direct.director.held_ground = Some("black".into());
+        direct.held_fx = Some(Fx::Kaleidoscope);
+        assert_eq!(direct.holds(), vec![Hold::Look, Hold::Ground, Hold::Effect]);
+        let (c, _) = direct.tick(1.0 / 60.0, room(ms + 20.0), Flat::new());
+        assert_eq!(c.rig.transform, direct.doc.transform().of(Fx::Kaleidoscope), "the effect over the look");
+        for h in direct.holds() {
+            direct.let_go(h);
+        }
+        assert!(direct.holds().is_empty());
     }
 
     #[test]

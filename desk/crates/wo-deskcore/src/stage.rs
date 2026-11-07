@@ -73,6 +73,8 @@ pub struct StageView {
     pub rust_here: bool,
     /// Why the director chose the scene on, in words (the Rust stage's show).
     pub why: Option<String>,
+    /// What the hands set on the show, where the Desk directs (the Rust stage's).
+    pub hands: Option<crate::show::ShowHands>,
 }
 
 /// What the Desk keeps of the stage between runs: the screen it fills.
@@ -376,6 +378,7 @@ impl Stage {
         if let Some(s) = directed {
             let cue = s.cue();
             let name = cue.scene.as_ref().map(|id| s.direct.looks.get(id).map_or(id.clone(), |l| l.name.clone()));
+            let hands = s.hands_view();
             return StageView {
                 stages,
                 starting: false,
@@ -387,12 +390,15 @@ impl Stage {
                 freeze: cue.macros.freeze,
                 told: {
                     let (said, said_n, undo, wider) = s.judged();
-                    Shown { scene: name, held: s.direct.held(), blackout: cue.macros.blackout, freeze: cue.macros.freeze, look: s.look_words(), said, said_n, undo, wider, ..shown }
+                    let (sets, set) = s.sets();
+                    let holds = hands.holds.len() as u32;
+                    Shown { scene: name, held: s.direct.held(), blackout: cue.macros.blackout, freeze: cue.macros.freeze, look: s.look_words(), said, said_n, undo, wider, sets, set, holds, ..shown }
                 },
                 kept_screen: self.kept().screen.clone(),
                 rust: self.wants_rust(),
                 rust_here: rust_program().is_some(),
                 why: Some(cue.why.clone()).filter(|w| !w.is_empty()),
+                hands: Some(hands),
             };
         }
         StageView {
@@ -409,6 +415,7 @@ impl Stage {
             rust: self.wants_rust(),
             rust_here: rust_program().is_some(),
             why: None,
+            hands: None,
         }
     }
 

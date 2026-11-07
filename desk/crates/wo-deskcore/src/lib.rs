@@ -34,7 +34,7 @@ pub use covers::Cover;
 pub use prefs::Prefs;
 pub use library::{Library, Shelf};
 pub use records::{Audio, Record};
-pub use show::{MilkHand, MilkRow, MilkView, ShowBoard};
+pub use show::{MilkHand, MilkRow, MilkView, ShowBoard, ShowHands};
 /// The scenes the Rust stage draws so far.
 pub use wo_show::scenes::DRAWN as RUST_SCENES;
 pub use stage::{Hand as ShowHand, StageView, Thumb};

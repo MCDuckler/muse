@@ -236,7 +236,8 @@ pub fn stage_frame(st: &ShowState, book: &SceneBook, time: f64) -> StageFrame {
         particles: fin.particles.clone(),
         palette: [pal.primary, pal.secondary, pal.accent].map(|c| c.rgb().map(|v| v as f32)),
         white: stage_white(st) as f32,
-        black: if st.macros.blackout { 1.0 } else { 0.0 },
+        // the blackout, else LEVEL as a dimmer over everything (v1's only reached the shaders)
+        black: if st.macros.blackout { 1.0 } else { (1.0 - st.macros.intensity).clamp(0.0, 1.0) as f32 },
         freeze: st.macros.freeze,
         mosh: st.mosh,
         mosh_cut: mosh_cut(st),
@@ -328,6 +329,8 @@ mod tests {
         assert_eq!(stage_white(&st), 0.0);
         st.macros.hit = 1.0;
         assert!((stage_white(&st) - 0.7).abs() < 1e-9);
+        st.macros.intensity = 0.25;
+        assert_eq!(stage_frame(&st, &book(), 0.0).black, 0.75, "LEVEL dims");
         st.macros.blackout = true;
         assert_eq!(stage_frame(&st, &book(), 0.0).black, 1.0);
     }

@@ -1,6 +1,6 @@
 //! The Desk and the Rust stage (apps/wetowl-stage), on a display: the Desk directs, the
 //! stage connects, says it is v2, sends its picture; the hands move the Desk's director and
-//! the picture follows (a blackout goes dark); a screen is filled and let go.
+//! the picture follows (a blackout goes dark, LEVEL dims it); a screen is filled and let go.
 //! Opt-in, needs WO_STAGE_RUST (the stage's program) and a display:
 //!
 //!   WO_STAGE_RUST=target/release/wetowl-stage cargo test --release -p wo-deskcore --test stage_rust_live -- --ignored --nocapture
@@ -68,6 +68,18 @@ fn the_desk_directs_the_rust_stage() {
     until(&mut d, "the blackout's picture", 10, |d, v| v.blackout && light(d).is_some_and(|(n, l)| n > n0 + 2 && l < 1.0));
     d.show(ShowHand::Blackout(false));
     until(&mut d, "light again", 10, |d, v| !v.blackout && light(d).is_some_and(|(_, l)| l > 2.0));
+
+    // LEVEL: the stage dims by it; an effect held is told back as held
+    d.show(ShowHand::Level(0.0));
+    until(&mut d, "LEVEL down: dark", 10, |d, v| v.hands.as_ref().is_some_and(|h| h.level == 0.0) && light(d).is_some_and(|(_, l)| l < 1.0));
+    d.show(ShowHand::Level(1.0));
+    until(&mut d, "LEVEL up: light again", 10, |d, _| light(d).is_some_and(|(_, l)| l > 2.0));
+    d.show(ShowHand::Effect(Some("kaleidoscope".into())));
+    let v = until(&mut d, "the effect held", 5, |_, v| v.told.holds == 1);
+    assert_eq!(v.hands.as_ref().unwrap().effect.as_deref(), Some("kaleidoscope"));
+    assert!(v.told.look.is_some());
+    d.show(ShowHand::LetGo);
+    until(&mut d, "let go", 5, |_, v| v.told.holds == 0);
 
     // the screens: one filled, then a window again
     let v = until(&mut d, "the screens told", 10, |_, v| !v.told.screens.is_empty());

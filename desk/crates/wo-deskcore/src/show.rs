@@ -16,14 +16,48 @@ use wo_wire::{Hand, MilkShown};
 
 use crate::records::{Audio, Record};
 
-/// The plan, the sets and the director's temper: the WetOwl app's show.json, read (never
-/// written) while v1 keeps it; the show as shipped where there is none.
+/// The WetOwl app's show.json (read, never written); the show as shipped where there is none.
 fn v1_doc() -> ShowDoc {
     crate::records::fetched_dir()
         .and_then(|f| f.parent().map(|p| p.join("show.json")))
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|t| ShowDoc::parse(&t))
         .unwrap_or_default()
+}
+
+/// The Desk's own show.json (config_dir/wetowl-desk): the plan as the hands judged it, the
+/// favourites, the sets, LAND ON, who dances — kept between runs. The first run starts from
+/// the WetOwl app's.
+pub(crate) fn doc_file() -> Option<std::path::PathBuf> {
+    dirs::config_dir().map(|d| d.join("wetowl-desk").join("show.json"))
+}
+
+fn read_doc(file: Option<&std::path::Path>) -> ShowDoc {
+    file.and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| ShowDoc::parse(&t)).unwrap_or_else(v1_doc)
+}
+
+/// What the hands set on the show, as the Show page draws it (the Rust stage's).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ShowHands {
+    /// LEVEL and HUE, 0..1.
+    pub level: f32,
+    pub hue: f32,
+    /// The effect held over whatever comes (`kaleidoscope`, `slit`, `mosh`, `none`); None: each
+    /// look its own.
+    pub effect: Option<String>,
+    /// The background held under every scene; and the ones that may be (`milk`, `cover`).
+    pub under: Option<String>,
+    pub unders: Vec<String>,
+    /// LAND ON (`now`, `beat`, `bar`, `phrase`).
+    pub land_on: String,
+    /// Who dances (None: a mix); every dancer by id and name, and whether in the mix.
+    pub dancer: Option<String>,
+    pub dancers: Vec<(String, String, bool)>,
+    /// What the hands hold, in words; the look waiting for its moment, in words.
+    pub holds: Vec<String>,
+    pub pending: Option<String>,
+    /// The set on changed since it was put on.
+    pub set_changed: bool,
 }
 
 /// The house's id of a record, as the Desk's frame names it (none for one made here).
@@ -160,6 +194,19 @@ pub(crate) struct Show {
     /// favourites kept).
     board: Option<(BoardKey, ShowBoard)>,
     faves_kept: u32,
+    /// The Desk's show.json, changed since it was written, and when it was.
+    doc_file: Option<std::path::PathBuf>,
+    doc_dirty: bool,
+    doc_saved: Instant,
+    /// A favourite's MilkDrop preset, put on as the favourite lands.
+    fave_milk: Option<String>,
+}
+
+impl Drop for Show {
+    fn drop(&mut self) {
+        self.save_doc(true);
+        self.save_notes(true);
+    }
 }
 
 type BoardKey = (Option<wo_show::Combo>, wo_show::plan::ShowPlan, Option<std::collections::BTreeSet<String>>, u32);
@@ -217,16 +264,17 @@ pub struct ShowBoard {
 }
 
 impl Show {
-    /// The director over the scenes the Rust stage draws.
+    /// The director over the scenes the Rust stage draws, the show kept in the Desk's own file.
     pub(crate) fn new() -> Show {
-        Show::new_in(crate::milk::home())
+        Show::new_in(crate::milk::home(), doc_file())
     }
 
-    /// With MilkDrop's library in `milk_home` (None: no MilkDrop).
-    pub(crate) fn new_in(milk_home: Option<std::path::PathBuf>) -> Show {
+    /// With MilkDrop's library in `milk_home` (None: no MilkDrop) and the show kept in
+    /// `doc_file` (None: the WetOwl app's read, nothing written).
+    pub(crate) fn new_in(milk_home: Option<std::path::PathBuf>, doc_file: Option<std::path::PathBuf>) -> Show {
         let book = SceneBook::shipped().only(DRAWN);
         let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_secs());
-        let mut direct = Direct::new(&book, v1_doc(), ComboScores::shipped(), seed);
+        let mut direct = Direct::new(&book, read_doc(doc_file.as_deref()), ComboScores::shipped(), seed);
         direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(false, false));
         // MilkDrop's library: the shipped presets out where the helper reads them
         if let Some(home) = &milk_home {
@@ -237,7 +285,38 @@ impl Show {
             m.set_textures(Some(home.join("textures").to_string_lossy().into_owned()));
             direct.milk = Some(m);
         }
-        Show { direct, facts: [None, None], covers: [false; 2], last: None, said: String::new(), milk_home, notes_saved: Instant::now(), judged: Judged::default(), board: None, faves_kept: 0 }
+        Show {
+            direct,
+            facts: [None, None],
+            covers: [false; 2],
+            last: None,
+            said: String::new(),
+            milk_home,
+            notes_saved: Instant::now(),
+            judged: Judged::default(),
+            board: None,
+            faves_kept: 0,
+            doc_file,
+            doc_dirty: false,
+            doc_saved: Instant::now(),
+            fave_milk: None,
+        }
+    }
+
+    /// The show.json written back when it changed (a second after at most), or now.
+    pub(crate) fn save_doc(&mut self, now: bool) {
+        let Some(file) = &self.doc_file else { return };
+        if !self.doc_dirty || !(now || self.doc_saved.elapsed().as_secs_f32() >= 1.0) {
+            return;
+        }
+        self.doc_dirty = false;
+        self.doc_saved = Instant::now();
+        let text = self.direct.doc.to_string_pretty();
+        let tmp = file.with_extension("json.part");
+        let wrote = file.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(&tmp, text)).and_then(|_| std::fs::rename(&tmp, file));
+        if let Err(e) = wrote {
+            eprintln!("show: {} not written: {e}", file.display());
+        }
     }
 
     /// Whether a deck's record has its cover on the stage (the cover ground's say).
@@ -276,7 +355,16 @@ impl Show {
         let mut extra = wo_show::deck::Flat::new();
         extra.insert("milk.ok".into(), if ok { 1.0 } else { 0.0 });
         let (cue, _) = self.direct.tick(dt, room, extra);
+        // a favourite's preset, once the favourite is on
+        if self.direct.pending().is_none()
+            && let Some(name) = self.fave_milk.take()
+            && let Some(m) = self.direct.milk.as_mut()
+            && let Some(p) = m.library.by_name(&name).cloned()
+        {
+            m.choose(&p);
+        }
         self.save_notes(false);
+        self.save_doc(false);
         let line = wo_wire::v2::cue(&cue);
         if line == self.said {
             return None;
@@ -368,8 +456,17 @@ impl Show {
         self.direct.cue()
     }
 
-    /// A hand on the show, as the director takes it.
+    /// A hand on the show, as the director takes it (what changes the document, kept).
     pub(crate) fn hand(&mut self, h: &Hand) {
+        let before = self.direct.doc.clone();
+        self.hand_(h);
+        if self.direct.doc != before {
+            self.doc_dirty = true;
+        }
+    }
+
+    fn hand_(&mut self, h: &Hand) {
+        use wo_show::json::Named;
         let d = &mut self.direct;
         match h {
             Hand::Hit => d.hit(),
@@ -377,7 +474,57 @@ impl Show {
             Hand::Previous => d.next(-1),
             Hand::Mosh => d.mosh_next(),
             Hand::Hold(on) => d.hold(*on),
-            Hand::LetGo => d.hold(false),
+            Hand::LetGo => {
+                for h in d.holds() {
+                    d.let_go(h);
+                }
+                if let Some(m) = d.milk.as_mut() {
+                    if m.locked {
+                        m.lock(false);
+                    }
+                    m.release();
+                }
+                self.fave_milk = None;
+            }
+            Hand::Level(v) => d.macros.intensity = v.clamp(0.0, 1.0) as f64,
+            Hand::Hue(v) => d.macros.colour = v.rem_euclid(1.0) as f64,
+            Hand::Effect(f) => d.held_fx = f.as_deref().and_then(wo_show::Fx::by_name),
+            Hand::Under(g) => match g {
+                Some(g) if !d.director.grounds_here.as_ref().is_some_and(|h| h.contains(g)) => {
+                    let what = if g == "milk" { "MilkDrop" } else { g.as_str() };
+                    self.say(format!("{what} is not on this stage"));
+                }
+                g => d.director.held_ground = g.clone(),
+            },
+            Hand::LandOn(q) => d.doc.set_quantise(wo_show::rig::Quantise::by_name(q).unwrap_or(wo_show::rig::Quantise::Bar)),
+            Hand::Dancer(id) => {
+                if let Some(id) = id {
+                    d.doc.set_dancer_on(id, true);
+                }
+                d.doc.set_dancer(id.as_deref());
+                d.apply_doc();
+            }
+            Hand::DancerOn(id, on) => {
+                d.doc.set_dancer_on(id, *on);
+                d.apply_doc();
+            }
+            Hand::Set(id) => {
+                let name = if id.is_empty() {
+                    d.doc.use_shipped();
+                    Some("As shipped".to_owned())
+                } else {
+                    d.doc.snapshots().into_iter().find(|s| &s.id == id).map(|s| {
+                        d.doc.use_set(&s);
+                        s.name
+                    })
+                };
+                if let Some(name) = name {
+                    d.apply_doc();
+                    self.judged.before = None;
+                    self.judged.never = None;
+                    self.say(format!("Set: {name}"));
+                }
+            }
             Hand::Blackout(on) => d.macros.blackout = *on,
             Hand::Strobe(on) => d.macros.strobe = if *on { 1.0 } else { 0.0 },
             Hand::Freeze(on) => d.macros.freeze = *on,
@@ -392,9 +539,16 @@ impl Show {
             Hand::Keep => self.keep(),
             Hand::Fave(id) => {
                 if let Some(f) = self.direct.doc.faves().into_iter().find(|f| &f.id == id) {
-                    let words = combo_words(&f.combo, &self.direct.looks);
-                    self.direct.director.play(f.combo, wo_show::director::SceneChange::Dissolve);
-                    self.say(format!("On: {words}"));
+                    let words = if f.name.is_empty() { combo_words(&f.combo, &self.direct.looks) } else { f.name.clone() };
+                    self.direct.put_on(f.combo, None);
+                    self.fave_milk = f.milk;
+                    let when = match self.direct.pending().map(|l| l.at) {
+                        Some(wo_show::rig::Quantise::Beat) => " on the beat",
+                        Some(wo_show::rig::Quantise::Bar) => " on the bar",
+                        Some(wo_show::rig::Quantise::Phrase) => " on the phrase",
+                        _ => "",
+                    };
+                    self.say(format!("On{when}: {words}"));
                 }
             }
             Hand::Undo => {
@@ -458,6 +612,55 @@ impl Show {
     /// The look on, in words.
     pub(crate) fn look_words(&self) -> Option<String> {
         self.direct.director.combo().map(|c| combo_words(c, &self.direct.looks))
+    }
+
+    /// What the hands set, as the Show page draws it.
+    pub(crate) fn hands_view(&self) -> ShowHands {
+        use wo_show::engine::Hold;
+        use wo_show::json::Named;
+        let d = &self.direct;
+        let milk_held = d.milk.as_ref().is_some_and(|m| m.locked || m.held_by_hand);
+        let pending = d.pending().map(|l| {
+            let at = match l.at {
+                wo_show::rig::Quantise::Beat => "the beat",
+                wo_show::rig::Quantise::Phrase => "the phrase",
+                _ => "the bar",
+            };
+            format!("{} — on {at}", combo_words(&l.combo, &d.looks))
+        });
+        let mut holds: Vec<String> = d
+            .holds()
+            .into_iter()
+            .map(|h| match h {
+                Hold::Look => "the look".to_owned(),
+                Hold::Ground => if d.director.held_ground.as_deref() == Some("milk") { "MilkDrop under".to_owned() } else { "the background".to_owned() },
+                Hold::Effect => "the effect".to_owned(),
+                Hold::Pending => "a look waiting".to_owned(),
+            })
+            .collect();
+        if milk_held {
+            holds.push("the preset".into());
+        }
+        let off = d.doc.dancers_off();
+        ShowHands {
+            level: d.macros.intensity as f32,
+            hue: d.macros.colour as f32,
+            effect: d.held_fx.map(|f| f.name().to_owned()),
+            under: d.director.held_ground.clone(),
+            unders: ["milk", "cover"].iter().filter(|g| d.director.grounds_here.as_ref().is_some_and(|h| h.contains(**g))).map(|g| g.to_string()).collect(),
+            land_on: d.doc.quantise().name().to_owned(),
+            dancer: d.macros.dancer.clone(),
+            dancers: wo_show::scenes::DANCERS.iter().map(|(id, name)| (id.to_string(), name.to_string(), !off.iter().any(|o| o == id))).collect(),
+            holds,
+            pending,
+            set_changed: d.doc.changed_since_set(),
+        }
+    }
+
+    /// This Desk's sets (id, name), and the one on.
+    pub(crate) fn sets(&self) -> (Vec<wo_wire::SetRef>, Option<String>) {
+        let all = self.direct.doc.snapshots().into_iter().map(|s| wo_wire::SetRef { id: s.id, name: s.name }).collect();
+        (all, self.direct.doc.snapshot().map(|s| s.id))
     }
 
     /// What the hands' judging said last (counted), and whether UNDO and WIDER have work.
@@ -526,7 +729,7 @@ impl Show {
         };
         let micros = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_micros() as i64);
         let at = chrono_free_iso(micros / 1_000_000);
-        let milk = self.direct.milk.as_ref().and_then(|m| m.preset().map(|p| p.name.clone()));
+        let milk = self.direct.milk.as_ref().and_then(|m| m.preset().map(|p| p.full_name()));
         let words = combo_words(&c, &self.direct.looks);
         let fave = wo_show::faves::ShowFave { id: wo_show::faves::ShowFave::new_id(micros), at, combo: c, milk, shot: None, type3d: None, stars: 0, name: String::new() };
         self.direct.doc.keep_fave(fave);
@@ -583,7 +786,7 @@ mod tests {
 
     #[test]
     fn the_hands_judge_what_is_on_and_undo_it() {
-        let mut show = Show::new_in(None);
+        let mut show = Show::new_in(None, None);
         let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 120.0, key: String::new(), seconds: 200, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None };
         let t = Timing::from_grid(Grid::new((0..400).map(|i| i as f64 * 0.5).collect(), 0), 200.0);
         show.record(0, Some(facts_of(&r, &t)));
@@ -618,9 +821,80 @@ mod tests {
     }
 
     #[test]
+    fn the_hands_set_the_light_and_the_show_is_kept() {
+        let dir = std::env::temp_dir().join(format!("wo-show-doc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join("show.json");
+        // a show of its own (none would start from the WetOwl app's)
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&file, r#"{"v":1,"pool":{}}"#).unwrap();
+        let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 120.0, key: String::new(), seconds: 200, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None };
+        let t = Timing::from_grid(Grid::new((0..400).map(|i| i as f64 * 0.5).collect(), 0), 200.0);
+        let frame = |ms: f64| wo_wire::Frame { a: wo_wire::Deck { playing: true, position_ms: ms, rate: 1.0, level: 1.0, ..Default::default() }, ..Default::default() };
+        {
+            let mut show = Show::new_in(None, Some(file.clone()));
+            show.record(0, Some(facts_of(&r, &t)));
+            show.tick(&frame(4000.0), None);
+            // LEVEL and HUE into the cue
+            show.hand(&Hand::Level(0.4));
+            show.hand(&Hand::Hue(0.25));
+            show.tick(&frame(4016.0), None);
+            assert!((show.cue().macros.intensity - 0.4).abs() < 1e-6 && (show.cue().macros.colour - 0.25).abs() < 1e-6);
+            // an effect held over the look; let go
+            show.hand(&Hand::Effect(Some("kaleidoscope".into())));
+            show.tick(&frame(4033.0), None);
+            assert_eq!(show.cue().rig.transform, show.direct.doc.transform().of(wo_show::Fx::Kaleidoscope));
+            assert_eq!(show.hands_view().effect.as_deref(), Some("kaleidoscope"));
+            // MilkDrop under: not on a stage without it
+            show.hand(&Hand::Under(Some("milk".into())));
+            assert!(show.hands_view().under.is_none());
+            assert_eq!(show.judged().0.as_deref(), Some("MilkDrop is not on this stage"));
+            show.hand(&Hand::Under(Some("white".into())));
+            assert_eq!(show.hands_view().holds, vec!["the background".to_owned(), "the effect".to_owned()]);
+            show.hand(&Hand::LetGo);
+            assert!(show.hands_view().holds.is_empty() && show.hands_view().effect.is_none());
+            // LAND ON and who dances are kept; a favourite waits for the phrase
+            show.hand(&Hand::LandOn("phrase".into()));
+            show.hand(&Hand::Dancer(Some("joe".into())));
+            assert_eq!(show.cue().macros.dancer, None, "said on the next tick");
+            show.tick(&frame(4050.0), None);
+            assert_eq!(show.cue().macros.dancer.as_deref(), Some("joe"));
+            show.hand(&Hand::DancerOn("chris".into(), false));
+            show.tick(&frame(4066.0), None);
+            assert_eq!(show.cue().macros.dancers_off, vec!["chris".to_owned()]);
+            show.hand(&Hand::Keep);
+            let fave = show.direct.doc.faves()[0].id.clone();
+            show.hand(&Hand::Next);
+            show.tick(&frame(4083.0), None);
+            show.hand(&Hand::Fave(fave));
+            assert!(show.judged().0.unwrap().starts_with("On on the phrase: "));
+            assert!(show.hands_view().pending.is_some());
+            // a set saved, the show changed, the set put back on
+            let set = show.direct.doc.save_as("Late", "l:1");
+            show.doc_dirty = true;
+            show.direct.doc.set_bias(0.8);
+            show.direct.apply_doc();
+            assert!(show.hands_view().set_changed);
+            show.hand(&Hand::Set(set.id.clone()));
+            assert_eq!(show.direct.director.bias, 0.0, "the set's temper");
+            assert_eq!(show.sets(), (vec![wo_wire::SetRef { id: "l:1".into(), name: "Late".into() }], Some("l:1".into())));
+            show.hand(&Hand::Set(String::new()));
+            assert_eq!(show.sets().1, None, "as shipped");
+        }
+        // dropped: written; read back by the next
+        let show = Show::new_in(None, Some(file.clone()));
+        assert_eq!(show.direct.doc.quantise(), wo_show::rig::Quantise::Phrase);
+        assert_eq!(show.direct.macros.dancer.as_deref(), Some("joe"));
+        assert_eq!(show.direct.doc.faves().len(), 1);
+        assert_eq!(show.sets().0.len(), 1);
+        drop(show);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_desk_directs_and_says_the_cue_only_when_it_changes() {
         let home = std::env::temp_dir().join(format!("wo-show-milk-{}", std::process::id()));
-        let mut show = Show::new_in(Some(home.clone()));
+        let mut show = Show::new_in(Some(home.clone()), None);
         assert!(show.direct.milk.as_ref().is_some_and(|m| m.library.presets.len() > 500), "the shipped presets");
         let spb = 0.5;
         let r = Record { id: 0, title: "Loop".into(), artist: String::new(), bpm: 120.0, key: String::new(), seconds: 200, audio: Audio::Synth { seed: 1 }, cover: false, cover_rgb: None };
@@ -659,7 +933,7 @@ mod board {
     /// the board is worked out once per look (and again when the plan changes).
     #[test]
     fn the_board_is_worked_out_once_per_look() {
-        let mut s = super::Show::new_in(None);
+        let mut s = super::Show::new_in(None, None);
         let frame = wo_wire::Frame::default();
         for _ in 0..30 {
             s.tick(&frame, None);

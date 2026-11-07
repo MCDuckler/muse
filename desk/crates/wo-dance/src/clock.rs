@@ -692,7 +692,7 @@ impl Frame {
 }
 
 /// The dancers to pick from (`assets/show/dance/<id>/`).
-pub const MODELS: &[&str] = &["chris", "joe"];
+pub const MODELS: &[&str] = &[wo_show::scenes::DANCERS[0].0, wo_show::scenes::DANCERS[1].0];
 pub const MIX: &str = "mix";
 
 /// Who may dance in a mix: all but those switched `off` (all off is none off).

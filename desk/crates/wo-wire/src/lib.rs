@@ -96,7 +96,7 @@ pub struct Frame {
 }
 
 /// A hand on the show.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Hand {
     /// The flash.
     Hit,
@@ -128,8 +128,24 @@ pub enum Hand {
     Screen(String),
     /// Full screen where the window is, or a window again.
     Full(bool),
-    /// A favourite put on, by id (the Desk's director; held until let go).
+    /// A favourite put on, by id (the Desk's director; held until let go), landing as LAND ON says.
     Fave(String),
+    /// LEVEL: a master over everything, 0..1 (v1's intensity; the Rust stage dims by it too).
+    Level(f32),
+    /// HUE: a turn of the palette, 0..1 round.
+    Hue(f32),
+    /// HOLD AN EFFECT over whatever comes (`kaleidoscope`, `slit`, `mosh`, `none`), or None:
+    /// each look its own again.
+    Effect(Option<String>),
+    /// One background held under every scene (`milk`: MILKDROP UNDER, `cover`), or None: the
+    /// rotation's again.
+    Under(Option<String>),
+    /// LAND ON: when what the hands put on lands (`now`, `beat`, `bar`, `phrase`). Kept.
+    LandOn(String),
+    /// Who dances: a dancer alone by id, or None: a mix. Kept.
+    Dancer(Option<String>),
+    /// A dancer let into the mix or kept out of it. Kept.
+    DancerOn(String, bool),
 }
 
 /// The house the Desk is signed into: the stage reads the records' beats, sections,
@@ -206,6 +222,8 @@ pub fn frame(f: &Frame) -> String {
 
 pub fn hand(h: Hand) -> String {
     let named = |what: &str, key: &str, v: &str| format!(r#"{{"t":"hands","do":"{what}","{key}":{}}}"#, serde_json::Value::from(v));
+    let maybe = |what: &str, key: &str, v: Option<&str>| format!(r#"{{"t":"hands","do":"{what}","{key}":{}}}"#, v.map_or(serde_json::Value::Null, serde_json::Value::from));
+    let num = |v: f32| serde_json::Value::from((v.clamp(0.0, 1.0) * 1000.0).round() as f64 / 1000.0);
     let (what, on) = match h {
         Hand::Hit => ("hit", None),
         Hand::Next => ("next", None),
@@ -226,6 +244,13 @@ pub fn hand(h: Hand) -> String {
         Hand::Set(id) => return named("set", "id", &id),
         Hand::Screen(name) => return named("screen", "name", &name),
         Hand::Fave(id) => return named("fave", "id", &id),
+        Hand::Level(v) => return format!(r#"{{"t":"hands","do":"level","v":{}}}"#, num(v)),
+        Hand::Hue(v) => return format!(r#"{{"t":"hands","do":"hue","v":{}}}"#, num(v)),
+        Hand::Effect(f) => return maybe("effect", "fx", f.as_deref()),
+        Hand::Under(g) => return maybe("under", "ground", g.as_deref()),
+        Hand::LandOn(q) => return named("landon", "at", &q),
+        Hand::Dancer(d) => return maybe("dancer", "id", d.as_deref()),
+        Hand::DancerOn(id, on) => return format!(r#"{{"t":"hands","do":"dancerOn","id":{},"on":{on}}}"#, serde_json::Value::from(id)),
     };
     match on {
         Some(on) => format!(r#"{{"t":"hands","do":"{what}","on":{on}}}"#),
@@ -342,6 +367,10 @@ mod tests {
         assert_eq!(hand(Hand::Full(false)), r#"{"t":"hands","do":"full","on":false}"#);
         assert_eq!(hand(Hand::Set("l:1".into())), r#"{"t":"hands","do":"set","id":"l:1"}"#);
         assert_eq!(hand(Hand::Screen("BenQ \"W1070\"".into())), r#"{"t":"hands","do":"screen","name":"BenQ \"W1070\""}"#);
+        assert_eq!(hand(Hand::Level(0.25)), r#"{"t":"hands","do":"level","v":0.25}"#);
+        assert_eq!(hand(Hand::Effect(None)), r#"{"t":"hands","do":"effect","fx":null}"#);
+        assert_eq!(hand(Hand::Under(Some("milk".into()))), r#"{"t":"hands","do":"under","ground":"milk"}"#);
+        assert_eq!(hand(Hand::DancerOn("joe".into(), false)), r#"{"t":"hands","do":"dancerOn","id":"joe","on":false}"#);
     }
 
     #[test]

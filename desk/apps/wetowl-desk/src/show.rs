@@ -4,16 +4,18 @@
 //! stage is the Rust one:
 //!
 //!   NEVER THIS · WIDER · LESS · MORE · KEEP      (UNDO beside what was said)
-//!   HIT · NEXT · BACK · MOSH
+//!   HIT · NEXT · BACK · MOSH                     LEVEL  HUE
 //!   HOLD · STROBE (while held) · FREEZE · BLACK
 //!
-//! and beside them what the hands hold (LET GO), the sets, the screen the show fills, which
-//! stage; under the picture what may come next, the favourites, the rotation and MilkDrop.
+//! and under them, in tabs: the hands (an effect held over whatever comes, MilkDrop under
+//! every scene, when what is put on lands, who dances; what is held, LET GO), the sets, the
+//! screen the show fills and which stage; under the picture what may come next, the
+//! favourites, the rotation and MilkDrop.
 //! The overviews and the Auto DJ stay on the page, so a set runs on while the show is played.
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Painter, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use wo_deskcore::{Desk, MilkHand, ShowBoard, ShowHand, Snapshot, StageView};
+use wo_deskcore::{Desk, MilkHand, ShowBoard, ShowHand, ShowHands, Snapshot, StageView};
 
 use crate::App;
 use crate::paint::{label_sized, white};
@@ -50,7 +52,8 @@ impl App {
         let row_h = (left.height() * 0.24).clamp(160.0, 230.0);
         let pic = Rect::from_min_max(left.min, pos2(left.right(), left.bottom() - row_h - g));
         let row = Rect::from_min_max(pos2(left.left(), pic.bottom() + g), left.max);
-        let judge = Rect::from_min_size(pos2(col_x, main.top()), vec2(right_w, 138.0));
+        // a short window: the judging's word beside its title, not under the buttons
+        let judge = Rect::from_min_size(pos2(col_x, main.top()), vec2(right_w, if main.height() < 760.0 { 112.0 } else { 138.0 }));
         let perform = Rect::from_min_size(pos2(col_x, judge.bottom() + g), vec2(right_w, 136.0));
         let auto_h = (main.height() * 0.34).clamp(200.0, 300.0);
         let auto = Rect::from_min_max(pos2(col_x, main.bottom() - auto_h), main.max);
@@ -59,7 +62,7 @@ impl App {
         self.cards(desk, ui, p, row, &v, board.as_ref());
         self.judge(desk, ui, p, judge, &v);
         self.perform(desk, ui, p, perform, &v);
-        self.holds_sets_screens(desk, ui, p, room, &v);
+        self.room(desk, ui, p, room, &v);
         self.auto_dj(desk, ui, p, auto, s);
     }
 
@@ -306,8 +309,11 @@ impl App {
                 desk.show(hand);
             }
         }
-        // what the last judging said, with UNDO
-        let y = top + 54.0 + 16.0;
+        // what the last judging said, with UNDO: under the buttons, or beside the title where
+        // the card is short
+        let compact = r.height() < 130.0;
+        let y = if compact { inner.top() + 6.0 } else { top + 54.0 + 16.0 };
+        let left = if compact { inner.left() + 130.0 } else { inner.left() };
         let fresh = self.said.1.is_some_and(|t| t.elapsed() < SAID_FOR);
         let shown = motion::tween_bool(ui.ctx(), ui.scope_id().with("said"), on && fresh && v.told.said.is_some(), motion::EMPHASIS, motion::STANDARD);
         if shown > 0.0 {
@@ -316,16 +322,16 @@ impl App {
             }
             let mut right = inner.right();
             if v.told.undo {
-                let br = Rect::from_min_size(pos2(inner.right() - 84.0, y - 13.0), vec2(84.0, 26.0));
+                let br = Rect::from_min_size(pos2(inner.right() - 84.0, y - if compact { 11.0 } else { 13.0 }), vec2(84.0, if compact { 22.0 } else { 26.0 }));
                 if Btn::new("Undo").icon(Icon::Undo).quiet().size(11.0).enabled(shown > 0.5).show(ui, p, br, "show-undo").clicked() {
                     desk.show(ShowHand::Undo);
                 }
                 right = br.left() - 10.0;
             }
             if let Some(said) = &v.told.said {
-                kit::clipped(p, pos2(inner.left(), y + 4.0 * (1.0 - shown)), said, 13.0, "", alpha_of(Color32::from_rgb(0xFC, 0xEB, 0xC0), shown), right - inner.left());
+                kit::clipped(p, pos2(left, y + 4.0 * (1.0 - shown)), said, 13.0, "", alpha_of(Color32::from_rgb(0xFC, 0xEB, 0xC0), shown), right - left);
             }
-        } else {
+        } else if !compact {
             kit::hint(p, pos2(inner.left(), y), Align2::LEFT_CENTER, if judges { "The director learns from these for the rest of the show" } else { "Judging works on a stage that is showing" });
         }
     }
@@ -336,6 +342,12 @@ impl App {
         let inner = r.shrink(t::INSET);
         let on = v.stages > 0;
         kit::section(p, inner.left_top(), Align2::LEFT_TOP, "Perform");
+        // LEVEL and HUE on the right, where the Desk directs
+        let knobs_w = if v.hands.is_some() { 112.0 } else { 0.0 };
+        if let Some(h) = &v.hands {
+            self.light_knobs(desk, ui, p, Rect::from_min_max(pos2(inner.right() - knobs_w, inner.top()), inner.max), h, on);
+        }
+        let inner = Rect::from_min_max(inner.min, pos2(inner.right() - knobs_w - if knobs_w > 0.0 { 12.0 } else { 0.0 }, inner.bottom()));
         let gap = 8.0;
         let bw = (inner.width() - 3.0 * gap) / 4.0;
         let bh = ((inner.height() - 24.0 - gap) / 2.0).min(44.0);
@@ -372,73 +384,206 @@ impl App {
         }
     }
 
-    fn holds_sets_screens(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, v: &StageView) {
+    /// LEVEL (a master over everything: the stage dims by it) and HUE (a turn of the palette):
+    /// drag up or down, a double click back to rest.
+    fn light_knobs(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, h: &ShowHands, on: bool) {
+        let knobs: [(&str, f32, f32, Color32, &str); 2] = [
+            ("Level", h.level, 1.0, t::text(), "A master over everything: the stage dims by it. Drag; a double click for full"),
+            ("Hue", h.hue, 0.0, Color32::from_rgb(0xB8, 0x8C, 0xFF), "A turn of the palette's colours. Drag; a double click for the record's own"),
+        ];
+        let w = r.width() / 2.0;
+        for (i, (word, v, rest, ink, tip)) in knobs.into_iter().enumerate() {
+            let c = pos2(r.left() + w * (i as f32 + 0.5), r.top() + 24.0 + 30.0);
+            let hover = Rect::from_center_size(c, vec2(44.0, 44.0));
+            let picked = if on { kit::knob(ui, p, c, v, ink, false, rest, ("light", i)) } else { None };
+            ui.interact(hover, ui.scope_id().with(("light-tip", i)), Sense::hover()).on_hover_text(tip);
+            if !on {
+                p.circle_filled(c, 20.0, Color32::from_black_alpha(90));
+            }
+            label_sized(p, pos2(c.x, c.y + 30.0), Align2::CENTER_CENTER, word, 10.5, if on { t::soft() } else { t::faint() });
+            let shown = if i == 0 { format!("{:.0} %", v * 100.0) } else if v < 0.005 { "own".to_owned() } else { format!("{:.0}°", v * 360.0) };
+            kit::text(p, pos2(c.x, c.y + 46.0), Align2::CENTER_CENTER, &shown, 11.0, "mono", t::muted());
+            if let Some(nv) = picked
+                && (nv - v).abs() > 1e-4
+            {
+                desk.show(if i == 0 { ShowHand::Level(nv) } else { ShowHand::Hue(nv) });
+            }
+        }
+    }
+
+    /// Under PERFORM, in tabs: the hands (an effect held, MilkDrop under, LAND ON, who dances),
+    /// the sets, the screen and which stage; what is held and LET GO ALL over all three.
+    fn room(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, v: &StageView) {
         kit::panel(p, r, false);
         let inner = r.shrink(t::INSET);
         let clip = p.with_clip_rect(r);
         let p = &clip;
         let on = v.stages > 0 && !v.untold;
-        let label_w = 70.0;
-        let mut y = inner.top();
-
-        // what the hands hold
-        kit::section(p, pos2(inner.left(), y + 12.0), Align2::LEFT_CENTER, "Held");
+        let tabs = Rect::from_min_size(inner.min - vec2(0.0, 4.0), vec2(inner.width().min(310.0), 26.0));
+        if let Some(i) = kit::segmented(ui, p, tabs, &["Hands", "Dancers", "Sets", "Screen"], Some(self.show_tab), Tone::Neutral, "show-tab") {
+            self.show_tab = i;
+        }
+        // what the hands hold, over every tab
         let held = v.told.holds;
-        let words = match (on, held) {
-            (false, _) => "—".to_owned(),
-            (true, 0) => "nothing: the director has it all".to_owned(),
-            (true, 1) => "one thing".to_owned(),
-            (true, n) => format!("{n} things"),
-        };
-        kit::clipped(p, pos2(inner.left() + label_w, y + 12.0), &words, 13.0, "", t::muted(), inner.width() - label_w - 120.0);
         if on && held > 0 {
-            let br = Rect::from_min_size(pos2(inner.right() - 108.0, y), vec2(108.0, 26.0));
-            if Btn::new("Let go all").icon(Icon::Close).size(11.0).show(ui, p, br, "show-letgo").clicked() {
+            let br = Rect::from_min_size(pos2(inner.right() - 104.0, tabs.top()), vec2(104.0, 26.0));
+            let tip = v.hands.as_ref().map_or("Every hold let go: the director has it all".to_owned(), |h| format!("Held: {}. Let go: the director has it all", h.holds.join(", ")));
+            if Btn::new("Let go all").icon(Icon::Close).size(11.0).show(ui, p, br, "show-letgo").on_hover_text(tip).clicked() {
                 desk.show(ShowHand::LetGo);
             }
+            let words = if held == 1 { "1 held".to_owned() } else { format!("{held} held") };
+            kit::text(p, pos2(br.left() - 10.0, br.center().y), Align2::RIGHT_CENTER, &words, 11.5, "", t::warm());
         }
-        y += 38.0;
+        let body = Rect::from_min_max(pos2(inner.left(), tabs.bottom() + 9.0), inner.max);
+        match self.show_tab {
+            1 => self.dancers_tab(desk, ui, p, body, v),
+            2 => self.sets_tab(desk, ui, p, body, v, on),
+            3 => self.screen_tab(desk, ui, p, body, v, on),
+            _ => self.hands_tab(desk, ui, p, body, v, on),
+        }
+    }
 
-        // the sets
-        kit::section(p, pos2(inner.left(), y + 13.0), Align2::LEFT_CENTER, "Set");
+    fn hands_tab(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, v: &StageView, on: bool) {
+        let Some(h) = &v.hands else {
+            kit::hint(p, r.center(), Align2::CENTER_CENTER, "These hands are the Rust stage's: the Desk directs it");
+            return;
+        };
+        let label_w = 74.0;
+        let (row_h, gap) = (26.0, 6.0);
+        let mut y = r.top();
+        // a row: its word on the left (with what it does on hover), the control's place
+        let row = |ui: &Ui, p: &Painter, y: &mut f32, word: &str, tip: &str| {
+            let at = Rect::from_min_size(pos2(r.left() + label_w, *y), vec2(r.width() - label_w, row_h));
+            let lr = kit::section(p, pos2(r.left(), *y + row_h / 2.0), Align2::LEFT_CENTER, word);
+            ui.interact(lr, ui.scope_id().with(("row-tip", word)), Sense::hover()).on_hover_text(tip);
+            *y += row_h + gap;
+            at
+        };
+
+        // HOLD AN EFFECT over whatever comes
+        let at = row(ui, p, &mut y, "Effect", "An effect held over whatever comes, till let go; Own: each look its own");
+        const FX: [(&str, Option<&str>); 5] = [("Own", None), ("Kaleido", Some("kaleidoscope")), ("Slit", Some("slit")), ("Mosh", Some("mosh")), ("None", Some("none"))];
+        let chosen = FX.iter().position(|(_, k)| *k == h.effect.as_deref());
+        let words: Vec<&str> = FX.iter().map(|(w, _)| *w).collect();
+        if on && let Some(i) = kit::segmented(ui, p, at, &words, chosen, Tone::Neutral, "fx-hold") {
+            desk.show(ShowHand::Effect(FX[i].1.map(str::to_owned)));
+        }
+
+        // a background under every scene
+        let at = row(ui, p, &mut y, "Under", "One background held under every scene, till let go; Rotation: the director's choice");
+        let mut unders: Vec<(&str, Option<String>)> = vec![("Rotation", None)];
+        for g in &h.unders {
+            unders.push((if g == "milk" { "MilkDrop" } else { "Cover" }, Some(g.clone())));
+        }
+        if unders.len() == 1 {
+            kit::hint(p, pos2(at.left(), at.center().y), Align2::LEFT_CENTER, "the rotation's: no MilkDrop or cover on this stage");
+        } else {
+            let words: Vec<&str> = unders.iter().map(|(w, _)| *w).collect();
+            let chosen = unders.iter().position(|(_, k)| *k == h.under);
+            let at = Rect::from_min_size(at.min, vec2((unders.len() as f32 * 96.0).min(at.width()), at.height()));
+            if on && let Some(i) = kit::segmented(ui, p, at, &words, chosen, Tone::Neutral, "under") {
+                desk.show(ShowHand::Under(unders[i].1.clone()));
+            }
+        }
+
+        // LAND ON
+        let at = row(ui, p, &mut y, "Land on", "When what you put on lands (a favourite): on the master's next beat, bar or phrase — at once while nothing plays");
+        const AT: [(&str, &str); 4] = [("Now", "now"), ("Beat", "beat"), ("Bar", "bar"), ("Phrase", "phrase")];
+        let chosen = AT.iter().position(|(_, k)| *k == h.land_on);
+        let words: Vec<&str> = AT.iter().map(|(w, _)| *w).collect();
+        if let Some(i) = kit::segmented(ui, p, at, &words, chosen, Tone::Neutral, "land-on") {
+            desk.show(ShowHand::LandOn(AT[i].1.to_owned()));
+        }
+
+        // a look waiting for its moment
+        if let Some(w) = &h.pending {
+            kit::clipped(p, pos2(r.left(), y + 8.0), &format!("Waiting: {w}"), 12.0, "", t::warm(), r.width());
+        }
+    }
+
+    /// Who dances: each record its own lead (a mix), or one alone; who may be in the mix.
+    fn dancers_tab(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, v: &StageView) {
+        let Some(h) = &v.hands else {
+            kit::hint(p, r.center(), Align2::CENTER_CENTER, "The dancers are the Rust stage's: the Desk directs it");
+            return;
+        };
+        let label_w = 74.0;
+        let mut y = r.top();
+        kit::section(p, pos2(r.left(), y + 13.0), Align2::LEFT_CENTER, "Lead");
+        let mut who: Vec<(String, Option<String>)> = vec![("Mix".to_owned(), None)];
+        who.extend(h.dancers.iter().map(|(id, name, _)| (name.clone(), Some(id.clone()))));
+        let words: Vec<&str> = who.iter().map(|(w, _)| w.as_str()).collect();
+        let chosen = who.iter().position(|(_, k)| *k == h.dancer);
+        let at = Rect::from_min_size(pos2(r.left() + label_w, y), vec2((who.len() as f32 * 96.0).min(r.width() - label_w), 26.0));
+        if let Some(i) = kit::segmented(ui, p, at, &words, chosen, Tone::Neutral, "dancer") {
+            desk.show(ShowHand::Dancer(who[i].1.clone()));
+        }
+        y += 32.0;
+        kit::section(p, pos2(r.left(), y + 13.0), Align2::LEFT_CENTER, "In the mix");
+        let mut x = r.left() + label_w;
+        for (id, name, in_mix) in &h.dancers {
+            let w = kit::chip_width(p, name);
+            let cr = Rect::from_min_size(pos2(x, y), vec2(w, 26.0));
+            let tip = if *in_mix { format!("{name} may lead in a mix: click to keep them out") } else { format!("{name} never leads in a mix: click to let them in") };
+            if kit::chip(ui, p, cr, name, *in_mix, Tone::Neutral, true, ("in-mix", id)).on_hover_text(tip).clicked() {
+                desk.show(ShowHand::DancerOn(id.clone(), !in_mix));
+            }
+            x += w + 6.0;
+        }
+        kit::hint(p, pos2(r.left(), y + 46.0), Align2::LEFT_CENTER, "Kept for the next show. The moves come with the scene pages");
+    }
+
+    fn sets_tab(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, v: &StageView, on: bool) {
         let mut sets: Vec<(String, String)> = vec![(String::new(), "As shipped".to_owned())];
         sets.extend(v.told.sets.iter().map(|s| (s.id.clone(), s.name.clone())));
         let on_set = v.told.set.clone().unwrap_or_default();
-        let picked;
-        (y, picked) = chips(ui, p, Rect::from_min_max(pos2(inner.left() + label_w, y), inner.max), on, &sets, &on_set, "set");
+        let (y, picked) = chips(ui, p, r, on, &sets, &on_set, "set");
         if let Some(id) = picked {
             desk.show(ShowHand::Set(id));
         }
-        y += 12.0;
+        let note = if v.hands.as_ref().is_some_and(|h| h.set_changed) {
+            "changed since it was put on"
+        } else if v.told.sets.is_empty() {
+            "a set keeps the plan, the effects, the temper and the finish"
+        } else {
+            ""
+        };
+        if !note.is_empty() {
+            kit::hint(p, pos2(r.left(), y + 16.0), Align2::LEFT_CENTER, note);
+        }
+    }
 
+    fn screen_tab(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, v: &StageView, on: bool) {
+        let label_w = 74.0;
+        let mut y = r.top();
         // the screen the show fills
-        kit::section(p, pos2(inner.left(), y + 13.0), Align2::LEFT_CENTER, "Screen");
+        kit::section(p, pos2(r.left(), y + 13.0), Align2::LEFT_CENTER, "Screen");
         let mut screens: Vec<(String, String)> = vec![(String::new(), "Window".to_owned())];
         screens.extend(v.told.screens.iter().map(|s| (s.name.clone(), format!("{} {}×{}", s.name, s.w, s.h))));
         let on_screen = if v.told.full { v.told.screen.clone().unwrap_or_else(|| "?".into()) } else { String::new() };
         let shown_on = if v.stages > 0 { on_screen } else { v.kept_screen.clone().unwrap_or_default() };
         let picked;
-        (y, picked) = chips(ui, p, Rect::from_min_max(pos2(inner.left() + label_w, y), inner.max), on, &screens, &shown_on, "screen");
+        (y, picked) = chips(ui, p, Rect::from_min_max(pos2(r.left() + label_w, y), r.max), on, &screens, &shown_on, "screen");
         if let Some(name) = picked {
             desk.show(if name.is_empty() { ShowHand::Full(false) } else { ShowHand::Screen(name) });
         }
         if !on && let Some(k) = &v.kept_screen {
-            kit::clipped(p, pos2(inner.left() + label_w, y + 12.0), &format!("opens full screen on {k}"), 12.0, "", t::faint(), inner.width() - label_w);
+            kit::clipped(p, pos2(r.left() + label_w, y + 12.0), &format!("opens full screen on {k}"), 12.0, "", t::faint(), r.width() - label_w);
             y += 18.0;
         }
 
         // which stage: the WetOwl app's, or the Rust one (the Desk directing)
         if v.rust_here {
             y += 12.0;
-            kit::section(p, pos2(inner.left(), y + 13.0), Align2::LEFT_CENTER, "Stage");
-            let seg = Rect::from_min_size(pos2(inner.left() + label_w, y), vec2((inner.width() - label_w).min(300.0), 26.0));
+            kit::section(p, pos2(r.left(), y + 13.0), Align2::LEFT_CENTER, "Stage");
+            let seg = Rect::from_min_size(pos2(r.left() + label_w, y), vec2((r.width() - label_w).min(300.0), 26.0));
             let names = ["WetOwl app", &format!("Rust · {} scenes", wo_deskcore::RUST_SCENES.len())];
             if let Some(i) = kit::segmented(ui, p, seg, &names, Some(v.rust as usize), Tone::Neutral, "stage-kind") {
                 desk.set_rust_stage(i == 1);
             }
             y += 26.0;
             if v.rust && let Some(why) = &v.why {
-                kit::clipped(p, pos2(inner.left() + label_w, y + 14.0), why, 12.0, "", t::faint(), inner.width() - label_w);
+                kit::clipped(p, pos2(r.left() + label_w, y + 14.0), why, 12.0, "", t::faint(), r.width() - label_w);
             }
         }
     }

@@ -2,7 +2,8 @@
 //! the live stage, blurred, driven by wo-deskcore. `--bench 30 [--out DIR]` measures it;
 //! `--stage` opens the show's window from the start; `--page show` opens on the Show page,
 //! `--page kit` on the kit's gallery (every control in every state); `--overlay keys` or
-//! `--overlay settings` (or `milk`: MilkDrop's library) opens with that over it, `--size 1440x860` at that size (screenshots).
+//! `--overlay settings` (or `milk`: MilkDrop's library) opens with that over it, `--show-tab dancers`
+//! the Show page's card on that tab, `--size 1440x860` at that size (screenshots).
 //!
 //! The Desk keeps time on a thread of its own (the Auto DJ, the controllers, the stage's
 //! frames), so the set goes on while the window is hidden — behind a full-screen stage,
@@ -92,6 +93,8 @@ pub(crate) struct App {
     pub(crate) said: (u32, Option<Instant>),
     /// The strobe held down on the page.
     pub(crate) strobe: bool,
+    /// The Show page's card under PERFORM: the hands (0), the dancers (1), the sets (2), the screen (3).
+    pub(crate) show_tab: usize,
     /// MilkDrop's library open on the Show page, and what is searched for in it.
     pub(crate) milk_list: bool,
     pub(crate) milk_query: String,
@@ -204,6 +207,10 @@ impl App {
             app.page = show::Page::Show;
             app.milk_list = true;
         }
+        // --show-tab hands|dancers|sets|screen: the Show page's card on that tab (screenshots)
+        if let Some(t) = arg("--show-tab") {
+            app.show_tab = ["hands", "dancers", "sets", "screen"].iter().position(|n| *n == t).unwrap_or(0);
+        }
         app
     }
 
@@ -241,6 +248,7 @@ impl App {
             page: show::Page::Booth,
             said: (0, None),
             strobe: false,
+            show_tab: 0,
             milk_list: false,
             milk_query: String::new(),
             prefs,

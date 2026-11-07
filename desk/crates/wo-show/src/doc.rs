@@ -170,6 +170,11 @@ impl ShowDoc {
         Quantise::of(self.pool().get("quantise"), Quantise::Bar)
     }
 
+    /// LAND ON, kept (as v1: the bar as shipped, left out).
+    pub fn set_quantise(&mut self, q: Quantise) {
+        self.put("quantise", (q != Quantise::Bar).then(|| Value::from(q.name())));
+    }
+
     pub fn strength(&self) -> f64 {
         num(self.pool().get("strength"), 1.0)
     }
@@ -191,6 +196,35 @@ impl ShowDoc {
     /// Who dances (None or "mix": each record its own).
     pub fn dancer(&self) -> Option<String> {
         self.pool().get("dancer").and_then(Value::as_str).map(str::to_owned)
+    }
+
+    /// A dancer alone, or None: a mix.
+    pub fn set_dancer(&mut self, id: Option<&str>) {
+        self.put("dancer", id.filter(|d| *d != "mix").map(Value::from));
+    }
+
+    /// What the hands switched off, by key (`dancer.joe`…): v1's pool `off`.
+    fn off(&self) -> Vec<String> {
+        self.pool().get("off").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+    }
+
+    /// The dancers kept out of the mix, by id.
+    pub fn dancers_off(&self) -> Vec<String> {
+        self.off().iter().filter_map(|k| k.strip_prefix("dancer.").map(str::to_owned)).collect()
+    }
+
+    /// A dancer let into the mix, or kept out of it (one kept out cannot dance alone).
+    pub fn set_dancer_on(&mut self, id: &str, on: bool) {
+        let key = format!("dancer.{id}");
+        let mut off: Vec<String> = self.off().into_iter().filter(|k| *k != key).collect();
+        if !on {
+            off.push(key);
+            if self.dancer().as_deref() == Some(id) {
+                self.set_dancer(None);
+            }
+        }
+        off.sort();
+        self.put("off", (!off.is_empty()).then(|| Value::Array(off.into_iter().map(Value::from).collect())));
     }
 
     // ---------------------------------------------------------------- favourites, taste
@@ -282,6 +316,27 @@ impl ShowDoc {
 mod tests {
     use super::*;
     use crate::plan::PlanAxis;
+
+    #[test]
+    fn land_on_and_who_dances_are_kept_as_v1_keeps_them() {
+        let mut d = ShowDoc::parse(r#"{"v":1,"pool":{"off":["scene.flock"],"dancer":"joe"}}"#).unwrap();
+        assert_eq!(d.quantise(), Quantise::Bar);
+        d.set_quantise(Quantise::Phrase);
+        assert_eq!(d.to_value()["pool"]["quantise"], "phrase");
+        d.set_quantise(Quantise::Bar);
+        assert!(d.to_value()["pool"].get("quantise").is_none(), "the bar as shipped: left out");
+        assert_eq!(d.dancer().as_deref(), Some("joe"));
+        d.set_dancer_on("joe", false);
+        assert_eq!(d.dancers_off(), vec!["joe".to_owned()]);
+        assert_eq!(d.dancer(), None, "one kept out cannot dance alone");
+        assert_eq!(d.to_value()["pool"]["off"], serde_json::json!(["dancer.joe", "scene.flock"]), "v1's other switches untouched");
+        d.set_dancer_on("joe", true);
+        d.set_dancer(Some("chris"));
+        assert!(d.dancers_off().is_empty());
+        assert_eq!(d.dancer().as_deref(), Some("chris"));
+        d.set_dancer(Some("mix"));
+        assert_eq!(d.dancer(), None);
+    }
 
     #[test]
     fn what_v2_does_not_read_goes_back_out_untouched() {
