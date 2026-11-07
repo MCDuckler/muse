@@ -1,0 +1,70 @@
+# XcodeGen spec: `xcodegen generate` (in ios/) writes WetOwl.xcodeproj from this.
+# The project file is generated, never committed.
+#
+# WetOwl for iPhone, native (v2). Listening only: no booth, no show.
+# iOS 16 is the floor because the iPhone 8 stops there.
+name: WetOwl
+options:
+  bundleIdPrefix: dance.duckduck
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    # Built unsigned on CI; SideStore signs on the phone.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "NO"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+targets:
+  WetOwl:
+    type: application
+    platform: iOS
+    sources:
+      - path: WetOwl
+    info:
+      path: Support/Info.plist
+      properties:
+        CFBundleDisplayName: WetOwl
+        CFBundleName: WetOwl
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: Ground
+        UIUserInterfaceStyle: Dark
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIBackgroundModes: [audio]
+        UIAppFonts: [Archivo-MarkBlack.ttf, Archivo-CondensedSemiBold.ttf]
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        ITSAppUsesNonExemptEncryption: false
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dance.duckduck.wetowl
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  WetOwlTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: WetOwlTests
+    dependencies:
+      - target: WetOwl
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dance.duckduck.wetowl.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+schemes:
+  WetOwl:
+    build:
+      targets:
+        WetOwl: all
+        WetOwlTests: [test]
+    test:
+      targets: [WetOwlTests]

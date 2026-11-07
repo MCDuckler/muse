@@ -1,0 +1,155 @@
+# WetOwl for iPhone, native (ios/): build, test, screenshot, package.
+#
+# Swift only compiles on macOS, so this is the compiler. Every push to the ios branch:
+#   1. unit tests on an iPhone SE (3rd generation) simulator, which has the iPhone 8's
+#      screen (375 × 667 points), the smallest phone the app is made for;
+#   2. screenshots of every screen in demo mode (fixtures, no house, no account) on that
+#      phone and on a big one, uploaded as the "screens" artifact;
+#   3. an unsigned device build wrapped as an ipa (artifact "WetOwl-ipa").
+# A run dispatched with release=true, or a push whose message says [release], also
+# publishes the ipa as a GitHub release for SideStore. Unsigned: SideStore signs it on
+# the phone, so no Apple credentials come near this.
+name: iPhone app (native)
+
+on:
+  push:
+    branches: [ios]
+    paths: ["ios/**", ".github/workflows/ios-native.yml"]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Publish the ipa as a release
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick Xcode
+        run: |
+          ls -d /Applications/Xcode_*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: Generate the project
+        run: |
+          brew install xcodegen >/dev/null
+          xcodegen generate
+
+      - name: Version
+        id: v
+        run: |
+          ver="$(grep -E '^ +MARKETING_VERSION: "' project.yml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          build="$(date -u +%Y%m%d%H%M)"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "tag=ios2-$ver-$build" >> "$GITHUB_OUTPUT"
+
+      - name: Simulators
+        id: sim
+        run: |
+          runtime="$(xcrun simctl list runtimes -j | python3 -c '
+          import json, sys
+          rs = [r for r in json.load(sys.stdin)["runtimes"] if r.get("platform") == "iOS" and r.get("isAvailable")]
+          rs.sort(key=lambda r: [int(p) for p in r["version"].split(".")])
+          print(rs[-1]["identifier"])')"
+          echo "runtime: $runtime"
+          small="$(xcrun simctl create wo-small com.apple.CoreSimulator.SimDeviceType.iPhone-SE-3rd-generation "$runtime")"
+          big="$(xcrun simctl create wo-big com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$runtime" || true)"
+          echo "small=$small" >> "$GITHUB_OUTPUT"
+          echo "big=$big" >> "$GITHUB_OUTPUT"
+
+      - name: Build and test
+        run: |
+          set -o pipefail
+          xcodebuild -project WetOwl.xcodeproj -scheme WetOwl \
+            -destination "id=${{ steps.sim.outputs.small }}" -derivedDataPath build-sim \
+            CODE_SIGNING_ALLOWED=NO test > test.log 2>&1 || {
+              grep -E "error:|warning: unreachable|: failed|\*\* TEST|\*\* BUILD|Fatal|crash" test.log | head -120
+              echo "::error::build or tests failed"; exit 1; }
+          grep -E "warning:" test.log | grep -v -E "appintents|Metadata extraction" | sort -u | head -40 || true
+          grep -E "Executed|\*\* TEST" test.log | tail -3
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-log
+          path: ios/test.log
+
+      - name: Screens
+        run: |
+          app="$(find build-sim/Build/Products -path '*iphonesimulator*' -name WetOwl.app -maxdepth 3 | head -1)"
+          mkdir -p shots
+          shoot() {
+            udid="$1"; tag="$2"; shift 2
+            xcrun simctl boot "$udid" 2>/dev/null || true
+            xcrun simctl bootstatus "$udid" -b >/dev/null
+            xcrun simctl status_bar "$udid" override --time 9:41 --batteryState charged --batteryLevel 100 \
+              --cellularMode active --cellularBars 4 --wifiBars 3 || true
+            xcrun simctl install "$udid" "$app"
+            for s in "$@"; do
+              xcrun simctl terminate "$udid" dance.duckduck.wetowl 2>/dev/null || true
+              xcrun simctl launch "$udid" dance.duckduck.wetowl -demo 1 -screen "$s" >/dev/null
+              sleep 6
+              xcrun simctl io "$udid" screenshot "shots/$tag-$s.png" >/dev/null
+            done
+            xcrun simctl shutdown "$udid" || true
+          }
+          shoot "${{ steps.sim.outputs.small }}" se login home search library playlist nowplaying queue settings
+          if [ -n "${{ steps.sim.outputs.big }}" ]; then
+            shoot "${{ steps.sim.outputs.big }}" big home nowplaying playlist
+          fi
+          ls -la shots
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screens
+          path: ios/shots
+          retention-days: 14
+
+      - name: Build for iPhone, unsigned
+        run: |
+          set -o pipefail
+          xcodebuild -project WetOwl.xcodeproj -scheme WetOwl -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            MARKETING_VERSION="${{ steps.v.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.v.outputs.build }}" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build > build.log 2>&1 || { grep -E "error:|\*\* BUILD" build.log | head -60; echo "::error::device build failed"; exit 1; }
+
+      - name: Wrap as ipa
+        run: |
+          mkdir -p out/Payload
+          cp -R build/Build/Products/Release-iphoneos/WetOwl.app out/Payload/
+          cd out && zip -qry WetOwl.ipa Payload && ls -lh WetOwl.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WetOwl-ipa
+          path: ios/out/WetOwl.ipa
+          retention-days: 30
+
+      - name: Release
+        if: inputs.release || contains(github.event.head_commit.message, '[release]')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.v.outputs.tag }}" out/WetOwl.ipa \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "WetOwl for iPhone (native) ${{ steps.v.outputs.version }} (${{ steps.v.outputs.build }})" \
+            --notes "Native SwiftUI build of ${GITHUB_SHA::7}, unsigned. Open the ipa with SideStore. Installs beside the Flutter app (bundle dance.duckduck.wetowl)."
