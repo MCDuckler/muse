@@ -129,6 +129,23 @@ WE_API void we_deck_echo(int deck, float send, float dry, double beat);
 WE_API void we_deck_brake(int deck, double seconds);
 WE_API void we_master_level(float gain);
 
+// ---- pads (the board) ------------------------------------------------------------
+
+// A pool of short sounds over the decks: each slot a source played from `from` to `to`
+// source seconds (to <= from: to its end), once or round and round, at a gain, from the
+// moment `at` is heard (we_now() time; now or past: at once) — so a pad meant for the
+// next beat sounds on it. Summed into the master under the board's level, before the
+// master's level and its limiter. The slots (0..WE_PADS-1) are the caller's to choose;
+// playing a slot again starts it over.
+#define WE_PADS 24
+WE_API void we_pad_play(int slot, int source, double at, double from, double to, int loop, float gain);
+// Let go, faded over `fade` seconds (0: at once).
+WE_API void we_pad_stop(int slot, double fade);
+WE_API void we_pad_gain(int slot, float gain, double ramp);
+WE_API void we_pads_level(float gain, double ramp);
+// Whether a slot sounds (or waits for its moment), and where in its source it is, seconds.
+WE_API int we_pad_playing(int slot, double* at);
+
 // ---- what a deck is doing --------------------------------------------------------
 
 typedef struct {

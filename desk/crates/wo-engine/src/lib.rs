@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use wo_engine_sys as sys;
 
-pub use sys::{WE_DECKS as DECKS, WE_SOURCES as SOURCE_SLOTS, WE_SPECTRUM as SPECTRUM};
+pub use sys::{WE_DECKS as DECKS, WE_PADS as PADS, WE_SOURCES as SOURCE_SLOTS, WE_SPECTRUM as SPECTRUM};
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -330,6 +330,35 @@ impl Engine {
 
     pub fn set_master_level(&self, gain: f32) {
         unsafe { sys::we_master_level(gain) }
+    }
+
+    /// Pad `slot` (0..PADS) plays `source` from `from` to `to` seconds (to <= from: its
+    /// end), once or round (`looped`), at `gain`, from the moment `at` is heard ([Engine::now]
+    /// time; now or past: at once). Playing a slot again starts it over.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pad_play(&self, slot: usize, source: &Source, at: f64, from: f64, to: f64, looped: bool, gain: f32) {
+        assert!(slot < PADS, "the board has {PADS} voices");
+        unsafe { sys::we_pad_play(slot as i32, source.id, at, from, to, looped as i32, gain) }
+    }
+
+    /// Pad `slot` let go, faded over `fade` seconds (0: at once).
+    pub fn pad_stop(&self, slot: usize, fade: f64) {
+        unsafe { sys::we_pad_stop(slot as i32, fade) }
+    }
+
+    pub fn pad_gain(&self, slot: usize, gain: f32, ramp: f64) {
+        unsafe { sys::we_pad_gain(slot as i32, gain, ramp) }
+    }
+
+    /// The board's own level over every pad.
+    pub fn pads_level(&self, gain: f32, ramp: f64) {
+        unsafe { sys::we_pads_level(gain, ramp) }
+    }
+
+    /// Pad `slot` sounding (or waiting for its moment): where in its source, seconds.
+    pub fn pad_at(&self, slot: usize) -> Option<f64> {
+        let mut at = 0.0;
+        (unsafe { sys::we_pad_playing(slot as i32, &mut at) } != 0).then_some(at)
     }
 
     /// What was heard on `bus` in (from, to], engine time. Measuring runs while asked:

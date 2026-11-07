@@ -162,7 +162,19 @@ struct Deck {
 
 enum CmdKind {
   kSource, kSourceGain, kPlay, kSeek, kRate, kBend, kKeylock, kShift, kBeats, kSync, kBarOne, kStart,
-  kLoop, kLoopBeats, kLevel, kEq, kFilter, kGate, kEcho, kBrake, kMaster, kFreeSource, kSyncOffset, kAlign, kSyncOctave
+  kLoop, kLoopBeats, kLevel, kEq, kFilter, kGate, kEcho, kBrake, kMaster, kFreeSource, kSyncOffset, kAlign, kSyncOctave,
+  kPadPlay, kPadStop, kPadGain, kPadsLevel
+};
+
+// ------------------------------------------------------------------ pads (the board)
+// A short sound over the decks: a source played once or round from `from` to `to`
+// (frames; to <= from: its end), waiting until `at` is heard.
+struct Pad {
+  Source* src = nullptr;
+  bool on = false, loop = false, waiting = false, stopping = false;
+  double at = 0;
+  int64_t pos = 0, from = 0, to = 0;
+  Ramp gain, fade;
 };
 struct Cmd {
   CmdKind kind;
@@ -234,6 +246,11 @@ struct Engine {
   std::atomic<int64_t> rendered{0};
   std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
   std::array<Deck, WE_DECKS> decks;
+  std::array<Pad, WE_PADS> pads;
+  Ramp padsLevel;
+  float padBuf[kBlock * 2];
+  std::atomic<int32_t> padOn[WE_PADS]{};
+  std::atomic<double> padPos[WE_PADS]{};
   Ramp master;
   Limiter limiter;
   // commands, from Dart to the audio thread
@@ -645,8 +662,97 @@ double inStepAt(Deck& f, Deck& m, double masterSec, double near) {
 }
 
 // ------------------------------------------------------------------ commands
+void applyPad(const Cmd& c) {
+  if (c.kind == kPadsLevel) { E->padsLevel.set(c.f0, (int)(c.d0 * E->rate)); return; }
+  if (c.i0 < 0 || c.i0 >= WE_PADS) return;
+  Pad& p = E->pads[(size_t)c.i0];
+  switch (c.kind) {
+    case kPadPlay: {
+      Source* s = nullptr;
+      { std::lock_guard<std::mutex> g(E->srcLock);
+        if (c.i1 > 0 && c.i1 < (int)E->sources.size()) s = E->sources[(size_t)c.i1]; }
+      p.src = s;
+      p.on = s != nullptr;
+      p.waiting = true;
+      p.stopping = false;
+      p.at = c.d0;
+      p.from = (int64_t)std::max(0.0, c.d1 * E->rate);
+      p.to = c.d2 > c.d1 ? (int64_t)(c.d2 * E->rate) : 0;
+      p.pos = p.from;
+      p.loop = c.i2 != 0;
+      p.gain.set(c.f0, 0);
+      p.fade.set(1, 0);
+      break;
+    }
+    case kPadStop:
+      if (c.d0 <= 0) { p.on = false; }
+      else { p.fade.set(0, std::max(1, (int)(c.d0 * E->rate))); p.stopping = true; }
+      break;
+    case kPadGain: p.gain.set(c.f0, (int)(c.d0 * E->rate)); break;
+    default: break;
+  }
+}
+
+// The pads into `out`, the block heard at `at`: each from its moment, under the board's
+// level.
+void renderPads(float* out, int n, double at) {
+  bool any = false;
+  for (auto& p : E->pads) any = any || p.on;
+  if (!any) {
+    for (int i = 0; i < WE_PADS; i++) E->padOn[i].store(0, std::memory_order_relaxed);
+    for (int k = 0; k < n; k++) E->padsLevel.next();
+    return;
+  }
+  std::memset(E->padBuf, 0, sizeof(float) * (size_t)n * 2);
+  const double span = (double)n / E->rate;
+  for (int i = 0; i < WE_PADS; i++) {
+    Pad& p = E->pads[(size_t)i];
+    if (!p.on || !p.src) {
+      p.on = false;
+      E->padOn[i].store(0, std::memory_order_relaxed);
+      continue;
+    }
+    int k0 = 0;
+    if (p.waiting) {
+      if (p.at >= at + span) {
+        E->padOn[i].store(1, std::memory_order_relaxed);
+        continue;
+      }
+      k0 = p.at > at ? std::min(n, (int)((p.at - at) * E->rate)) : 0;
+      p.waiting = false;
+    }
+    const int64_t avail = p.src->frames.load(std::memory_order_acquire);
+    const bool whole = p.src->done.load(std::memory_order_acquire);
+    const int64_t end = p.to > p.from ? std::min(p.to, avail) : avail;
+    const bool endKnown = whole || (p.to > p.from && avail >= p.to);
+    const int ch = p.src->channels;
+    for (int k = k0; k < n; k++) {
+      if (p.pos >= end) {
+        if (!endKnown) break;                          // still coming in: wait for it
+        if (p.loop && end > p.from) p.pos = p.from;
+        else { p.on = false; break; }
+      }
+      const int16_t* f = p.src->frame(p.pos);
+      const float l = f[0] / 32768.0f, r = ch > 1 ? f[1] / 32768.0f : l;
+      const float g = p.gain.next() * p.fade.next();
+      E->padBuf[k * 2] += l * g;
+      E->padBuf[k * 2 + 1] += r * g;
+      p.pos++;
+      if (p.stopping && !p.fade.moving()) { p.on = false; break; }
+    }
+    E->padOn[i].store(p.on ? 1 : 0, std::memory_order_relaxed);
+    E->padPos[i].store((double)p.pos / E->rate, std::memory_order_relaxed);
+  }
+  for (int k = 0; k < n; k++) {
+    const float lv = E->padsLevel.next();
+    out[k * 2] += E->padBuf[k * 2] * lv;
+    out[k * 2 + 1] += E->padBuf[k * 2 + 1] * lv;
+  }
+}
+
 void apply(const Cmd& c) {
   if (c.kind == kMaster) { E->master.set(c.f0, (int)(E->rate * 0.02)); return; }
+  if (c.kind == kPadPlay || c.kind == kPadStop || c.kind == kPadGain || c.kind == kPadsLevel) { applyPad(c); return; }
   if (c.kind == kFreeSource) {
     E->pendingFree.push_back(c.i0);
     return;
@@ -903,6 +1009,7 @@ void block(float* out, int n, float** deckOut, double at) {
       { std::lock_guard<std::mutex> g(E->srcLock); if (id > 0 && id < (int)E->sources.size()) s = E->sources[(size_t)id]; }
       bool inUse = false;
       for (auto& d : E->decks) for (auto& sl : d.slots) if (sl.src == s) inUse = true;
+      for (auto& p : E->pads) if (p.on && p.src == s) inUse = true;
       if (!inUse && s) { E->retiredSources.push_back(s); E->pendingFree.erase(E->pendingFree.begin() + (long)i); }
       else if (!s) E->pendingFree.erase(E->pendingFree.begin() + (long)i);
       else i++;
@@ -917,6 +1024,7 @@ void block(float* out, int n, float** deckOut, double at) {
     if (deckOut && deckOut[d.index]) std::memcpy(deckOut[d.index], d.buf, sizeof(float) * (size_t)n * 2);
     for (int k = 0; k < n * 2; k++) out[k] += d.buf[k];
   }
+  renderPads(out, n, at);
   if (E->split) {
     Deck& a = E->decks[0]; Deck& b = E->decks[1];
     for (int k = 0; k < n; k++) {
@@ -1285,6 +1393,18 @@ WE_API void we_deck_echo(int deck, float send, float dry, double beat) {
 }
 WE_API void we_deck_brake(int deck, double seconds) { Cmd c{kBrake}; c.deck = deck; c.d0 = seconds; push(c); }
 WE_API void we_master_level(float gain) { Cmd c{kMaster}; c.f0 = gain; push(c); }
+
+WE_API void we_pad_play(int slot, int source, double at, double from, double to, int loop, float gain) {
+  Cmd c{kPadPlay}; c.i0 = slot; c.i1 = source; c.i2 = loop; c.d0 = at; c.d1 = from; c.d2 = to; c.f0 = gain; push(c);
+}
+WE_API void we_pad_stop(int slot, double fade) { Cmd c{kPadStop}; c.i0 = slot; c.d0 = fade; push(c); }
+WE_API void we_pad_gain(int slot, float gain, double ramp) { Cmd c{kPadGain}; c.i0 = slot; c.f0 = gain; c.d0 = ramp; push(c); }
+WE_API void we_pads_level(float gain, double ramp) { Cmd c{kPadsLevel}; c.f0 = gain; c.d0 = ramp; push(c); }
+WE_API int we_pad_playing(int slot, double* at) {
+  if (!E || slot < 0 || slot >= WE_PADS) return 0;
+  if (at) *at = E->padPos[slot].load(std::memory_order_relaxed);
+  return E->padOn[slot].load(std::memory_order_relaxed);
+}
 
 WE_API void we_deck_read(int deck, we_deck_state* out) {
   if (!E || deck < 0 || deck >= WE_DECKS || !out) return;
