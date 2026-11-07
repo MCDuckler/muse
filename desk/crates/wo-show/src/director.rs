@@ -598,6 +598,10 @@ impl Director {
         } else if self.held_by.is_none() && !self.locked {
             let current = fits.iter().position(|f| Some(f.id.as_str()) == self.scene.as_deref());
             let suits = current.is_some_and(|c| c < 2);
+            // how long it stays at least before a phrase may change it (the hands' say per
+            // scene); one kept longer than the director's own outlasts a section too, for half
+            // of it
+            let stay = self.scene.as_deref().and_then(|s| self.plan.stay_of(s)).unwrap_or(KEEP_BARS);
             let on = self.on();
             let soft = if m.breakdown { SceneChange::Dissolve } else { SceneChange::Cut };
             if !on.iter().any(|f| Some(f.id.as_str()) == self.scene.as_deref()) {
@@ -612,11 +616,11 @@ impl Director {
             } else if let Some(b) = turned.then(|| self.booked(m.section.as_deref(), &fits)).flatten() {
                 let why = format!("the {} again: its scene, as the last time", m.section.clone().unwrap_or_default());
                 self.go(&b, soft, &why, true);
-            } else if section && !suits {
+            } else if section && !suits && (stay <= KEEP_BARS || self.since_bar * 2 >= stay) {
                 let why = format!("the section turned{}: the best fit", m.section.as_ref().map(|s| format!(" to the {s}")).unwrap_or_default());
                 let id = fits[0].id.clone();
                 self.go(&id, soft, &why, true);
-            } else if phrase && self.since_bar >= KEEP_BARS && (!suits || self.rng.next_f64() < 0.35) {
+            } else if phrase && self.since_bar >= stay && (!suits || self.rng.next_f64() < 0.35) {
                 let pool: Vec<SceneMeta> = fits.iter().take(3).filter(|f| Some(f.id.as_str()) != self.scene.as_deref()).cloned().collect();
                 if self.scene.as_deref().is_some_and(|s| s.starts_with("dance-")) && fits.iter().any(|f| f.id == "flock") && self.rng.next_f64() < 0.6 {
                     self.go("flock", SceneChange::Dissolve, "after the dancers, the birds", false);
@@ -636,13 +640,19 @@ impl Director {
             let label = if m.breakdown { Some("breakdown".to_string()) } else { m.section.clone() };
             let booked = if turned { label.as_ref().and_then(|l| self.combo_book.get(l).cloned()) } else { None };
             let scene = self.scene.clone().unwrap();
+            // how often its look changes while it is on (the hands' say per scene): the bars
+            // between changes over it; none at all at 0
+            let turn = self.plan.turn_of(&scene);
+            let bars = |b: i64| if turn <= 0.0 { i64::MAX } else { ((b as f64 / turn).round() as i64).max(1) };
             match c {
                 None => self.pick_combo(true, false),
                 Some(c) if c.scene != scene => self.pick_combo(true, false),
                 Some(c) if (!c.world() && !self.grounds_now().contains(&c.ground)) || self.weigh(&c) <= 0.0 => self.pick_combo(false, false),
                 Some(c) if booked.as_ref() == Some(&c) => {}
                 Some(c) => {
-                    if let Some(b) = booked.filter(|b| b.scene == scene && self.weigh(b) > 0.0)
+                    if turn <= 0.0 {
+                        // its look held while it is on
+                    } else if let Some(b) = booked.filter(|b| b.scene == scene && self.weigh(b) > 0.0)
                         && self.rng.next_f64() < 0.75
                     {
                         self.set_combo(b);
@@ -650,13 +660,13 @@ impl Director {
                     } else if drop && self.combo_since_bar > 0 {
                         self.pick_combo(false, false);
                         self.mosh_combo(&c, true);
-                    } else if phrase && m.build_k > 0.05 && !m.breakdown && self.combo_since_bar >= 4 {
+                    } else if phrase && m.build_k > 0.05 && !m.breakdown && self.combo_since_bar >= bars(4) {
                         self.pick_combo(true, false);
                         self.mosh_combo(&c, false);
-                    } else if phrase && self.ground_since_bar >= GROUND_HOLD_BARS && self.rng.next_f64() < 0.5 {
+                    } else if phrase && self.ground_since_bar >= bars(GROUND_HOLD_BARS) && self.rng.next_f64() < 0.5 {
                         self.pick_combo(false, false);
                         self.mosh_combo(&c, false);
-                    } else if (turned && self.combo_since_bar > 2) || (phrase && self.combo_since_bar >= STYLE_BARS && self.rng.next_f64() < 0.5) {
+                    } else if (turned && self.combo_since_bar > 2) || (phrase && self.combo_since_bar >= bars(STYLE_BARS) && self.rng.next_f64() < 0.5) {
                         self.pick_combo(true, false);
                         self.mosh_combo(&c, false);
                     }

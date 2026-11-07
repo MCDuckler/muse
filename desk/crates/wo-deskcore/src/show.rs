@@ -78,6 +78,10 @@ pub enum ShowEdit {
     CopyFrom(String, String),
     /// One of a scene's looks on, as likely as the plan says (on LAND ON, held).
     PlayScene(String),
+    /// When a scene changes: the bars it stays at least (None: the director's own), how
+    /// often its look changes while on (1 as shipped, 0 never).
+    Stay(String, Option<i64>),
+    Turn(String, f64),
     /// A move kept out of the dancing or let in, starred, asked for.
     MoveOn(String, bool),
     MoveStar(String, bool),

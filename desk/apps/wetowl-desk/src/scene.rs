@@ -6,6 +6,7 @@
 //! camera's framings; the dancers' moves. PLAY IT puts one of its looks on; COPY FROM makes
 //! it like another scene.
 use eframe::egui::{self, Align2, Color32, CornerRadius, Painter, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use wo_deskcore::move_player::{MoveLook, MovePlayer};
 use wo_deskcore::{Desk, MovesView, OwnRows, ScenePage, ShowEdit, Square, SquareDo, Variants, level_word, share_word};
 
 use crate::App;
@@ -19,6 +20,14 @@ use crate::ui::tokens::{self as t, Tone};
 const ROW: f32 = 30.0;
 const HEAD: f32 = 34.0;
 const NAME_W: f32 = 96.0;
+/// The moves' viewer's height; a strip's poses, each so big.
+const VIEW_H: f32 = 300.0;
+const STRIP_N: usize = 6;
+const STRIP_W: f32 = 24.0;
+const STRIP_H: f32 = 44.0;
+
+/// The dancers as read on a thread, and their skins' pixels.
+type Loaded = (Option<std::sync::Arc<MovePlayer>>, Vec<Option<(u32, u32, Vec<u8>)>>);
 
 /// The page's own state: the grid with the off styles and backgrounds too, the style whose
 /// knobs are open, one square's masks and blends open, the moves' filters.
@@ -37,6 +46,24 @@ pub(crate) struct SceneUi {
     pub shown: Option<String>,
     /// Scrolled this far down once (screenshots: --scroll).
     pub scroll: Option<f32>,
+    /// The moves' viewer: the dancers (loaded when first watched), their skins, the move
+    /// watched and how, the strips drawn so far.
+    pub player: Option<Option<std::sync::Arc<MovePlayer>>>,
+    /// The dancers being read on a thread (with their skins' pixels).
+    pub player_job: Option<std::sync::mpsc::Receiver<Loaded>>,
+    pub skin_px: Vec<Option<(u32, u32, Vec<u8>)>>,
+    pub skins: Vec<Option<egui::TextureHandle>>,
+    pub watch: Option<String>,
+    pub beat: f64,
+    pub paused: bool,
+    pub speed: f64,
+    pub look: MoveLook,
+    pub mirror: bool,
+    pub model: usize,
+    pub record_tempo: bool,
+    pub strips: std::collections::HashMap<(usize, String), egui::TextureHandle>,
+    /// The master's tempo while a record plays (the Show page's, each frame).
+    pub tempo: Option<f64>,
 }
 
 impl App {
@@ -126,6 +153,11 @@ impl App {
         // the grid of its looks, the whole width
         y += self.looks_grid(desk, ui, p, Rect::from_min_size(pos2(at.x, y), vec2(w, 0.0)), page, strength) + 18.0;
         if let Some(m) = moves {
+            head(p, Rect::from_min_size(pos2(at.x, y), vec2(w, 0.0)), y, "Who dances", "a name dances alone · one kept out of the mix never leads it");
+            y += HEAD;
+            let v = desk.stage();
+            self.dancers_tab(desk, ui, p, Rect::from_min_size(pos2(at.x, y), vec2(w.min(620.0), 90.0)), &v);
+            y += 90.0 + 14.0;
             y += self.moves_list(desk, ui, p, Rect::from_min_size(pos2(at.x, y), vec2(w, 0.0)), m, two);
         }
         y - at.y
@@ -147,6 +179,29 @@ impl App {
             kit::clipped(p, pos2(r.left() + 18.0, y + 8.0), n, 11.5, "", t::soft(), r.width() - 18.0);
             y += 20.0;
         }
+        // when it changes
+        y += 14.0;
+        head(p, r, y, "When it changes", "a drop may still cut to another");
+        y += HEAD;
+        let label_w = 130.0;
+        let seg_w = (r.width() - label_w).min(360.0);
+        let lr = kit::section(p, pos2(r.left(), y + 13.0), Align2::LEFT_CENTER, "Stays at least");
+        ui.interact(lr, ui.scope_id().with("tip-stay"), Sense::hover()).on_hover_text("The bars it stays on before a new phrase may change it (the director's own: 8, a long one outlasts half a section too)");
+        let stays = [Some(4), None, Some(16), Some(32)];
+        let seg = Rect::from_min_size(pos2(r.left() + label_w, y), vec2(seg_w, 26.0));
+        if let Some(i) = kit::segmented(ui, p, seg, &["4 bars", "8 · as ever", "16 bars", "32 bars"], stays.iter().position(|s| *s == page.stay).or(Some(1)), Tone::Neutral, "stay") {
+            desk.show_edit(ShowEdit::Stay(page.id.clone(), stays[i]));
+        }
+        y += 34.0;
+        let lr = kit::section(p, pos2(r.left(), y + 13.0), Align2::LEFT_CENTER, "Its look changes");
+        ui.interact(lr, ui.scope_id().with("tip-turn"), Sense::hover()).on_hover_text("How often its style, background and blend change while it is on: never keeps the look it came on with");
+        let turns = [2.0, 1.0, 0.5, 0.0];
+        let seg = Rect::from_min_size(pos2(r.left() + label_w, y), vec2(seg_w, 26.0));
+        let at = turns.iter().position(|k| (k - page.turn).abs() < 1e-6);
+        if let Some(i) = kit::segmented(ui, p, seg, &["Often", "As ever", "Seldom", "Never"], at, Tone::Neutral, "turn") {
+            desk.show_edit(ShowEdit::Turn(page.id.clone(), turns[i]));
+        }
+        y += 34.0;
         if page.styles.is_empty() {
             return y - r.top();
         }
@@ -463,6 +518,35 @@ impl App {
             kit::hint(p, pos2(r.left(), y + 10.0), Align2::LEFT_CENTER, "The dancers are not here (their folder beside the Desk)");
             return y + 24.0 - r.top();
         }
+        // the dancers read once, on a thread (a few megabytes and their skins)
+        if self.scene_ui.player.is_none() && self.scene_ui.player_job.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let pl = MovePlayer::load().map(std::sync::Arc::new);
+                let skins = pl.as_ref().map(|p| (0..p.models().len()).map(|k| p.skin(k)).collect()).unwrap_or_default();
+                let _ = tx.send((pl, skins));
+            });
+            self.scene_ui.player_job = Some(rx);
+        }
+        if let Some(rx) = &self.scene_ui.player_job {
+            match rx.try_recv() {
+                Ok((pl, skins)) => {
+                    self.scene_ui.player = Some(pl);
+                    self.scene_ui.skin_px = skins;
+                    self.scene_ui.player_job = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(50)),
+                Err(_) => self.scene_ui.player_job = None,
+            }
+        }
+        let player = self.scene_ui.player.clone().flatten();
+        if player.is_none() && self.scene_ui.player_job.is_some() {
+            kit::hint(p, pos2(r.left(), y + 12.0), Align2::LEFT_CENTER, "Reading the dancers…");
+            y += 30.0;
+        }
+        if let Some(pl) = &player {
+            y += self.move_viewer(desk, ui, p, Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), VIEW_H)), m, pl) + 14.0;
+        }
         // the filters
         let su = &mut self.scene_ui;
         let mut x = r.left();
@@ -511,17 +595,40 @@ impl App {
         let cols = if two { 2 } else { 1 };
         let gap = 24.0;
         let cw = (r.width() - gap * (cols - 1) as f32) / cols as f32;
-        let rh = 30.0;
+        let rh = 52.0;
         let clip = ui.clip_rect();
+        let mut made = 0;
         for (i, mv) in shown.iter().enumerate() {
             let (c, row) = (i % cols, i / cols);
-            let rr = Rect::from_min_size(pos2(r.left() + c as f32 * (cw + gap), y + row as f32 * rh), vec2(cw, rh));
+            let rr = Rect::from_min_size(pos2(r.left() + c as f32 * (cw + gap), y + row as f32 * rh), vec2(cw, rh - 4.0));
             if !clip.intersects(rr) {
                 continue;
             }
+            let watched = self.scene_ui.watch.as_deref() == Some(mv.id.as_str());
+            if watched {
+                p.rect_filled(rr, CornerRadius::same(t::R_CONTROL), white(0.05));
+            }
+            // its poses, a strip (a few drawn a frame)
+            let sr = Rect::from_min_size(pos2(rr.left() + 2.0, rr.top() + 2.0), vec2(STRIP_N as f32 * STRIP_W, STRIP_H));
+            let key = (self.scene_ui.model, mv.id.clone());
+            if !self.scene_ui.strips.contains_key(&key)
+                && made < 3
+                && let Some(pl) = &player
+            {
+                made += 1;
+                let px = pl.strip(self.scene_ui.model, &mv.id, STRIP_N, STRIP_W as u32, STRIP_H as u32);
+                let img = egui::ColorImage::from_rgba_unmultiplied([STRIP_N * STRIP_W as usize, STRIP_H as usize], &px);
+                self.scene_ui.strips.insert(key.clone(), ui.ctx().load_texture(format!("strip {}", mv.id), img, egui::TextureOptions::LINEAR));
+            }
+            if let Some(tex) = self.scene_ui.strips.get(&key) {
+                let tint = if mv.on { Color32::WHITE } else { Color32::from_gray(90) };
+                p.add(egui::epaint::RectShape::filled(sr, CornerRadius::ZERO, tint).with_texture(tex.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
+            } else if player.is_some() {
+                ui.ctx().request_repaint();
+            }
+            let tx = sr.right() + 10.0;
             let ink = if mv.on { t::text() } else { t::faint() };
-            let nr = kit::clipped(p, pos2(rr.left(), rr.center().y), &mv.id, 12.5, "mono", ink, 110.0);
-            let _ = nr;
+            kit::clipped(p, pos2(tx, rr.top() + 14.0), &mv.id, 12.5, "mono", ink, cw - (tx - rr.left()) - 124.0);
             let meta = format!(
                 "{} · {} · {:.0} bpm · {} beats · {:.1}{}",
                 mv.style,
@@ -531,23 +638,182 @@ impl App {
                 mv.energy,
                 mv.duo.as_ref().map(|d| format!(" · duet {d} {}", if mv.lead { "lead" } else { "partner" })).unwrap_or_default()
             );
-            kit::clipped(p, pos2(rr.left() + 118.0, rr.center().y), &meta, 11.0, "", t::faint(), cw - 118.0 - 120.0);
+            kit::clipped(p, pos2(tx, rr.top() + 32.0), &meta, 11.0, "", t::faint(), cw - (tx - rr.left()) - 124.0);
+            let pick = Rect::from_min_max(rr.min, pos2(rr.right() - 120.0, rr.bottom()));
+            if ui.interact(pick, ui.scope_id().with(("mv-watch", &mv.id)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Watch it above").clicked() {
+                self.scene_ui.watch = Some(mv.id.clone());
+                self.scene_ui.beat = 0.0;
+            }
             let asked = m.asked.as_deref() == Some(mv.id.as_str());
-            let ar = Rect::from_min_size(pos2(rr.right() - 116.0, rr.top() + 3.0), vec2(28.0, 24.0));
+            let cy = rr.center().y - 12.0;
+            let ar = Rect::from_min_size(pos2(rr.right() - 116.0, cy), vec2(28.0, 24.0));
             if Btn::new("").icon(Icon::Play).on(asked).quiet().show(ui, p, ar, ("mv-ask", &mv.id)).on_hover_text(if asked { "Asked for: the lead dances it at the next slot" } else { "The lead on the stage dances it at the next slot" }).clicked() {
                 desk.show_edit(ShowEdit::Audition(mv.id.clone()));
             }
-            let sr = Rect::from_min_size(pos2(rr.right() - 84.0, rr.top() + 3.0), vec2(28.0, 24.0));
-            if Btn::new("").icon(if mv.star { Icon::HeartFull } else { Icon::Heart }).on(mv.star).quiet().show(ui, p, sr, ("mv-star", &mv.id)).on_hover_text(if mv.star { "A favourite — plain again" } else { "A favourite: danced more" }).clicked() {
+            let st = Rect::from_min_size(pos2(rr.right() - 84.0, cy), vec2(28.0, 24.0));
+            if Btn::new("").icon(if mv.star { Icon::HeartFull } else { Icon::Heart }).on(mv.star).quiet().show(ui, p, st, ("mv-star", &mv.id)).on_hover_text(if mv.star { "A favourite — plain again" } else { "A favourite: danced more" }).clicked() {
                 desk.show_edit(ShowEdit::MoveStar(mv.id.clone(), !mv.star));
             }
-            let or = Rect::from_min_size(pos2(rr.right() - 48.0, rr.top() + 5.0), vec2(46.0, 20.0));
+            let or = Rect::from_min_size(pos2(rr.right() - 48.0, cy + 2.0), vec2(46.0, 20.0));
             if kit::chip(ui, p, or, if mv.on { "On" } else { "Off" }, mv.on, Tone::Neutral, true, ("mv-on", &mv.id)).on_hover_text(if mv.on { "On: may be danced — click: never" } else { "Off: never danced — click: back" }).clicked() {
                 desk.show_edit(ShowEdit::MoveOn(mv.id.clone(), !mv.on));
             }
         }
         let rows = shown.len().div_ceil(cols);
         y + rows as f32 * rh + 8.0 - r.top()
+    }
+}
+
+impl App {
+    /// The move watched: played on its own, square on, as the controls say; its facts and its
+    /// say beside. The height.
+    #[allow(clippy::too_many_arguments)]
+    fn move_viewer(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, m: &MovesView, pl: &MovePlayer) -> f32 {
+        let su = &mut self.scene_ui;
+        if su.speed == 0.0 {
+            su.speed = 1.0;
+        }
+        let id = su.watch.clone().filter(|w| m.moves.iter().any(|mv| mv.id == *w)).or_else(|| m.moves.iter().find(|mv| mv.on).map(|mv| mv.id.clone()));
+        let Some(id) = id else { return 0.0 };
+        let Some(facts) = pl.facts(&id) else { return 0.0 };
+        let mv = m.moves.iter().find(|x| x.id == id);
+        // the tempo: the move's own, or the record's (half or double where far off)
+        let bpm = match su.tempo.filter(|_| su.record_tempo) {
+            Some(mut b) => {
+                while b > facts.bpm * 1.45 {
+                    b /= 2.0;
+                }
+                while b < facts.bpm / 1.45 {
+                    b *= 2.0;
+                }
+                b
+            }
+            None => facts.bpm,
+        };
+        if !su.paused {
+            su.beat = (su.beat + ui.input(|i| i.stable_dt as f64) * bpm / 60.0 * su.speed) % facts.beats.max(1) as f64;
+            ui.ctx().request_repaint();
+        }
+        // the picture
+        let view = Rect::from_min_size(r.min, vec2((r.height() * 0.95).min(r.width() * 0.5), r.height()));
+        let cr = CornerRadius::same(t::R_PAD);
+        p.rect_filled(view, cr, Color32::from_rgb(12, 12, 16));
+        let floor = view.bottom() - view.height() * 0.1;
+        p.line_segment([pos2(view.left() + 12.0, floor), pos2(view.right() - 12.0, floor)], Stroke::new(1.0, white(0.05)));
+        if su.skins.is_empty() {
+            su.skins = std::mem::take(&mut su.skin_px)
+                .into_iter()
+                .enumerate()
+                .map(|(k, px)| px.map(|(w, h, rgba)| ui.ctx().load_texture(format!("skin {k}"), egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba), egui::TextureOptions::LINEAR)))
+                .collect();
+        }
+        let clip = p.with_clip_rect(view.intersect(p.clip_rect()));
+        for b in pl.bodies(su.model, &id, su.beat, su.mirror, view.width(), view.height()) {
+            let tex = match su.look {
+                MoveLook::Textured => su.skins.get(b.model).cloned().flatten().map(|t| t.id()),
+                _ => None,
+            };
+            let mut mesh = egui::Mesh::with_texture(tex.unwrap_or_default());
+            mesh.vertices = b
+                .at
+                .iter()
+                .zip(&b.uv)
+                .zip(&b.light)
+                .map(|((a, uv), l)| {
+                    let color = match su.look {
+                        MoveLook::Textured => Color32::from_gray((255.0 * (0.4 + 0.6 * l)).min(255.0) as u8),
+                        MoveLook::Chrome => {
+                            let c = 0.12 + 0.88 * l.powi(3);
+                            Color32::from_rgb((c * 215.0) as u8, (c * 228.0) as u8, (c * 255.0) as u8)
+                        }
+                        MoveLook::Silhouette => Color32::from_gray(225),
+                    };
+                    egui::epaint::Vertex { pos: pos2(view.left() + a[0], view.top() + a[1]), uv: if tex.is_some() { pos2(uv[0], uv[1]) } else { egui::epaint::WHITE_UV }, color }
+                })
+                .collect();
+            mesh.indices = b.tris;
+            clip.add(egui::Shape::mesh(mesh));
+        }
+        kit::text(p, pos2(view.left() + 10.0, view.bottom() - 14.0), Align2::LEFT_CENTER, &format!("beat {:.1} / {}", su.beat + 1.0, facts.beats), 10.5, "mono", t::faint());
+        // beside: what it is, how it is shown
+        let x = view.right() + 18.0;
+        let w = r.right() - x;
+        let mut y = r.top();
+        kit::text(p, pos2(x, y + 10.0), Align2::LEFT_CENTER, &id, 16.0, "mono", t::high());
+        if let Some(mv) = mv {
+            let meta = format!(
+                "{} · {} tier · {:.0} bpm · {} beats · energy {:.1}{}",
+                mv.style,
+                mv.tier,
+                mv.bpm,
+                mv.beats,
+                mv.energy,
+                mv.duo.as_ref().map(|d| format!(" · duet {d}, the {}", if mv.lead { "lead" } else { "partner" })).unwrap_or_default()
+            );
+            kit::clipped(p, pos2(x, y + 32.0), &meta, 11.5, "", t::soft(), w);
+        }
+        y += 50.0;
+        let label_w = 70.0;
+        let row = |p: &Painter, y: f32, word: &str| {
+            kit::section(p, pos2(x, y + 13.0), Align2::LEFT_CENTER, word);
+        };
+        row(p, y, "Play");
+        let pr = Rect::from_min_size(pos2(x + label_w, y), vec2(34.0, 26.0));
+        if Btn::new("").icon(if su.paused { Icon::Play } else { Icon::Pause }).show(ui, p, pr, "mv-pause").on_hover_text(if su.paused { "Play" } else { "Pause" }).clicked() {
+            su.paused = !su.paused;
+        }
+        let speeds = [0.5, 1.0, 2.0];
+        let seg = Rect::from_min_size(pos2(pr.right() + 8.0, y), vec2(130.0, 26.0));
+        if let Some(i) = kit::segmented(ui, p, seg, &["×½", "×1", "×2"], speeds.iter().position(|s| *s == su.speed), Tone::Neutral, "mv-speed") {
+            su.speed = speeds[i];
+        }
+        let tr = Rect::from_min_size(pos2(seg.right() + 8.0, y), vec2(130.0, 26.0));
+        let playing = su.tempo.is_some();
+        if kit::chip(ui, p, tr, "Record's tempo", su.record_tempo && playing, Tone::Neutral, playing, "mv-tempo")
+            .on_hover_text(if playing { "Danced at the record's tempo (half or double time where far off)" } else { "Nothing plays: the move's own tempo" })
+            .clicked()
+        {
+            su.record_tempo = !su.record_tempo;
+        }
+        y += 34.0;
+        row(p, y, "Drawn");
+        let seg = Rect::from_min_size(pos2(x + label_w, y), vec2(250.0_f32.min(w - label_w), 26.0));
+        let looks = [MoveLook::Textured, MoveLook::Chrome, MoveLook::Silhouette];
+        if let Some(i) = kit::segmented(ui, p, seg, &["Skin", "Chrome", "Silhouette"], looks.iter().position(|l| *l == su.look), Tone::Neutral, "mv-look") {
+            su.look = looks[i];
+        }
+        let mr = Rect::from_min_size(pos2(seg.right() + 8.0, y), vec2(84.0, 26.0));
+        if kit::chip(ui, p, mr, "Mirrored", su.mirror, Tone::Neutral, true, "mv-mirror").clicked() {
+            su.mirror = !su.mirror;
+        }
+        y += 34.0;
+        row(p, y, "Dancer");
+        let names: Vec<String> = pl.models().into_iter().map(|(_, n)| n).collect();
+        let words: Vec<&str> = names.iter().map(String::as_str).collect();
+        let seg = Rect::from_min_size(pos2(x + label_w, y), vec2((words.len() as f32 * 90.0).min(w - label_w), 26.0));
+        if let Some(i) = kit::segmented(ui, p, seg, &words, Some(su.model), Tone::Neutral, "mv-model") {
+            su.model = i;
+        }
+        y += 42.0;
+        // its say: on the stage now, a favourite, in or out
+        if let Some(mv) = mv {
+            let asked = m.asked.as_deref() == Some(mv.id.as_str());
+            let br = Rect::from_min_size(pos2(x, y), vec2(150.0, 28.0));
+            if Btn::new(if asked { "Asked for" } else { "On the stage" }).icon(Icon::Play).on(asked).accent(true).size(11.0).show(ui, p, br, "mv-view-ask").on_hover_text("The lead on the stage dances it at the next slot").clicked() {
+                desk.show_edit(ShowEdit::Audition(mv.id.clone()));
+            }
+            let sr = Rect::from_min_size(pos2(br.right() + 8.0, y), vec2(130.0, 28.0));
+            if Btn::new(if mv.star { "A favourite" } else { "Favourite" }).icon(if mv.star { Icon::HeartFull } else { Icon::Heart }).on(mv.star).size(11.0).show(ui, p, sr, "mv-view-star").on_hover_text("A favourite is danced more").clicked() {
+                desk.show_edit(ShowEdit::MoveStar(mv.id.clone(), !mv.star));
+            }
+            let or = Rect::from_min_size(pos2(sr.right() + 8.0, y + 4.0), vec2(80.0, 20.0));
+            if kit::chip(ui, p, or, if mv.on { "Danced" } else { "Never" }, mv.on, if mv.on { Tone::Neutral } else { Tone::Danger }, true, "mv-view-on").on_hover_text("Whether the dancers may dance it").clicked() {
+                desk.show_edit(ShowEdit::MoveOn(mv.id.clone(), !mv.on));
+            }
+            y += 40.0;
+        }
+        kit::clipped(p, pos2(x, y + 8.0), "A strip below: a click watches that move here", 11.0, "", t::faint(), w);
+        r.height()
     }
 }
 

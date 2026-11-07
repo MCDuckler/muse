@@ -206,3 +206,50 @@ fn over_a_night_the_scenes_share_the_time_by_their_levels() {
     let (a, b, c) = (on["a"], on["b"], on["c"]);
     assert!(a > b && b > c, "a {a} b {b} c {c}");
 }
+
+#[test]
+fn a_scene_kept_longer_stays_its_phrases_and_one_whose_look_never_turns_keeps_it() {
+    let bars = |d: &mut Director, n: usize, from: usize| {
+        let f = frame(None, 0.5, 0.5);
+        let mut seen = vec![];
+        for i in from..from + n {
+            let mut m = vec![ev(EventKind::Bar)];
+            if i % 8 == 7 {
+                m.push(ev(EventKind::Phrase));
+            }
+            d.direct(&f, &m);
+            seen.push((d.scene().unwrap().to_owned(), d.combo().unwrap().clone()));
+        }
+        seen
+    };
+    let start = |plan: ShowPlan| {
+        let mut d = make();
+        d.kinds = BTreeMap::from([("one".into(), Figure::Kinetic), ("two".into(), Figure::Kinetic), ("three".into(), Figure::Kinetic)]);
+        d.grounds_here = Some(BTreeSet::from(["black".into(), "white".into(), "wash".into()]));
+        d.set_plan(plan);
+        // the director's own pick (one chosen by name is held)
+        d.direct(&frame(None, 0.5, 0.5), &[]);
+        d
+    };
+    // as shipped: over 40 phrases the scene changes, and its look within it
+    let mut d = start(ShowPlan::default());
+    let first = d.scene().unwrap().to_owned();
+    let seen = bars(&mut d, 320, 0);
+    assert!(seen.iter().any(|(s, _)| *s != first), "the director moves on");
+    // kept 32 bars, its look never turning: neither changes before the 32nd bar
+    let plan = ["one", "two", "three"].iter().fold(ShowPlan::default(), |p, s| p.with_when(s, Some(Some(32)), Some(0.0)));
+    assert_eq!((plan.stay_of("one"), plan.turn_of("one")), (Some(32), 0.0));
+    let back = ShowPlan::from_json(Some(&plan.to_json()));
+    assert_eq!(back, plan, "kept in the show");
+    for seed in 0..12 {
+        let mut d = start(plan.clone());
+        let (first, look) = (d.scene().unwrap().to_owned(), d.combo().unwrap().clone());
+        let seen = bars(&mut d, 31, seed);
+        assert!(seen.iter().all(|(s, c)| *s == first && *c == look), "{seed}: held: {:?}", seen.iter().map(|x| &x.0).collect::<Vec<_>>());
+    }
+    // and after, it may go
+    let mut d = start(plan);
+    let first = d.scene().unwrap().to_owned();
+    let seen = bars(&mut d, 640, 0);
+    assert!(seen.iter().any(|(s, _)| *s != first), "after its stay, a phrase may change it");
+}

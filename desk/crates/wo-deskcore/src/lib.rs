@@ -15,6 +15,7 @@ pub mod bench;
 pub mod covers;
 pub mod library;
 pub mod milk;
+pub mod move_player;
 pub mod autodj;
 mod crate_;
 pub mod plan_view;

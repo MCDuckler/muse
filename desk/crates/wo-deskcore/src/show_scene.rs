@@ -159,6 +159,10 @@ pub struct ScenePage {
     pub live: bool,
     /// How often it comes.
     pub level: RotationRow,
+    /// When it changes: the bars it stays at least before a phrase may change it (None: the
+    /// director's own), how often its look changes while it is on (1 as shipped, 0 never).
+    pub stay: Option<i64>,
+    pub turn: f64,
     pub styles: Vec<StyleRow>,
     pub shared: Vec<OwnRows>,
     pub grid: LooksGrid,
@@ -509,6 +513,8 @@ impl Show {
             world,
             live: live_combo.is_some(),
             level,
+            stay: plan.stay_of(id),
+            turn: plan.turn_of(id),
             styles,
             shared,
             grid,
@@ -687,6 +693,8 @@ impl Show {
                     self.direct.put_on(c, None);
                 }
             }
+            E::Stay(scene, bars) => self.set_plan(plan.with_when(&scene, Some(bars), None)),
+            E::Turn(scene, k) => self.set_plan(plan.with_when(&scene, None, Some(k))),
             E::MoveOn(id, on) => self.direct.doc.set_move_on(&id, on),
             E::MoveStar(id, star) => self.direct.doc.set_move_star(&id, star),
             E::Audition(id) => self.direct.audition(&id),
@@ -876,6 +884,11 @@ mod tests {
         assert!(p.shared[0].own && p.shared[0].rows.iter().any(|r| r.key == "white" && !r.on));
         let plan = show.direct.director.plan().clone();
         assert!(plan.level_in("blocks", PlanAxis::Ground, "white") > 0.0, "the others' untouched");
+        // when it changes
+        show.edit(E::Stay("kinetic".into(), Some(16)));
+        show.edit(E::Turn("kinetic".into(), 0.0));
+        let p = settled(&mut show, "kinetic", false);
+        assert_eq!((p.stay, p.turn), (Some(16), 0.0));
         // made like it; one of a scene's looks on
         show.edit(E::CopyFrom("blocks".into(), "kinetic".into()));
         assert!(show.direct.director.plan().owns("blocks", PlanAxis::Ground));

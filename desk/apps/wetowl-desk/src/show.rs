@@ -68,6 +68,7 @@ impl App {
         let auto = Rect::from_min_max(pos2(col_x, main.bottom() - auto_h), main.max);
         let room = Rect::from_min_max(pos2(col_x, perform.bottom() + g), pos2(main.right(), auto.top() - g));
         if self.show_room == 1 {
+            self.scene_ui.tempo = s.decks.iter().any(|d| d.playing).then_some(s.master_bpm);
             self.rotation_room(desk, ui, p, left);
         } else {
             self.big_picture(desk, ui, p, pic, &v, board.as_ref());
@@ -519,7 +520,7 @@ impl App {
     }
 
     /// Who dances: each record its own lead (a mix), or one alone; who may be in the mix.
-    fn dancers_tab(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, v: &StageView) {
+    pub(crate) fn dancers_tab(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, v: &StageView) {
         let Some(h) = &v.hands else {
             kit::hint(p, r.center(), Align2::CENTER_CENTER, "The dancers are the Rust stage's: the Desk directs it");
             return;
@@ -547,7 +548,7 @@ impl App {
             }
             x += w + 6.0;
         }
-        kit::hint(p, pos2(r.left(), y + 46.0), Align2::LEFT_CENTER, "Kept for the next show. The moves come with the scene pages");
+        kit::hint(p, pos2(r.left(), y + 46.0), Align2::LEFT_CENTER, "Kept for the next show. Their moves: the Dancer scene's page (Rotation)");
     }
 
     fn sets_tab(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, v: &StageView, on: bool) {

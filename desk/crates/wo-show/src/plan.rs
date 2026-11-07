@@ -172,11 +172,17 @@ pub struct ScenePlan {
     pub cells: Levels,
     /// The cells whose looks come however they measured.
     pub allow: BTreeSet<String>,
+    /// When it changes (the Desk's; v1 reads past them): at least this many bars on before a
+    /// new phrase may change it (None: the director's own, KEEP_BARS)…
+    pub stay: Option<i64>,
+    /// …and how often its look changes while it is on: 1 as shipped, 2 twice as often, ½
+    /// half, 0 never.
+    pub turn: f64,
 }
 
 impl Default for ScenePlan {
     fn default() -> Self {
-        ScenePlan { level: 1.0, muted: false, styles: Levels::new(), shots: Levels::new(), own: BTreeMap::new(), off: BTreeSet::new(), cells: Levels::new(), allow: BTreeSet::new() }
+        ScenePlan { level: 1.0, muted: false, styles: Levels::new(), shots: Levels::new(), own: BTreeMap::new(), off: BTreeSet::new(), cells: Levels::new(), allow: BTreeSet::new(), stay: None, turn: 1.0 }
     }
 }
 
@@ -216,6 +222,12 @@ impl ScenePlan {
         if !self.allow.is_empty() {
             m.insert("allow".into(), names_json(&self.allow));
         }
+        if let Some(b) = self.stay {
+            m.insert("stay".into(), b.into());
+        }
+        if self.turn != 1.0 {
+            m.insert("turn".into(), f(self.turn));
+        }
         Value::Object(m)
     }
 
@@ -235,6 +247,8 @@ impl ScenePlan {
                 .map(|m| m.iter().filter(|(k, _)| is_cell_key(k)).filter_map(|(k, v)| v.as_f64().map(|x| (k.clone(), x.clamp(0.0, 16.0)))).collect())
                 .unwrap_or_default(),
             allow: names_of(j.get("allow")).into_iter().filter(|k| is_cell_key(k)).collect(),
+            stay: j.get("stay").and_then(Value::as_i64).map(|b| b.clamp(1, 128)),
+            turn: j.get("turn").and_then(Value::as_f64).map_or(1.0, |t| t.clamp(0.0, 4.0)),
         }
     }
 }
@@ -388,6 +402,29 @@ impl ShowPlan {
             }
         });
         out
+    }
+
+    /// The bars `scene` stays on at least before a new phrase may change it, if the hands said.
+    pub fn stay_of(&self, scene: &str) -> Option<i64> {
+        self.with_of(scene, |p| p.stay)
+    }
+
+    /// How often `scene`'s look changes while it is on (1 as shipped, 0 never).
+    pub fn turn_of(&self, scene: &str) -> f64 {
+        self.with_of(scene, |p| p.turn)
+    }
+
+    /// When `scene` changes: its stay (None: the director's own) and its look's turn.
+    pub fn with_when(&self, scene: &str, stay: Option<Option<i64>>, turn: Option<f64>) -> ShowPlan {
+        self.with_scene_of(scene, |mut p| {
+            if let Some(s) = stay {
+                p.stay = s.map(|b| b.clamp(1, 128));
+            }
+            if let Some(t) = turn {
+                p.turn = t.clamp(0.0, 4.0);
+            }
+            p
+        })
     }
 
     /// A framing's level in `scene`.
@@ -607,6 +644,8 @@ impl ShowPlan {
             p.off = off;
             p.cells = fp.cells.iter().filter(|(k, _)| style_ok(k)).map(|(k, v)| (k.clone(), *v)).collect();
             p.allow = fp.allow.iter().filter(|k| style_ok(k)).cloned().collect();
+            p.stay = fp.stay;
+            p.turn = fp.turn;
             p
         })
     }

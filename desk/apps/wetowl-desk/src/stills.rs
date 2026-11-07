@@ -8,14 +8,76 @@ use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 
 macro_rules! assets {
     ($($name:literal => $path:literal),* $(,)?) => {
-        /// The baked pictures, by name.
-        fn asset(name: &str) -> Option<&'static [u8]> {
+        /// v1's baked pictures, by name.
+        fn v1_asset(name: &str) -> Option<&'static [u8]> {
             match name {
                 $($name => Some(include_bytes!(concat!("../../../../app/assets/show/", $path))),)*
                 _ => None,
             }
         }
     };
+}
+
+macro_rules! baked {
+    ($($name:literal => $path:literal),* $(,)?) => {
+        /// The pictures the Rust stage baked (crates/wo-render/examples/bake_stills.rs): the
+        /// shader scenes in each treatment, the dancers' viewports.
+        fn baked(name: &str) -> Option<&'static [u8]> {
+            match name {
+                $($name => Some(include_bytes!(concat!("../stills/", $path))),)*
+                _ => None,
+            }
+        }
+    };
+}
+
+baked! {
+    "blocks.ascii" => "blocks.ascii.png",
+    "blocks.contour" => "blocks.contour.png",
+    "blocks.crt" => "blocks.crt.png",
+    "blocks.dither" => "blocks.dither.png",
+    "blocks.halftone" => "blocks.halftone.png",
+    "blocks.lines" => "blocks.lines.png",
+    "blocks.slit" => "blocks.slit.png",
+    "blocks.thermal" => "blocks.thermal.png",
+    "dancers.viewports" => "dancers.viewports.png",
+    "field.ascii" => "field.ascii.png",
+    "field.contour" => "field.contour.png",
+    "field.crt" => "field.crt.png",
+    "field.dither" => "field.dither.png",
+    "field.halftone" => "field.halftone.png",
+    "field.lines" => "field.lines.png",
+    "field.slit" => "field.slit.png",
+    "field.thermal" => "field.thermal.png",
+    "flash.ascii" => "flash.ascii.png",
+    "flash.contour" => "flash.contour.png",
+    "flash.crt" => "flash.crt.png",
+    "flash.dither" => "flash.dither.png",
+    "flash.halftone" => "flash.halftone.png",
+    "flash.lines" => "flash.lines.png",
+    "flash.slit" => "flash.slit.png",
+    "flash.thermal" => "flash.thermal.png",
+    "glide.ascii" => "glide.ascii.png",
+    "glide.contour" => "glide.contour.png",
+    "glide.crt" => "glide.crt.png",
+    "glide.dither" => "glide.dither.png",
+    "glide.halftone" => "glide.halftone.png",
+    "glide.lines" => "glide.lines.png",
+    "glide.slit" => "glide.slit.png",
+    "glide.thermal" => "glide.thermal.png",
+    "kinetic.ascii" => "kinetic.ascii.png",
+    "kinetic.contour" => "kinetic.contour.png",
+    "kinetic.crt" => "kinetic.crt.png",
+    "kinetic.dither" => "kinetic.dither.png",
+    "kinetic.halftone" => "kinetic.halftone.png",
+    "kinetic.lines" => "kinetic.lines.png",
+    "kinetic.slit" => "kinetic.slit.png",
+    "kinetic.thermal" => "kinetic.thermal.png",
+}
+
+/// A picture by name: the Rust stage's own where it baked one, else v1's.
+fn asset(name: &str) -> Option<&'static [u8]> {
+    baked(name).or_else(|| v1_asset(name))
 }
 
 assets! {
@@ -230,8 +292,11 @@ impl Stills {
         asset(&Self::figure_name(figure, style)).is_some()
     }
 
+    /// A figure's still in a style: the dancers' own, a scene's in a treatment where one was
+    /// baked, else the scene as drawn.
     fn figure_name(figure: &str, style: &str) -> String {
-        if figure == "dancers" { format!("dancers.{style}") } else { figure.to_owned() }
+        let styled = format!("{figure}.{style}");
+        if figure == "dancers" || baked(&styled).is_some() { styled } else { figure.to_owned() }
     }
 
     /// The look's picture: made now (a few a frame) or kept; None while it waits, or where
@@ -292,7 +357,9 @@ mod tests {
         for n in ["dancers.plain", "dancers.ascii", "kinetic", "field", "none", "ground.pulse.grid", "ground.field.drift", "ground.cover", "ground.milk", "ground.wash"] {
             assert!(s.pic(n).is_some(), "{n}");
         }
-        assert!(Stills::has("dancers", "trails") && !Stills::has("dancers", "viewports"));
+        assert!(Stills::has("dancers", "trails") && Stills::has("dancers", "viewports") && !Stills::has("dancers", "fluid"));
+        assert_eq!(Stills::figure_name("kinetic", "ascii"), "kinetic.ascii", "the Rust stage's own");
+        assert_eq!(Stills::figure_name("kinetic", "raw"), "kinetic");
         let fig = s.pic("kinetic").unwrap().clone();
         let white = s.pic("ground.white").unwrap().clone();
         // contrast on white: where the figure is dark, near white; keyhole on white: black round it
