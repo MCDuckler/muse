@@ -203,6 +203,17 @@ impl ShowDoc {
         obj(self.pool().get("finish")).map(RigFinish::from_json)
     }
 
+    /// A finish over every scene (kept, and in a set), or None: each scene's own.
+    pub fn set_finish(&mut self, fin: Option<&RigFinish>) {
+        self.put("finish", fin.map(RigFinish::to_json));
+    }
+
+    /// How strong the blend is, 0..1 (as shipped: whole, left out).
+    pub fn set_strength(&mut self, s: f64) {
+        let s = s.clamp(0.0, 1.0);
+        self.put("strength", (s != 1.0).then(|| f(s)));
+    }
+
     /// Who dances (None or "mix": each record its own).
     pub fn dancer(&self) -> Option<String> {
         self.pool().get("dancer").and_then(Value::as_str).map(str::to_owned)
@@ -225,16 +236,49 @@ impl ShowDoc {
 
     /// A dancer let into the mix, or kept out of it (one kept out cannot dance alone).
     pub fn set_dancer_on(&mut self, id: &str, on: bool) {
-        let key = format!("dancer.{id}");
-        let mut off: Vec<String> = self.off().into_iter().filter(|k| *k != key).collect();
+        self.set_on(&format!("dancer.{id}"), on);
+        if !on && self.dancer().as_deref() == Some(id) {
+            self.set_dancer(None);
+        }
+    }
+
+    fn set_on(&mut self, key: &str, on: bool) {
+        let mut off: Vec<String> = self.off().into_iter().filter(|k| k != key).collect();
         if !on {
-            off.push(key);
-            if self.dancer().as_deref() == Some(id) {
-                self.set_dancer(None);
-            }
+            off.push(key.into());
         }
         off.sort();
         self.put("off", (!off.is_empty()).then(|| Value::Array(off.into_iter().map(Value::from).collect())));
+    }
+
+    /// The moves kept out of the dancing, by id (v1's pool `off`: `move.long22`).
+    pub fn moves_off(&self) -> Vec<String> {
+        self.off().iter().filter_map(|k| k.strip_prefix("move.").map(str::to_owned)).collect()
+    }
+
+    pub fn set_move_on(&mut self, id: &str, on: bool) {
+        self.set_on(&format!("move.{id}"), on);
+    }
+
+    /// The pool's leanings, by key (v1's `lean`: a starred move is 2).
+    fn lean(&self) -> std::collections::BTreeMap<String, f64> {
+        crate::json::knobs(self.pool().get("lean")).into_iter().collect()
+    }
+
+    /// The moves starred: danced more (v1: a lean over 1.5).
+    pub fn move_stars(&self) -> Vec<String> {
+        self.lean().into_iter().filter(|(_, v)| *v > 1.5).filter_map(|(k, _)| k.strip_prefix("move.").map(str::to_owned)).collect()
+    }
+
+    pub fn set_move_star(&mut self, id: &str, star: bool) {
+        let mut lean = self.lean();
+        let key = format!("move.{id}");
+        if star {
+            lean.insert(key, 2.0);
+        } else {
+            lean.remove(&key);
+        }
+        self.put("lean", (!lean.is_empty()).then(|| Value::Object(lean.into_iter().map(|(k, v)| (k, f(v))).collect())));
     }
 
     // ---------------------------------------------------------------- favourites, taste
@@ -346,6 +390,35 @@ mod tests {
         assert_eq!(d.dancer().as_deref(), Some("chris"));
         d.set_dancer(Some("mix"));
         assert_eq!(d.dancer(), None);
+    }
+
+    #[test]
+    fn the_moves_off_and_starred_and_the_finish_are_kept_as_v1_keeps_them() {
+        let mut d = ShowDoc::parse(r#"{"v":1,"pool":{"off":["dancer.joe"],"lean":{"scene.flash":0.5}}}"#).unwrap();
+        d.set_move_on("long22", false);
+        d.set_move_star("hop3", true);
+        assert_eq!(d.moves_off(), vec!["long22".to_owned()]);
+        assert_eq!(d.move_stars(), vec!["hop3".to_owned()]);
+        assert_eq!(d.dancers_off(), vec!["joe".to_owned()], "the dancers' switches untouched");
+        let v = d.to_value();
+        assert_eq!(v["pool"]["off"], serde_json::json!(["dancer.joe", "move.long22"]));
+        assert_eq!(v["pool"]["lean"]["move.hop3"], 2.0);
+        assert_eq!(v["pool"]["lean"]["scene.flash"], 0.5, "v1's other leanings untouched");
+        d.set_move_on("long22", true);
+        d.set_move_star("hop3", false);
+        assert!(d.moves_off().is_empty() && d.move_stars().is_empty());
+        // the finish over every scene, and back to each scene's own
+        assert_eq!(d.finish(), None);
+        let fin = RigFinish { trails: 0.4, grain: 0.0, ..Default::default() };
+        d.set_finish(Some(&fin));
+        assert_eq!(d.finish(), Some(fin));
+        assert!(d.setup().contains_key("finish"), "in a set");
+        d.set_finish(None);
+        assert_eq!(d.finish(), None);
+        d.set_strength(0.4);
+        assert_eq!(d.strength(), 0.4);
+        d.set_strength(1.0);
+        assert!(d.to_value()["pool"].get("strength").is_none(), "whole as shipped: left out");
     }
 
     #[test]

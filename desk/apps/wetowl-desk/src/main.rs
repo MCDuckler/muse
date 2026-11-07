@@ -26,6 +26,8 @@ mod overlays;
 mod paint;
 mod plan;
 mod rotation;
+mod scene;
+mod stills;
 mod set_page;
 #[cfg(test)]
 mod pages;
@@ -99,6 +101,9 @@ pub(crate) struct App {
     pub(crate) show_tab: usize,
     /// The Show page's left: the stage (0), the rotation (1).
     pub(crate) show_room: usize,
+    /// A scene's page open over the rotation, and the page's own state.
+    pub(crate) show_scene: Option<String>,
+    pub(crate) scene_ui: scene::SceneUi,
     /// MilkDrop's library open on the Show page, and what is searched for in it.
     pub(crate) milk_list: bool,
     pub(crate) milk_query: String,
@@ -219,6 +224,12 @@ impl App {
         if let Some(t) = arg("--show-room") {
             app.show_room = ["stage", "rotation"].iter().position(|n| *n == t).unwrap_or(0);
         }
+        // --show-scene <id>: that scene's page over the rotation (screenshots)
+        if let Some(id) = arg("--show-scene") {
+            app.show_room = 1;
+            app.show_scene = Some(id);
+            app.scene_ui.scroll = arg("--scroll").and_then(|y| y.parse().ok());
+        }
         app
     }
 
@@ -258,6 +269,8 @@ impl App {
             strobe: false,
             show_tab: 0,
             show_room: 0,
+            show_scene: None,
+            scene_ui: Default::default(),
             milk_list: false,
             milk_query: String::new(),
             prefs,

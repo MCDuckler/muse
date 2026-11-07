@@ -34,9 +34,9 @@ pub use covers::Cover;
 pub use prefs::Prefs;
 pub use library::{Library, Shelf};
 pub use records::{Audio, Record};
-pub use show::{MilkHand, MilkRow, MilkView, RotationRow, RotationView, ShowBoard, ShowEdit, ShowHands};
+pub use show::{FinishView, LooksGrid, MilkHand, MilkRow, MilkView, MoveRow, MovesView, OwnRows, RotationRow, RotationView, ScenePage, ShowBoard, ShowEdit, ShowHands, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, value_name};
 pub use wo_show::plan::{LEVEL_MOST, LEVEL_STEPS, level_word};
-pub use wo_show::rig::TransformSet;
+pub use wo_show::rig::{RigFinish, TransformSet};
 pub use wo_show::shares::share_word;
 pub use wo_show::Mix as ShowMix;
 /// The scenes the Rust stage draws so far.
@@ -1452,9 +1452,33 @@ impl Desk {
         self.stage().rust.then(|| self.stage.rotation())
     }
 
-    /// An edit of the show's rotation, kept.
+    /// An edit of the show's rotation, a scene's page, the finish, kept.
     pub fn show_edit(&mut self, e: ShowEdit) {
         self.stage.edit(e);
+    }
+
+    /// A scene's page (`all`: its styles and backgrounds that are off in the grid too) — on
+    /// the Rust stage only.
+    pub fn show_scene(&mut self, id: &str, all: bool) -> Option<ScenePage> {
+        if !self.stage().rust {
+            return None;
+        }
+        self.stage.scene_page(id, all)
+    }
+
+    /// One square of a scene's grid, each mask and blend under the effect `fx`.
+    pub fn show_variants(&mut self, scene: &str, style: &str, ground: &str, fx: &str) -> Option<Variants> {
+        self.stage.variants(scene, style, ground, fx)
+    }
+
+    /// The dancers' moves, with the hands' say on each.
+    pub fn show_moves(&mut self) -> MovesView {
+        self.stage.moves()
+    }
+
+    /// The finish over every scene, the blend's strength, the slit-scan's knobs.
+    pub fn show_finish(&mut self) -> FinishView {
+        self.stage.finish()
     }
 
     /// The library's presets whose names have `query` in them, up to `most`.

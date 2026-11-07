@@ -5,7 +5,7 @@
 //! blends each background takes. A small picture of the stage stays up while it is edited.
 //! Every change is kept in the Desk's show.json.
 use eframe::egui::{self, Align2, Color32, CornerRadius, Painter, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use wo_deskcore::{Desk, LEVEL_STEPS, RotationRow, RotationView, ShowEdit, ShowMix, TransformSet, level_word, share_word};
+use wo_deskcore::{Desk, FinishView, LEVEL_STEPS, RotationRow, RotationView, ShowEdit, ShowMix, TransformSet, TuneRow, level_word, share_word};
 
 use crate::App;
 use crate::paint::{label_sized, white};
@@ -14,6 +14,11 @@ use crate::ui::tokens::{self as t, Tone};
 
 const ROW: f32 = 30.0;
 const HEAD: f32 = 34.0;
+
+/// An effect's knob: its word, value, rest, how it is set, its tip.
+type Knob = (&'static str, f64, f64, fn(&TransformSet, f64) -> TransformSet, &'static str);
+/// The finish's knobs and the blend's strength.
+const FINISH_H: f32 = 64.0 + 36.0;
 
 /// A level as the slider's place: the steps evenly along it.
 fn step_k(level: f64) -> f32 {
@@ -27,6 +32,10 @@ fn level_of(k: f32) -> f64 {
 
 impl App {
     pub(crate) fn rotation_room(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect) {
+        if let Some(id) = self.show_scene.clone() {
+            self.scene_room(desk, ui, p, r, &id);
+            return;
+        }
         kit::panel(p, r, false);
         let Some(rot) = desk.show_rotation() else {
             let c = r.center();
@@ -43,8 +52,8 @@ impl App {
         let gap = 28.0;
         let col_w = if two { (inner.width() - gap) / 2.0 } else { inner.width() };
         let pic_h = (col_w * 9.0 / 16.0).min(220.0);
-        let a_h = pic_h + 18.0 + HEAD + rot.scenes.len() as f32 * ROW + 20.0 + HEAD + 4.0 * 36.0;
-        let b_h: f32 = rot.shared.iter().map(|(_, _, _, rows)| HEAD + rows.len() as f32 * ROW + 10.0).sum::<f32>() + HEAD + 2.0 * 70.0 + 20.0 + HEAD + 24.0 + rot.takes.len() as f32 * 26.0 + 20.0;
+        let a_h = pic_h + 18.0 + HEAD + rot.scenes.len() as f32 * ROW + 20.0 + HEAD + 4.0 * 36.0 + 20.0 + HEAD + FINISH_H;
+        let b_h: f32 = rot.shared.iter().map(|(_, _, _, rows)| HEAD + rows.len() as f32 * ROW + 10.0).sum::<f32>() + HEAD + 3.0 * 70.0 + 20.0 + HEAD + 24.0 + rot.takes.len() as f32 * 26.0 + 20.0;
         let h = if two { a_h.max(b_h) } else { a_h + b_h };
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
         egui::ScrollArea::vertical().id_salt("rotation").auto_shrink([false, false]).show(&mut child, |ui| {
@@ -52,13 +61,15 @@ impl App {
             let p = ui.painter().clone();
             let a = Rect::from_min_size(pos2(inner.left(), all.top() + 6.0), vec2(col_w, a_h));
             let b = if two { Rect::from_min_size(pos2(inner.left() + col_w + gap, all.top() + 6.0), vec2(col_w, b_h)) } else { Rect::from_min_size(pos2(inner.left(), a.bottom()), vec2(col_w, b_h)) };
-            self.rotation_scenes(desk, ui, &p, a, pic_h, &rot);
-            self.rotation_shared(desk, ui, &p, b, &rot);
+            let fin = desk.show_finish();
+            self.rotation_scenes(desk, ui, &p, a, pic_h, &rot, &fin);
+            self.rotation_shared(desk, ui, &p, b, &rot, &fin);
         });
     }
 
     /// The left: the stage small, the scenes, the director's temper.
-    fn rotation_scenes(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, pic_h: f32, rot: &RotationView) {
+    #[allow(clippy::too_many_arguments)]
+    fn rotation_scenes(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, pic_h: f32, rot: &RotationView, fin: &FinishView) {
         // the stage, small, so what a change does shows
         let pic = Rect::from_min_size(r.min, vec2(pic_h * 16.0 / 9.0, pic_h));
         let cr = CornerRadius::same(t::R_PAD);
@@ -81,11 +92,11 @@ impl App {
         y += HEAD;
         for (i, row) in rot.scenes.iter().enumerate() {
             let rr = Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), ROW));
-            if let Some(e) = level_row(ui, p, rr, row, ("scene", i)) {
-                desk.show_edit(match e {
-                    RowEdit::Level(v) => ShowEdit::SceneLevel(row.key.clone(), v),
-                    RowEdit::On(on) => ShowEdit::SceneOn(row.key.clone(), on),
-                });
+            match level_row(ui, p, rr, row, ("scene", i), true) {
+                Some(RowEdit::Level(v)) => desk.show_edit(ShowEdit::SceneLevel(row.key.clone(), v)),
+                Some(RowEdit::On(on)) => desk.show_edit(ShowEdit::SceneOn(row.key.clone(), on)),
+                Some(RowEdit::Open) => self.show_scene = Some(row.key.clone()),
+                None => {}
             }
             y += ROW;
         }
@@ -130,21 +141,22 @@ impl App {
                 desk.show_edit(ShowEdit::ForgetTaste);
             }
         }
+        y += 36.0 + 20.0;
+        finish(desk, ui, p, Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), HEAD + FINISH_H)), fin);
     }
 
     /// The right: the rows every scene shares, the effects' knobs, what each background takes.
-    fn rotation_shared(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, rot: &RotationView) {
+    fn rotation_shared(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, rot: &RotationView, fin: &FinishView) {
         let mut y = r.top();
         for (axis, title, hint, rows) in &rot.shared {
             head(p, r, y, title, hint);
             y += HEAD;
             for (i, row) in rows.iter().enumerate() {
                 let rr = Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), ROW));
-                if let Some(e) = level_row(ui, p, rr, row, (axis.as_str(), i)) {
-                    desk.show_edit(match e {
-                        RowEdit::Level(v) => ShowEdit::SharedLevel(axis.clone(), row.key.clone(), v),
-                        RowEdit::On(on) => ShowEdit::SharedOn(axis.clone(), row.key.clone(), on),
-                    });
+                match level_row(ui, p, rr, row, (axis.as_str(), i), false) {
+                    Some(RowEdit::Level(v)) => desk.show_edit(ShowEdit::SharedLevel(axis.clone(), row.key.clone(), v)),
+                    Some(RowEdit::On(on)) => desk.show_edit(ShowEdit::SharedOn(axis.clone(), row.key.clone(), on)),
+                    _ => {}
                 }
                 y += ROW;
             }
@@ -162,14 +174,14 @@ impl App {
         let seg = Rect::from_min_size(pos2(r.left() + label_w, y + 7.0), vec2(150.0, 26.0));
         let counts = ["1", "2", "3", "4", "5", "6"];
         if let Some(i) = kit::segmented(ui, p, seg, &counts, Some((tr.count.clamp(1, 6) - 1) as usize), Tone::Neutral, "mirrors") {
-            next = Some(TransformSet { count: i as i64 + 1, ..tr.clone() });
+            next = Some(TransformSet { count: i as i64 + 1, ..*tr });
         }
         kit::hint(p, pos2(seg.center().x, seg.bottom() + 12.0), Align2::CENTER_CENTER, "mirrors");
-        let knobs: [(&str, f64, f64, fn(&TransformSet, f64) -> TransformSet, &str); 4] = [
-            ("Turn", tr.turn, shipped.turn, |t, v| TransformSet { turn: v, ..t.clone() }, "The mirrors turned"),
-            ("Line", tr.line, shipped.line, |t, v| TransformSet { line: v, ..t.clone() }, "How much of the mirrors' edges shows"),
-            ("Differs", tr.differ, shipped.differ, |t, v| TransformSet { differ: v, ..t.clone() }, "How far the reflections' light and colour are from the original's"),
-            ("Amount", tr.amount, shipped.amount, |t, v| TransformSet { amount: v, ..t.clone() }, "How much of the reflections"),
+        let knobs: [Knob; 4] = [
+            ("Turn", tr.turn, shipped.turn, |t, v| TransformSet { turn: v, ..*t }, "The mirrors turned"),
+            ("Line", tr.line, shipped.line, |t, v| TransformSet { line: v, ..*t }, "How much of the mirrors' edges shows"),
+            ("Differs", tr.differ, shipped.differ, |t, v| TransformSet { differ: v, ..*t }, "How far the reflections' light and colour are from the original's"),
+            ("Amount", tr.amount, shipped.amount, |t, v| TransformSet { amount: v, ..*t }, "How much of the reflections"),
         ];
         let kx = seg.right() + 34.0;
         for (i, (word, v, rest, set, tip)) in knobs.into_iter().enumerate() {
@@ -189,14 +201,14 @@ impl App {
         let seg = Rect::from_min_size(pos2(r.left() + label_w, y), vec2((r.width() - label_w).min(320.0), 26.0));
         let words: Vec<&str> = blends.iter().map(|(w, _)| *w).collect();
         if let Some(i) = kit::segmented(ui, p, seg, &words, blends.iter().position(|(_, m)| *m == tr.blend), Tone::Neutral, "kal-blend") {
-            next = Some(TransformSet { blend: blends[i].1, ..tr.clone() });
+            next = Some(TransformSet { blend: blends[i].1, ..*tr });
         }
         y += 40.0;
         kit::section(p, pos2(r.left(), y + 20.0), Align2::LEFT_CENTER, "Datamosh");
-        let knobs: [(&str, f64, f64, fn(&TransformSet, f64) -> TransformSet, &str); 3] = [
-            ("Grain", tr.grain, shipped.grain, |t, v| TransformSet { grain: v, ..t.clone() }, "How blocky: a smooth melt … a codec's grain, its blocks and colour bleed"),
-            ("Melt", tr.melt, shipped.melt, |t, v| TransformSet { melt: v, ..t.clone() }, "How long its smears hold before the picture comes through"),
-            ("Keys", tr.keys, shipped.keys, |t, v| TransformSet { keys: v, ..t.clone() }, "How often the picture is let through: patches on the bars, whole on a key frame"),
+        let knobs: [Knob; 3] = [
+            ("Grain", tr.grain, shipped.grain, |t, v| TransformSet { grain: v, ..*t }, "How blocky: a smooth melt … a codec's grain, its blocks and colour bleed"),
+            ("Melt", tr.melt, shipped.melt, |t, v| TransformSet { melt: v, ..*t }, "How long its smears hold before the picture comes through"),
+            ("Keys", tr.keys, shipped.keys, |t, v| TransformSet { keys: v, ..*t }, "How often the picture is let through: patches on the bars, whole on a key frame"),
         ];
         for (i, (word, v, rest, set, tip)) in knobs.into_iter().enumerate() {
             let c = pos2(r.left() + label_w + 20.0 + i as f32 * 58.0, y + 20.0);
@@ -209,6 +221,9 @@ impl App {
         if let Some(t) = next {
             desk.show_edit(ShowEdit::Transform(t));
         }
+        y += 70.0;
+        kit::section(p, pos2(r.left(), y + 20.0), Align2::LEFT_CENTER, "Slit-scan");
+        tune_knobs(desk, ui, p, pos2(r.left() + label_w + 20.0, y + 20.0), &fin.slit, "slit");
         y += 70.0;
 
         // what each background takes
@@ -234,21 +249,82 @@ impl App {
     }
 }
 
+/// The finish over every scene (v1: SETTINGS' THE FINISH): trails, bloom, the film curve,
+/// grain, the corners — a knob turned makes it the hands' over every scene; and how strong the
+/// blend of every scene with its background is.
+fn finish(desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, fin: &FinishView) {
+    head(p, r, r.top(), "The finish", if fin.mine { "yours over every scene · kept, and in a set" } else { "the scene on's own · a knob turned: yours over every scene" });
+    if fin.mine {
+        let br = Rect::from_min_size(pos2(r.right() - 130.0, r.top() + 1.0), vec2(130.0, 24.0));
+        if kit::Btn::new("Each scene's own").quiet().size(10.5).show(ui, p, br, "finish-own").on_hover_text("Each scene with the finish it was made with").clicked() {
+            desk.show_edit(ShowEdit::Finish(None));
+        }
+    }
+    let f = fin.finish.clone().unwrap_or_default();
+    let shipped = wo_deskcore::RigFinish::default();
+    type Set = fn(&wo_deskcore::RigFinish, f64) -> wo_deskcore::RigFinish;
+    let knobs: [(&str, f64, f64, f64, Set, &str); 5] = [
+        ("Trails", f.trails, shipped.trails, 0.9, |f, v| wo_deskcore::RigFinish { trails: v, ..f.clone() }, "How much of the last frame lingers"),
+        ("Bloom", f.bloom, shipped.bloom, 1.5, |f, v| wo_deskcore::RigFinish { bloom: v, ..f.clone() }, "The glow round bright things"),
+        ("Tone", f.tone, shipped.tone, 1.0, |f, v| wo_deskcore::RigFinish { tone: v, ..f.clone() }, "The film curve (none: the picture as drawn)"),
+        ("Grain", f.grain, shipped.grain, 1.0, |f, v| wo_deskcore::RigFinish { grain: v, ..f.clone() }, "Film grain"),
+        ("Vignette", f.vignette, shipped.vignette, 1.0, |f, v| wo_deskcore::RigFinish { vignette: v, ..f.clone() }, "The corners darkened"),
+    ];
+    let y = r.top() + HEAD;
+    for (i, (word, v, rest, max, set, tip)) in knobs.into_iter().enumerate() {
+        let c = pos2(r.left() + 22.0 + i as f32 * 62.0, y + 20.0);
+        let color = if fin.mine { t::text() } else { t::muted() };
+        if let Some(k) = kit::knob(ui, p, c, (v / max) as f32, color, false, (rest / max) as f32, ("finish", i)) {
+            desk.show_edit(ShowEdit::Finish(Some(set(&f, k as f64 * max))));
+        }
+        ui.interact(Rect::from_center_size(c, vec2(40.0, 40.0)), ui.scope_id().with(("finish-tip", i)), Sense::hover()).on_hover_text(format!("{tip}: {:.0} %", v / max * 100.0));
+        label_sized(p, pos2(c.x, c.y + 29.0), Align2::CENTER_CENTER, word, 10.0, t::muted());
+    }
+    let y = y + 64.0;
+    let lr = kit::section(p, pos2(r.left(), y + 15.0), Align2::LEFT_CENTER, "Blend");
+    ui.interact(lr, ui.scope_id().with("tip-strength"), Sense::hover()).on_hover_text("How strong every scene's blend with its background is: none, the scene as drawn");
+    let sr = Rect::from_min_max(pos2(r.left() + 170.0, y + 4.0), pos2(r.right() - 56.0, y + 26.0));
+    kit::hint(p, pos2(r.left() + 130.0, y + 15.0), Align2::LEFT_CENTER, "none");
+    kit::text(p, pos2(r.right(), y + 15.0), Align2::RIGHT_CENTER, &format!("{:.0} %", fin.strength * 100.0), 11.0, "mono", t::muted());
+    if let Some(k) = kit::hslider(ui, p, sr, fin.strength as f32, true, 1.0, "strength") {
+        desk.show_edit(ShowEdit::Strength(k as f64));
+    }
+}
+
+/// A treatment's knobs in a row from `at` (the first's centre), each to its range; a double
+/// click: its rest.
+pub(crate) fn tune_knobs(desk: &mut Desk, ui: &mut Ui, p: &Painter, at: egui::Pos2, knobs: &[TuneRow], id: &str) {
+    for (i, k) in knobs.iter().enumerate() {
+        let c = pos2(at.x + i as f32 * 58.0, at.y);
+        let span = (k.max - k.min).max(1e-6);
+        let of = |v: f64| ((v - k.min) / span).clamp(0.0, 1.0) as f32;
+        if let Some(nv) = kit::knob(ui, p, c, of(k.value), t::text(), false, of(k.rest), (id, i)) {
+            let v = k.min + nv as f64 * span;
+            desk.show_edit(ShowEdit::Tune(k.key.clone(), if (v - k.rest).abs() < 1e-6 { None } else { Some(v) }));
+        }
+        ui.interact(Rect::from_center_size(c, vec2(40.0, 40.0)), ui.scope_id().with((id, "tip", i)), Sense::hover()).on_hover_text(format!("{}: ×{:.2}", k.tip, k.value));
+        label_sized(p, pos2(c.x, c.y + 29.0), Align2::CENTER_CENTER, &k.label, 10.0, t::muted());
+    }
+}
+
 /// A section's head: its title, its hint after it, a line under.
-fn head(p: &Painter, r: Rect, y: f32, title: &str, hint: &str) {
+pub(crate) fn head(p: &Painter, r: Rect, y: f32, title: &str, hint: &str) {
     let tr = kit::section(p, pos2(r.left(), y + 14.0), Align2::LEFT_CENTER, title);
     kit::clipped(p, pos2(tr.right() + 12.0, y + 14.0), hint, 11.5, "", t::faint(), r.right() - tr.right() - 12.0);
     p.line_segment([pos2(r.left(), y + 28.0), pos2(r.right(), y + 28.0)], Stroke::new(1.0, white(0.06)));
 }
 
-enum RowEdit {
+pub(crate) enum RowEdit {
     Level(f64),
     On(bool),
+    /// Its name clicked: its page.
+    Open,
 }
 
 /// A row of the rotation: on now, its name, on or off, its level, the level in words, its
 /// share of the night (or why it cannot come).
-fn level_row(ui: &mut Ui, p: &Painter, r: Rect, row: &RotationRow, id: impl std::hash::Hash + std::fmt::Debug + Copy) -> Option<RowEdit> {
+/// `open`: its name opens its page.
+pub(crate) fn level_row(ui: &mut Ui, p: &Painter, r: Rect, row: &RotationRow, id: impl std::hash::Hash + std::fmt::Debug + Copy, open: bool) -> Option<RowEdit> {
     let mut out = None;
     let can = row.note.is_none();
     if row.live {
@@ -257,8 +333,15 @@ fn level_row(ui: &mut Ui, p: &Painter, r: Rect, row: &RotationRow, id: impl std:
     }
     let ink = if !row.on || !can { t::faint() } else if row.live { t::high() } else { t::text() };
     let name_w = (r.width() * 0.3).clamp(110.0, 170.0);
-    let nr = kit::clipped(p, pos2(r.left() + 18.0, r.center().y), &row.name, 13.0, "", ink, name_w - 24.0);
-    if let Some(n) = &row.note {
+    let nr = kit::clipped(p, pos2(r.left() + 18.0, r.center().y), &row.name, 13.0, "", ink, name_w - 38.0);
+    if open {
+        let resp = ui.interact(nr.expand2(vec2(6.0, 6.0)).union(Rect::from_min_size(nr.right_top(), vec2(16.0, nr.height()))), ui.scope_id().with(("open", id)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        kit::text(p, pos2(nr.right() + 5.0, r.center().y), Align2::LEFT_CENTER, "›", 14.0, "", if resp.hovered() { t::high() } else { t::faint() });
+        let resp = resp.on_hover_text(row.note.clone().map_or_else(|| "Its page: its styles, its looks one by one, its camera".to_owned(), |n| format!("{n} — its page: its styles, its looks one by one")));
+        if resp.clicked() {
+            out = Some(RowEdit::Open);
+        }
+    } else if let Some(n) = &row.note {
         ui.interact(nr, ui.scope_id().with(("note", id)), Sense::hover()).on_hover_text(n.as_str());
     }
     let chip = Rect::from_min_size(pos2(r.left() + name_w, r.center().y - 10.0), vec2(42.0, 20.0));

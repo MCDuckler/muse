@@ -148,7 +148,7 @@ mod tests {
         }
         assert_eq!(s.of_night_by(PlanAxis::Ground, "milk"), 0.0, "no MilkDrop here");
         assert!(s.scenes.iter().all(|(id, v)| *v > 0.0 || !s.any_on(id)));
-        for (id, _) in &s.scenes {
+        for id in s.scenes.keys() {
             if s.any_on(id) {
                 let t: f64 = s.looks_of(id).iter().map(|(_, v)| v).sum();
                 assert!((t - 1.0).abs() < 1e-6, "{id}'s looks make its time");

@@ -16,6 +16,10 @@ use wo_wire::{Hand, MilkShown};
 
 use crate::records::{Audio, Record};
 
+#[path = "show_scene.rs"]
+mod scene;
+pub use scene::{FinishView, LooksGrid, MoveRow, MovesView, OwnRows, ScenePage, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, tune_rows};
+
 /// The WetOwl app's show.json (read, never written); the show as shipped where there is none.
 fn v1_doc() -> ShowDoc {
     crate::records::fetched_dir()
@@ -58,6 +62,32 @@ pub enum ShowEdit {
     Transform(wo_show::rig::TransformSet),
     /// What NEXT taught it, forgotten.
     ForgetTaste,
+    // ---- a scene's page
+    /// A row of a scene (scene, `style` `ground` `mask` `mix` `fx` `shot`, value): its level, on
+    /// or off (a shared row the scene does not own: the shared one).
+    InLevel(String, String, String, f64),
+    InOn(String, String, String, bool),
+    /// A scene's backgrounds, masks, blends or effects its own (the shared ones copied), or
+    /// as every scene's.
+    Own(String, String, bool),
+    /// A square of a scene's looks (scene, style, background) judged.
+    Square(String, String, String, SquareDo),
+    /// One look (by key) judged.
+    Look(String, SquareDo),
+    /// A scene made like another: (the scene, the one it is made like).
+    CopyFrom(String, String),
+    /// One of a scene's looks on, as likely as the plan says (on LAND ON, held).
+    PlayScene(String),
+    /// A move kept out of the dancing or let in, starred, asked for.
+    MoveOn(String, bool),
+    MoveStar(String, bool),
+    Audition(String),
+    /// A treatment's knob (`ascii.size`), or back to its rest.
+    Tune(String, Option<f64>),
+    /// The finish over every scene, or None: each scene's own.
+    Finish(Option<wo_show::rig::RigFinish>),
+    /// How strong the blend is, 0..1.
+    Strength(f64),
 }
 
 /// One row of the rotation: a scene, a background, a mask, a blend, an effect.
@@ -113,6 +143,33 @@ pub fn ground_name(key: &str) -> String {
         _ => key,
     }
     .to_owned()
+}
+
+/// A row's value's name: a background's, a mask's, a blend's, an effect's, a style's.
+pub fn value_name(a: wo_show::plan::PlanAxis, key: &str) -> String {
+    use wo_show::plan::PlanAxis;
+    let n = match (a, key) {
+        (PlanAxis::Ground, g) => return ground_name(g),
+        (PlanAxis::Mask, "none") => "No mask",
+        (PlanAxis::Mask, "keyhole") => "Keyhole",
+        (PlanAxis::Mask, "inverted") => "Inverted",
+        (PlanAxis::Mix, "normal") => "Normal",
+        (PlanAxis::Mix, "add") => "Add",
+        (PlanAxis::Mix, "screen") => "Screen",
+        (PlanAxis::Mix, "contrast") => "Contrast",
+        (PlanAxis::Fx, "none") => "No effect",
+        (PlanAxis::Fx, "kaleidoscope") => "Kaleidoscope",
+        (PlanAxis::Fx, "slit") => "Slit-scan",
+        (PlanAxis::Fx, "both") => "Slit + kaleido",
+        (PlanAxis::Fx, "mosh") => "Datamosh",
+        (PlanAxis::Style, "raw") => "As drawn",
+        (_, "crt") => "CRT",
+        (_, k) => {
+            let mut c = k.chars();
+            return c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default();
+        }
+    };
+    n.to_owned()
 }
 
 /// What the hands set on the show, as the Show page draws it (the Rust stage's).
@@ -283,7 +340,24 @@ pub(crate) struct Show {
     shares: Option<Shares>,
     /// The shares being worked out on a thread.
     shares_job: Option<std::sync::mpsc::Receiver<Shares>>,
+    /// A scene's page as last worked out, and for what.
+    page: Option<(PageKey, ScenePage)>,
+    /// What the page's last edit said.
+    page_said: Option<String>,
+    /// The dancers' moves, read once.
+    moves: Option<Vec<MoveRow>>,
 }
+
+type PageKey = (
+    String,
+    bool,
+    wo_show::plan::ShowPlan,
+    Option<std::collections::BTreeSet<String>>,
+    Option<Instant>,
+    usize,
+    std::collections::BTreeMap<String, f64>,
+    Option<String>,
+);
 
 type Shares = (wo_show::plan::ShowPlan, std::collections::BTreeSet<String>, Instant, wo_show::shares::PlanShares);
 
@@ -387,6 +461,9 @@ impl Show {
             fave_milk: None,
             shares: None,
             shares_job: None,
+            page: None,
+            page_said: None,
+            moves: None,
         }
     }
 
@@ -784,6 +861,7 @@ impl Show {
             ShowEdit::DarkBeat(on) => self.direct.doc.set_dark_beat(on),
             ShowEdit::Transform(t) => self.direct.doc.set_transform(&t),
             ShowEdit::ForgetTaste => self.direct.doc.set_taste(&vec![]),
+            e => self.edit_page(e),
         }
         self.direct.apply_doc();
         if self.direct.doc != before {
@@ -791,18 +869,14 @@ impl Show {
         }
     }
 
-    /// The rotation as the Show page draws it: the levels, and about how much of the night
-    /// each gets (worked out again when the plan or the backgrounds change, a few times a
-    /// second at most while a fader moves).
-    pub(crate) fn rotation(&mut self) -> RotationView {
-        use wo_show::json::Named;
-        use wo_show::plan::{PlanAxis, plan_value};
+    /// The night's shares by the plan, worked out again when the plan or the backgrounds
+    /// change: weighing every look takes tens of milliseconds, so the first time here, after
+    /// that on a thread while the last shares stay up.
+    pub(crate) fn refresh_shares(&mut self) {
         use wo_show::shares::PlanShares;
         let d = &self.direct;
         let plan = d.director.plan().clone();
         let grounds = d.director.grounds_here.clone().unwrap_or_default();
-        // weighing every look takes tens of milliseconds: the first time here, after that on a
-        // thread while the last shares stay up
         if let Some(rx) = &self.shares_job
             && let Ok(done) = rx.try_recv()
         {
@@ -812,18 +886,28 @@ impl Show {
         let stale = self.shares.as_ref().is_none_or(|(p, g, _, _)| *p != plan || *g != grounds);
         if stale && self.shares.is_none() {
             let s = PlanShares::of(&plan, &d.director.kinds, &grounds, d.director.scores.as_ref(), None);
-            self.shares = Some((plan.clone(), grounds.clone(), Instant::now(), s));
+            self.shares = Some((plan, grounds, Instant::now(), s));
         } else if stale && self.shares_job.is_none() {
             let (tx, rx) = std::sync::mpsc::channel();
             let (kinds, scores) = (d.director.kinds.clone(), d.director.scores.clone());
             let before = self.shares.as_ref().map(|(_, _, _, s)| s.clone());
-            let (plan, grounds) = (plan.clone(), grounds.clone());
             std::thread::spawn(move || {
                 let s = PlanShares::of(&plan, &kinds, &grounds, scores.as_ref(), before.as_ref());
                 let _ = tx.send((plan, grounds, Instant::now(), s));
             });
             self.shares_job = Some(rx);
         }
+    }
+
+    /// The rotation as the Show page draws it: the levels, and about how much of the night
+    /// each gets (worked out again when the plan or the backgrounds change, a few times a
+    /// second at most while a fader moves).
+    pub(crate) fn rotation(&mut self) -> RotationView {
+        use wo_show::json::Named;
+        use wo_show::plan::{PlanAxis, plan_value};
+        self.refresh_shares();
+        let plan = self.direct.director.plan().clone();
+        let grounds = self.direct.director.grounds_here.clone().unwrap_or_default();
         let shares = &self.shares.as_ref().expect("worked out").3;
         let d = &self.direct;
         let on = d.director.combo();
@@ -862,21 +946,9 @@ impl Show {
                 row(PlanAxis::Ground, g, ground_name(g), note)
             })
             .collect();
-        let masks = wo_show::Mask::ALL.iter().map(|m| row(PlanAxis::Mask, m.name(), match m { wo_show::Mask::None => "No mask", wo_show::Mask::Keyhole => "Keyhole", _ => "Inverted" }.to_owned(), None)).collect();
-        let mixes = wo_show::Mix::ALL.iter().map(|m| row(PlanAxis::Mix, m.name(), match m { wo_show::Mix::Normal => "Normal", wo_show::Mix::Add => "Add", wo_show::Mix::Screen => "Screen", _ => "Contrast" }.to_owned(), None)).collect();
-        let fxs = wo_show::Fx::ALL
-            .iter()
-            .map(|f| {
-                let name = match f {
-                    wo_show::Fx::None => "No effect",
-                    wo_show::Fx::Kaleidoscope => "Kaleidoscope",
-                    wo_show::Fx::Slit => "Slit-scan",
-                    wo_show::Fx::Both => "Slit + kaleido",
-                    _ => "Datamosh",
-                };
-                row(PlanAxis::Fx, f.name(), name.to_owned(), None)
-            })
-            .collect();
+        let masks = wo_show::Mask::ALL.iter().map(|m| row(PlanAxis::Mask, m.name(), value_name(PlanAxis::Mask, m.name()), None)).collect();
+        let mixes = wo_show::Mix::ALL.iter().map(|m| row(PlanAxis::Mix, m.name(), value_name(PlanAxis::Mix, m.name()), None)).collect();
+        let fxs = wo_show::Fx::ALL.iter().map(|f| row(PlanAxis::Fx, f.name(), value_name(PlanAxis::Fx, f.name()), None)).collect();
         let shared = vec![
             ("ground".to_owned(), "Backgrounds".to_owned(), "under every scene".to_owned(), grounds_rows),
             ("mask".to_owned(), "Masks".to_owned(), "where the background shows".to_owned(), masks),

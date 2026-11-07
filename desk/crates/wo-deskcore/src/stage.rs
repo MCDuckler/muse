@@ -340,6 +340,22 @@ impl Stage {
         self.show().edit(e);
     }
 
+    pub(crate) fn scene_page(&mut self, id: &str, all: bool) -> Option<crate::show::ScenePage> {
+        self.show().scene_page(id, all)
+    }
+
+    pub(crate) fn variants(&mut self, scene: &str, style: &str, ground: &str, fx: &str) -> Option<crate::show::Variants> {
+        self.show().variants(scene, style, ground, fx)
+    }
+
+    pub(crate) fn moves(&mut self) -> crate::show::MovesView {
+        self.show().moves()
+    }
+
+    pub(crate) fn finish(&mut self) -> crate::show::FinishView {
+        self.show().finish()
+    }
+
     pub(crate) fn milk_search(&mut self, query: &str, most: usize) -> Vec<crate::show::MilkRow> {
         self.show().milk_search(query, most)
     }

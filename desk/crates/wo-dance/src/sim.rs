@@ -257,6 +257,15 @@ pub struct DanceSim {
     pub forced_shot: Option<Shot>,
     /// The big sets dance (the quality tier's say).
     pub big: bool,
+    /// The hands' say on the moves (the Cue's): kept out, starred, one asked for.
+    moves_off: Vec<String>,
+    moves_star: Vec<String>,
+    audition: Option<(u32, String)>,
+    /// The last asking served (danced, or given up on), and the slots one waited.
+    audition_served: u32,
+    audition_waits: u32,
+    /// The framings' levels in the scene on (the ones not 1).
+    shots: std::collections::BTreeMap<String, f64>,
 }
 
 impl Default for DanceSim {
@@ -291,6 +300,12 @@ impl Default for DanceSim {
             forced_troupe: None,
             forced_shot: None,
             big: true,
+            moves_off: vec![],
+            moves_star: vec![],
+            audition: None,
+            audition_served: 0,
+            audition_waits: 0,
+            shots: Default::default(),
         }
     }
 }
@@ -311,6 +326,17 @@ impl DanceSim {
     pub fn frame(&mut self, co: &Company, st: &ShowState, dt: f64, w: f64, h: f64) -> Scene {
         let (_, rig) = co.rig(clock::MODELS[0]);
         self.t += dt;
+        // the hands' say: the moves off and starred, a move asked for, the framings' levels
+        if self.moves_off != st.macros.moves_off {
+            self.moves_off.clone_from(&st.macros.moves_off);
+        }
+        if self.moves_star != st.macros.moves_star {
+            self.moves_star.clone_from(&st.macros.moves_star);
+        }
+        self.audition = st.macros.audition.clone().map(|a| (st.macros.audition_n, a));
+        if self.shots != st.macros.shots {
+            self.shots.clone_from(&st.macros.shots);
+        }
         let m = st.master();
         let playing = m.playing && m.beat_index.is_some();
         let bpm = m.bpm.filter(|b| *b > 1.0).unwrap_or(120.0);
@@ -451,7 +477,9 @@ impl DanceSim {
         let (shot_was, troupe_was) = (self.shot, self.troupe_drawn);
         if cut_n != self.cut || drop_now || section_now {
             self.cut = cut_n;
-            self.shot = self.forced_shot.unwrap_or_else(|| clock::shot(mood, salt, cut_n, self.troupe, true, None));
+            let levels = &self.shots;
+            let weight = |s: Shot| levels.get(s.name()).copied().unwrap_or(1.0);
+            self.shot = self.forced_shot.unwrap_or_else(|| clock::shot(mood, salt, cut_n, self.troupe, true, (!levels.is_empty()).then_some(&weight as &dyn Fn(Shot) -> f64)));
             // the silhouettes, the text and the dots read best square on
             if self.shot == Shot::Full {
                 self.shot = Shot::Front;
@@ -590,15 +618,45 @@ impl DanceSim {
     /// into at the beat whose pose and motion are nearest what the dancer is doing.
     #[allow(clippy::too_many_arguments)]
     fn step(&mut self, rig: &Rig, alt: bool, tier: usize, flavour: &[f64; 7], bpm: f64, beats: f64, salt: i64, slot: i64, sleep: bool, blend: f64, techno: bool, duo: bool) {
-        let bank: Vec<usize> = (0..rig.moves.len()).collect();
+        // the moves switched off are out (all of them off: none is)
+        let on: Vec<usize> = (0..rig.moves.len()).filter(|&i| !self.moves_off.contains(&rig.moves[i].id)).collect();
+        let bank: Vec<usize> = if on.is_empty() { (0..rig.moves.len()).collect() } else { on };
         let track = if alt { &self.alt } else { &self.lead };
         let recent: Vec<String> = if alt { track.mv.map(|i| vec![rig.moves[i].id.clone()]).unwrap_or_default() } else { self.recent.clone() };
         let mut pool = clock::pool(&rig.moves, &bank, tier, flavour, bpm, &recent, techno, duo);
-        // the record's own few moves (the same whatever was danced last)
+        // the record's own few moves (the same whatever was danced last), the starred too
+        let star = |i: usize| self.moves_star.contains(&rig.moves[i].id);
         let own: Vec<usize> = clock::own_moves(&clock::pool(&rig.moves, &bank, tier, flavour, bpm, &[], techno, duo), &rig.moves, salt).into_iter().map(|e| e.0).collect();
-        let mine: Vec<(usize, f64)> = pool.iter().copied().filter(|e| own.contains(&e.0)).collect();
+        let mine: Vec<(usize, f64)> = pool.iter().copied().filter(|e| own.contains(&e.0) || star(e.0)).collect();
         if !mine.is_empty() {
             pool = mine;
+        }
+        if !self.moves_star.is_empty() {
+            for e in &mut pool {
+                if star(e.0) {
+                    e.1 *= 2.5;
+                }
+            }
+        }
+        // a move asked for by hand: the lead dances it now, whatever the dice say — at a slot
+        // for its company (a duet's for a duet), given up on after a few that are not
+        if !alt
+            && let Some((n, id)) = self.audition.clone()
+            && n != self.audition_served
+        {
+            match rig.moves.iter().position(|m| m.id == id) {
+                Some(i) if duo == rig.moves[i].duo.is_some() => {
+                    pool = vec![(i, 1.0)];
+                    (self.audition_served, self.audition_waits) = (n, 0);
+                }
+                Some(_) => {
+                    self.audition_waits += 1;
+                    if self.audition_waits > 4 {
+                        (self.audition_served, self.audition_waits) = (n, 0);
+                    }
+                }
+                None => self.audition_served = n,
+            }
         }
         if pool.is_empty() {
             return;
@@ -872,6 +930,47 @@ mod tests {
             // far first
             assert!(s.bodies.windows(2).all(|w| w[0].depth >= w[1].depth));
         }
+    }
+
+    /// The lead's moves over `slots` slots (a quarter beat a frame), and the framings cut to.
+    fn danced(co: &Company, macros: &wo_show::state::ShowMacros, slots: usize) -> (Vec<String>, Vec<Shot>) {
+        let mut sim = DanceSim { forced_troupe: Some(Troupe::Solo), ..Default::default() };
+        let (mut moves, mut shots) = (vec![], vec![]);
+        for f in 0..slots * 64 {
+            let st = ShowState { a: deck(32.0 + f as f64 * 0.25, "verse"), dt: 1.0 / 60.0, macros: macros.clone(), ..Default::default() };
+            let s = sim.frame(co, &st, 1.0 / 60.0, 1280.0, 720.0);
+            let id = &co.rigs[0].1.moves[sim.lead.mv.unwrap()].id;
+            if moves.last() != Some(id) {
+                moves.push(id.clone());
+            }
+            if shots.last() != Some(&s.shot) {
+                shots.push(s.shot);
+            }
+        }
+        (moves, shots)
+    }
+
+    #[test]
+    fn the_hands_keep_moves_out_ask_for_one_and_lean_the_framings() {
+        let Some(co) = company() else { return };
+        let plain = wo_show::state::ShowMacros::default();
+        let (before, shots) = danced(&co, &plain, 12);
+        assert!(before.len() > 3 && shots.len() > 1, "{before:?} {shots:?}");
+        // the moves danced, off: none of them again
+        let off = wo_show::state::ShowMacros { moves_off: before.clone(), ..Default::default() };
+        let (after, _) = danced(&co, &off, 12);
+        assert!(after.iter().all(|m| !before.contains(m)), "{before:?} then {after:?}");
+        // a solo move asked for: the lead dances it at the next slot
+        let asked = co.rigs[0].1.moves.iter().find(|m| m.duo.is_none() && !before.contains(&m.id)).unwrap().id.clone();
+        let ask = wo_show::state::ShowMacros { audition: Some(asked.clone()), audition_n: 1, ..Default::default() };
+        let (moves, _) = danced(&co, &ask, 2);
+        assert!(moves.contains(&asked), "{asked} in {moves:?}");
+        assert_eq!(moves.iter().filter(|m| **m == asked).count(), 1, "danced once for one asking: {moves:?}");
+        // the close framing alone
+        let levels = ["front", "medium", "wide", "extremeLow", "extremeHigh", "extremeFront", "fisheye", "fisheyeLow", "full"].iter().map(|s| (s.to_string(), 0.0)).collect();
+        let close = wo_show::state::ShowMacros { shots: levels, ..Default::default() };
+        let (_, shots) = danced(&co, &close, 6);
+        assert_eq!(shots, vec![Shot::Close], "close alone");
     }
 
     #[test]

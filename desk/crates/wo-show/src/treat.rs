@@ -28,13 +28,75 @@ pub fn fx_mode(name: &str) -> Option<u32> {
     })
 }
 
-/// A knob's rest where it is not 1 (show_tune.dart treatmentTunes): the tint of the ascii and
-/// the crt.
-fn rest(treatment: &str, knob: &str) -> f64 {
-    match (treatment, knob) {
-        ("ascii" | "crt", "tint") => 0.2,
-        _ => 1.0,
+/// One knob of a treatment (show_tune.dart TuneSpec): kept as `treatment.knob`, a multiplier
+/// on the look as drawn before there were knobs (1 that look).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TuneSpec {
+    pub knob: &'static str,
+    pub label: &'static str,
+    pub tip: &'static str,
+    pub min: f64,
+    pub max: f64,
+    pub rest: f64,
+}
+
+const fn t(knob: &'static str, label: &'static str, tip: &'static str) -> TuneSpec {
+    TuneSpec { knob, label, tip, min: 0.25, max: 3.0, rest: 1.0 }
+}
+
+const fn tr(knob: &'static str, label: &'static str, tip: &'static str, min: f64, max: f64, rest: f64) -> TuneSpec {
+    TuneSpec { knob, label, tip, min, max, rest }
+}
+
+/// The knobs each treatment has, in the order the panel shows them (show_tune.dart
+/// treatmentTunes; not the birds' own, the flock being set aside).
+pub fn tunes_of(treatment: &str) -> &'static [TuneSpec] {
+    const ASCII: &[TuneSpec] = &[
+        t("size", "Size", "How big the letters are"),
+        tr("spacing", "Spacing", "Room between the letters and the lines", 0.6, 2.5, 1.0),
+        tr("tint", "Colour", "The ink, or the picture's own colour", 0.0, 1.0, 0.2),
+        t("gain", "Gain", "How bright the picture is read: more letters, denser"),
+    ];
+    const DITHER: &[TuneSpec] = &[t("size", "Size", "How big a dot is"), t("gain", "Gain", "How bright the picture is read: more ink")];
+    const HALFTONE: &[TuneSpec] =
+        &[t("size", "Screen", "How far apart the dots are"), tr("weight", "Dots", "How big the dots grow in the light", 0.25, 2.0, 1.0), t("gain", "Gain", "How bright the picture is read")];
+    const THERMAL: &[TuneSpec] = &[t("size", "Halo", "How far the heat glows round things"), t("gain", "Gain", "How hot the picture reads")];
+    const LINES: &[TuneSpec] = &[
+        t("spacing", "Spacing", "How far apart the lines run"),
+        t("weight", "Weight", "How thick a line is"),
+        tr("height", "Height", "How high the light lifts a line", 0.25, 2.5, 1.0),
+        t("gain", "Gain", "How bright the picture is read"),
+    ];
+    const CRT: &[TuneSpec] = &[
+        t("size", "Pixels", "How big the screen's pixels are"),
+        tr("weight", "Scanlines", "How strong the scanlines and the phosphor stripes are", 0.0, 1.5, 1.0),
+        tr("spacing", "Glow", "How far the light bleeds round", 0.0, 2.5, 1.0),
+        tr("height", "Curve", "How far the glass bulges", 0.0, 2.5, 1.0),
+        tr("tint", "Colour", "All purple, or toward the picture's own colour", 0.0, 1.0, 0.2),
+        t("gain", "Gain", "How bright the picture is read"),
+    ];
+    const SLIT: &[TuneSpec] = &[
+        tr("weight", "Reach", "How far back in time the far edge is", 0.1, 1.0, 1.0),
+        tr("spacing", "Slower", "Frames between the ones kept: longer smears, coarser steps", 0.5, 2.0, 1.0),
+    ];
+    const CONTOUR: &[TuneSpec] =
+        &[t("spacing", "Spacing", "How far apart the lines of equal light are"), t("weight", "Weight", "How thick a line is"), t("gain", "Gain", "How bright the picture is read")];
+    match treatment {
+        "ascii" => ASCII,
+        "dither" => DITHER,
+        "halftone" => HALFTONE,
+        "thermal" => THERMAL,
+        "lines" => LINES,
+        "crt" => CRT,
+        "slit" => SLIT,
+        "contour" => CONTOUR,
+        _ => &[],
     }
+}
+
+/// A knob's rest (1, but the tint of the ascii and the crt).
+fn rest(treatment: &str, knob: &str) -> f64 {
+    tunes_of(treatment).iter().find(|s| s.knob == knob).map_or(1.0, |s| s.rest)
 }
 
 /// Whether a treatment has a tint knob (the ascii, the crt).

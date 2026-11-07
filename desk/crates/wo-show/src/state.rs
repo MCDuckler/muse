@@ -377,6 +377,15 @@ pub struct ShowMacros {
     pub dancers_off: Vec<String>,
     /// The MilkDrop preset on, by full name.
     pub milk_preset: Option<String>,
+    /// The dancers' framings' levels in the scene on, by name (`fisheye`): the ones not 1.
+    pub shots: BTreeMap<String, f64>,
+    /// The moves kept out of the dancing, and the starred (danced more), by id.
+    pub moves_off: Vec<String>,
+    pub moves_star: Vec<String>,
+    /// A move asked for by hand: the lead dances it at the next slot that fits; a new
+    /// asking, a new number.
+    pub audition: Option<String>,
+    pub audition_n: u32,
 }
 
 impl Default for ShowMacros {
@@ -395,6 +404,11 @@ impl Default for ShowMacros {
             dancer: None,
             dancers_off: vec![],
             milk_preset: None,
+            shots: BTreeMap::new(),
+            moves_off: vec![],
+            moves_star: vec![],
+            audition: None,
+            audition_n: 0,
         }
     }
 }

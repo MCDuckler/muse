@@ -306,32 +306,6 @@ struct App {
     picture_cam: wo_dance::clock::PictureCam,
 }
 
-/// Where the dancers are: WETOWL_DANCE, `dance/` beside this program (the Desk's installs),
-/// the Mac bundle's Resources, the repo's assets (a build in the repo), the WetOwl app's.
-fn dance_dir() -> Option<std::path::PathBuf> {
-    use std::path::PathBuf;
-    let ok = |p: &PathBuf| p.join("chris").join("dancer.json").is_file() || p.join("joe").join("dancer.json").is_file();
-    if let Some(p) = std::env::var_os("WETOWL_DANCE").map(PathBuf::from) {
-        return ok(&p).then_some(p);
-    }
-    let exe = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from));
-    let mut c = vec![];
-    if let Some(d) = &exe {
-        c.push(d.join("dance"));
-        if let Some(contents) = d.parent() {
-            c.push(contents.join("Resources").join("dance"));
-        }
-        // a build in the repo: desk/target/release
-        c.push(d.join("../../../app/assets/show/dance"));
-        c.push(d.join("stage/data/flutter_assets/assets/show/dance"));
-        c.push(d.join("data/flutter_assets/assets/show/dance"));
-    }
-    if let Some(h) = std::env::var_os("HOME").map(PathBuf::from).filter(|_| cfg!(target_os = "linux")) {
-        c.push(h.join(".local/opt/wetowl/data/flutter_assets/assets/show/dance"));
-    }
-    c.into_iter().find(ok)
-}
-
 /// Whether `scene` (by id) is one the dancers draw.
 fn dancers(book: &SceneBook, scene: Option<&str>) -> bool {
     scene.and_then(|s| book.scenes.get(s)).is_some_and(|s| s.layers.iter().any(|l| l.sim.as_deref().is_some_and(|k| k.starts_with("dance."))))
@@ -807,7 +781,7 @@ fn main() {
     let el = EventLoop::new().expect("an event loop");
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(el.owned_display_handle())));
     let now = Instant::now();
-    let dance = match dance_dir() {
+    let dance = match wo_show::scenes::dance_dir() {
         Some(dir) => {
             let t = Instant::now();
             let co = wo_dance::sim::Company::load(&dir);

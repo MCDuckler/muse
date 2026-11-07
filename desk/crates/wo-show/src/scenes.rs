@@ -32,6 +32,34 @@ pub fn grounds_drawn(milk: bool, cover: bool) -> std::collections::BTreeSet<Stri
 /// The dancers (their rigs under assets/show/dance/<id>), by id and name: wo-dance's models.
 pub const DANCERS: &[(&str, &str)] = &[("chris", "Chris"), ("joe", "Joe")];
 
+/// Where the dancers are (their scans, skeletons, moves): WETOWL_DANCE, `dance/` beside this
+/// program (the Desk's installs), the Mac bundle's Resources, the repo's assets (a build in
+/// the repo), the WetOwl app's.
+pub fn dance_dir() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let ok = |p: &PathBuf| DANCERS.iter().any(|(id, _)| p.join(id).join("dancer.json").is_file());
+    if let Some(p) = std::env::var_os("WETOWL_DANCE").map(PathBuf::from) {
+        return ok(&p).then_some(p);
+    }
+    let exe = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from));
+    let mut c = vec![];
+    if let Some(d) = &exe {
+        c.push(d.join("dance"));
+        if let Some(contents) = d.parent() {
+            c.push(contents.join("Resources").join("dance"));
+        }
+        // a build in the repo: desk/target/release (a test: desk/target/debug/deps)
+        c.push(d.join("../../../app/assets/show/dance"));
+        c.push(d.join("../../../../app/assets/show/dance"));
+        c.push(d.join("stage/data/flutter_assets/assets/show/dance"));
+        c.push(d.join("data/flutter_assets/assets/show/dance"));
+    }
+    if let Some(h) = std::env::var_os("HOME").map(PathBuf::from).filter(|_| cfg!(target_os = "linux")) {
+        c.push(h.join(".local/opt/wetowl/data/flutter_assets/assets/show/dance"));
+    }
+    c.into_iter().find(ok)
+}
+
 /// The scenes the Rust stage draws (plan §1): the rest stay v1's until they are ported, or not.
 pub const IN_SCOPE: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift", "milk", "fluid", "veins", "dance-art", "type3d"];
 

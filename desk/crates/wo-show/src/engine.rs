@@ -7,6 +7,8 @@
 //! - [Play] runs in the stage: from the same decks, the room's sound as heard and the Cue, it
 //!   makes each frame — the record's genome, the palette eased towards the record's, the
 //!   dynamics, the hit fading — whose flat numbers the shaders read (state::common_block).
+use std::collections::BTreeMap;
+
 use crate::combos::Fx;
 use crate::deck::{Flat, ShowAudio, ShowDeck};
 use crate::director::Director;
@@ -106,6 +108,9 @@ pub fn master_of(current: &str, a: &ShowDeck, b: &ShowDeck) -> String {
 /// grid, a deck stopped meanwhile), seconds (v1: launchPatience).
 pub const LAUNCH_PATIENCE: f64 = 20.0;
 
+/// How long a move asked for waits for a slot that fits, seconds.
+pub const AUDITION_PATIENCE: f64 = 16.0;
+
 /// A look the hands put on, waiting for the master's next beat, bar or phrase.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Launch {
@@ -143,6 +148,9 @@ pub struct Direct {
     clock: f64,
     last: Cue,
     launch: Option<Launch>,
+    /// Each dancers' scene's framings' levels (the ones not 1), by the plan.
+    shots: BTreeMap<String, BTreeMap<String, f64>>,
+    audition_at: f64,
 }
 
 impl Direct {
@@ -151,7 +159,10 @@ impl Direct {
         let mut director = Director::new(book.metas(), seed);
         director.kinds = book.kinds();
         director.set_scores(scores);
-        let mut d = Direct { director, looks: book.looks(), doc, held_fx: None, macros: ShowMacros::default(), milk: None, master: "A".into(), prev: None, hit_at: None, clock: 0.0, last: Cue::default(), launch: None };
+        let mut d = Direct { director, looks: book.looks(), doc, held_fx: None, macros: ShowMacros::default(), milk: None, master: "A".into(), prev: None, hit_at: None, clock: 0.0, last: Cue::default(), launch: None, shots: BTreeMap::new(), audition_at: 0.0 };
+        // a move asked for is told by a new number: this session's own (a stage kept open
+        // across a Desk's restart must not take its first asking for one it served)
+        d.macros.audition_n = (seed as u32).wrapping_mul(2_654_435_761) >> 8;
         d.apply_doc();
         d
     }
@@ -165,6 +176,24 @@ impl Direct {
         self.macros.tune = self.doc.tune();
         self.macros.dancer = self.doc.dancer().filter(|d| d != "mix");
         self.macros.dancers_off = self.doc.dancers_off();
+        self.macros.moves_off = self.doc.moves_off();
+        self.macros.moves_star = self.doc.move_stars();
+        let plan = self.doc.plan();
+        self.shots = self
+            .director
+            .kinds
+            .iter()
+            .filter(|(_, k)| !crate::combos::shots_of_figure(**k).is_empty())
+            .map(|(s, k)| {
+                let levels = crate::combos::shots_of_figure(*k)
+                    .into_iter()
+                    .filter_map(|key| key.split_once('.').map(|(_, n)| n))
+                    .map(|n| (n.to_owned(), plan.shot_level(s, n)))
+                    .filter(|(_, v)| *v != 1.0)
+                    .collect();
+                (s.clone(), levels)
+            })
+            .collect();
         // the hands' taste: what NEXT skipped comes less, the kind of the starred favourites more
         let (skips, faves) = (self.doc.taste(), self.doc.faves());
         self.director.taste = (!skips.is_empty() || faves.iter().any(|f| f.stars >= 3)).then(|| -> crate::director::Taste { Box::new(move |c| crate::taste::lean(c, &skips, &faves)) });
@@ -267,6 +296,19 @@ impl Direct {
         out
     }
 
+    /// A move asked for by hand (v1: audition): the lead on the stage dances it at the next
+    /// slot that fits.
+    pub fn audition(&mut self, move_id: &str) {
+        self.macros.audition = Some(move_id.into());
+        self.macros.audition_n = self.macros.audition_n.wrapping_add(1);
+        self.audition_at = self.clock;
+    }
+
+    /// The move asked for, while it waits.
+    pub fn auditioning(&self) -> Option<&str> {
+        self.macros.audition.as_deref()
+    }
+
     /// A hit the hands landed (the stage flashes, fading).
     pub fn hit(&mut self) {
         self.hit_at = Some(self.clock);
@@ -318,7 +360,12 @@ impl Direct {
         }
         let rig = scene.as_ref().and_then(|s| self.looks.get(s)).map(|l| self.hands(l.in_combo(self.director.combo()))).unwrap_or_default();
         let rig_from = from.as_ref().and_then(|s| self.looks.get(s)).map(|l| self.hands(l.in_combo(self.director.from_combo())));
+        // a move asked for, let go after a while (the stage dances it at a slot that fits)
+        if self.macros.audition.is_some() && self.clock - self.audition_at > AUDITION_PATIENCE {
+            self.macros.audition = None;
+        }
         let mut macros = self.macros.clone();
+        macros.shots = scene.as_ref().and_then(|s| self.shots.get(s)).cloned().unwrap_or_default();
         if dark && !macros.blackout {
             macros.blackout = true;
         }
@@ -501,6 +548,34 @@ mod tests {
         direct.mosh_next();
         let (c3, _) = direct.tick(1.0 / 60.0, room(200_000.0), Flat::new());
         assert_eq!(c3.mosh, n + 1, "MOSH moshed");
+    }
+
+    #[test]
+    fn the_dancers_framings_and_moves_go_out_with_the_cue() {
+        let book = crate::scenes::SceneBook::shipped().only(crate::scenes::DRAWN);
+        let mut doc = ShowDoc::default();
+        doc.set_plan(&doc.plan().with_in("dance-art", crate::plan::PlanAxis::Shot, "fisheye", Some(0.0), None));
+        doc.set_move_on("long22", false);
+        doc.set_move_star("hop3", true);
+        let mut direct = Direct::new(&book, doc, None, 5);
+        let dancers = direct.director.weighted("dance-art")[0].0.clone();
+        direct.put_on(dancers, Some(Quantise::Now));
+        let n0 = direct.macros.audition_n;
+        direct.audition("long5");
+        let (c, _) = direct.tick(1.0 / 60.0, Room::default(), Flat::new());
+        assert_eq!(c.scene.as_deref(), Some("dance-art"));
+        assert_eq!(c.macros.shots.get("fisheye"), Some(&0.0));
+        assert_eq!(c.macros.shots.len(), 1, "only the levels not 1");
+        assert_eq!((c.macros.moves_off.clone(), c.macros.moves_star.clone()), (vec!["long22".to_owned()], vec!["hop3".to_owned()]));
+        assert_eq!((c.macros.audition.as_deref(), c.macros.audition_n), (Some("long5"), n0.wrapping_add(1)));
+        // the wire carries them
+        let back = Cue::from_json(&c.to_json());
+        assert_eq!(back.macros, c.macros);
+        // another scene: none of the dancers' framings; the asking let go after a while
+        direct.put_on(direct.director.weighted("kinetic")[0].0.clone(), Some(Quantise::Now));
+        let (c, _) = direct.tick(AUDITION_PATIENCE + 1.0, Room::default(), Flat::new());
+        assert!(c.macros.shots.is_empty());
+        assert_eq!(c.macros.audition, None);
     }
 
     #[test]

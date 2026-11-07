@@ -43,12 +43,19 @@ fn every_page_and_overlay_draws_at_every_size() {
                 }
                 app.page = page;
                 app.overlay = overlay;
-                for n in 0..8 {
+                for n in 0..12 {
                     // the booth's plan view over the waveforms for the last frames; the Show
-                    // page's rotation, and each of its card's tabs
+                    // page's rotation, and each of its card's tabs; a scene's page (the
+                    // dancers', with their moves), one square's masks and blends open
                     app.plan_open = n >= 4;
                     app.show_room = usize::from(n >= 4);
                     app.show_tab = n % 4;
+                    app.show_scene = match n {
+                        8 | 9 => Some("kinetic".into()),
+                        10 | 11 => Some("dance-art".into()),
+                        _ => None,
+                    };
+                    app.scene_ui.variants = (n == 9).then(|| ("raw".into(), "white".into(), "none".into()));
                     t += 1.0 / 60.0;
                     app.desk.lock().unwrap().tick();
                     // as a window gives it: its pixels in points at the zoom (the screen's own
