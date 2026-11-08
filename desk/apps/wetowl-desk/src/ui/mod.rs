@@ -1,6 +1,7 @@
 //! The Desk's UI foundations (plans/wetowl-desk-ui-overhaul.md §3): the tokens, motion, the
 //! icons and the kit; here the layout grid, egui's own widgets in the tokens, the covers as
 //! textures, and the toasts.
+pub mod fit;
 pub mod icons;
 pub mod kit;
 pub mod motion;
@@ -94,13 +95,16 @@ pub struct Layout {
 pub fn layout(full: Rect) -> Layout {
     let (m, g) = (12.0, t::GAP);
     let r = full.shrink(m);
+    // a short window (a laptop's): the overviews and the decks a little shorter, the
+    // waveforms give way first, so the crate, the stage and the Auto DJ keep their room
+    let short = full.height() < 1000.0;
     let top = Rect::from_min_size(r.min, vec2(r.width(), 52.0));
-    let overview = Rect::from_min_size(pos2(r.left(), top.bottom() + g), vec2(r.width(), 66.0));
+    let overview = Rect::from_min_size(pos2(r.left(), top.bottom() + g), vec2(r.width(), if short { 58.0 } else { 66.0 }));
     let page = Rect::from_min_max(pos2(r.left(), overview.bottom() + g), r.max);
-    let mid_h = 318.0;
-    // waveforms and the crate share what is left: the waveforms 44 %, within 150..320
+    let mid_h = if short { 300.0 } else { 318.0 };
+    // waveforms and the crate share what is left: the waveforms 44 % (30 % when short)
     let free = r.bottom() - overview.bottom() - 3.0 * g - mid_h;
-    let waves_h = (free * 0.44).clamp(150.0, 320.0);
+    let waves_h = if short { (free * 0.3).clamp(104.0, 320.0) } else { (free * 0.44).clamp(150.0, 320.0) };
     let waves = Rect::from_min_size(pos2(r.left(), overview.bottom() + g), vec2(r.width(), waves_h));
     let mid = Rect::from_min_size(pos2(r.left(), waves.bottom() + g), vec2(r.width(), mid_h));
     let mixer_w = (r.width() * 0.22).clamp(380.0, 460.0);

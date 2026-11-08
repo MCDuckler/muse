@@ -9,13 +9,15 @@ use eframe::egui::{
 };
 use wo_deskcore::theme;
 
+use super::fit;
 use super::icons::{self, Icon};
 use super::motion::{self, Ease};
 use super::tokens::{self as t, Tone, mix};
-use crate::paint::{alpha, col, family, label_sized, label_width};
+use crate::paint::{alpha, col, family, label_job, label_sized, label_width};
 
 /// A panel: elevation 1, glass (or dense glass for data), its edge and one inner highlight.
 pub fn panel(p: &Painter, r: Rect, dense: bool) {
+    fit::panel(r);
     let cr = CornerRadius::same(t::R_PANEL);
     p.add(t::shadow(1).as_shape(r, cr));
     let fill = col(if dense { theme::GLASS_DENSE } else { theme::GLASS_PANEL });
@@ -75,11 +77,13 @@ pub struct Btn<'a> {
     quiet: bool,
     accent: bool,
     size: f32,
+    /// The icon alone, its word on hover (a row whose words do not all fit).
+    bare: bool,
 }
 
 impl<'a> Btn<'a> {
     pub fn new(text: &'a str) -> Self {
-        Btn { text, icon: None, tone: Tone::Neutral, on: false, enabled: true, sub: None, quiet: false, accent: false, size: 11.5 }
+        Btn { text, icon: None, tone: Tone::Neutral, on: false, enabled: true, sub: None, quiet: false, accent: false, size: 11.5, bare: false }
     }
     pub fn icon(mut self, i: Icon) -> Self {
         self.icon = Some(i);
@@ -112,6 +116,16 @@ impl<'a> Btn<'a> {
         self.accent = a;
         self
     }
+    /// The icon alone (when `b`), its word on hover: for a row of buttons that go bare
+    /// together when one of them would have to (see [Btn::fits]).
+    pub fn bare(mut self, b: bool) -> Self {
+        self.bare = b && self.icon.is_some();
+        self
+    }
+    /// Whether its icon and word fit `r` together (true for a button with no icon).
+    pub fn fits(&self, p: &Painter, r: Rect) -> bool {
+        self.icon.is_none() || self.text.is_empty() || fit::caps(p, self.text, self.size, self.text_room(r)).is_some()
+    }
     /// The word's size (11.5 by default; the big transport and perform buttons larger).
     pub fn size(mut self, s: f32) -> Self {
         self.size = s;
@@ -122,8 +136,26 @@ impl<'a> Btn<'a> {
     pub fn show(self, ui: &mut Ui, p: &Painter, r: Rect, id: impl std::hash::Hash + std::fmt::Debug) -> Response {
         let id = ui.scope_id().with(id);
         let resp = ui.interact(r, id, if self.enabled { Sense::click() } else { Sense::hover() });
+        fit::inside(if self.text.is_empty() { "an icon button" } else { self.text }, r, ui.clip_rect());
         self.paint(ui, p, r, id, &resp);
+        // its word did not fit beside its icon: the word on hover
+        let resp = if self.icon_only(p, r) { resp.on_hover_text(self.text) } else { resp };
         if self.enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
+    }
+
+    /// The icon's side beside a word, in `r`.
+    fn icon_side(r: Rect) -> f32 {
+        14.0f32.min(r.height() * 0.5)
+    }
+
+    /// The room a word has in `r` (beside the icon, if any).
+    fn text_room(&self, r: Rect) -> f32 {
+        r.width() - 16.0 - if self.icon.is_some() { Self::icon_side(r) + 7.0 } else { 0.0 }
+    }
+
+    /// An icon and a word that do not fit together: the icon alone.
+    fn icon_only(&self, p: &Painter, r: Rect) -> bool {
+        self.icon.is_some() && !self.text.is_empty() && (self.bare || fit::caps(p, self.text, self.size, self.text_room(r)).is_none())
     }
 
     /// Drawn for a response that comes from elsewhere (one held down: CUE, a nudge).
@@ -155,27 +187,40 @@ impl<'a> Btn<'a> {
         let c = r.center() + vec2(0.0, pr);
         let has_text = !self.text.is_empty();
         let sub_h = if self.sub.is_some() { 8.0 } else { 0.0 };
-        match (self.icon, has_text) {
+        let alone = self.icon_only(p, r);
+        match (self.icon, has_text && !alone) {
             (Some(i), false) => {
                 let s = (r.height() * 0.5).min(20.0);
                 icons::paint(p, Rect::from_center_size(c, vec2(s, s)), i, ink);
             }
             (Some(i), true) => {
-                let s = 14.0f32.min(r.height() * 0.5);
-                let w = label_width(p, self.text, self.size) + s + 7.0;
+                let s = Self::icon_side(r);
+                let (z, sp) = fit::caps(p, self.text, self.size, self.text_room(r)).unwrap_or((self.size, 0.0));
+                let g = p.layout_job(label_job(self.text, z, sp, ink));
+                let w = g.size().x + s + 7.0;
                 let x0 = c.x - w / 2.0;
                 icons::paint(p, Rect::from_center_size(pos2(x0 + s / 2.0, c.y - sub_h), vec2(s, s)), i, ink);
-                label_sized(p, pos2(x0 + s + 7.0, c.y - sub_h), Align2::LEFT_CENTER, self.text, self.size, ink);
+                p.galley(pos2(x0 + s + 7.0, c.y - sub_h - g.size().y / 2.0), g, ink);
             }
             (None, _) => {
-                label_sized(p, pos2(c.x, c.y - sub_h), Align2::CENTER_CENTER, self.text, self.size, ink);
+                fit::label(p, pos2(c.x, c.y - sub_h), Align2::CENTER_CENTER, self.text, self.size, ink, self.text_room(r));
             }
         }
         if let Some(s) = self.sub {
             let sub_ink = if self.enabled { mix(t::muted(), lit_ink, on * 0.5) } else { t::faint() };
-            p.text(pos2(c.x, c.y + 10.0), Align2::CENTER_CENTER, s, FontId::new(11.0, family("")), sub_ink);
+            let g = p.layout_no_wrap(s.to_owned(), FontId::new(11.0, family("")), sub_ink);
+            if g.size().x > r.width() - 8.0 {
+                fit::miss(s, g.size().x, r.width() - 8.0);
+            }
+            clipped(p, pos2(c.x - g.size().x.min(r.width() - 8.0) / 2.0, c.y + 10.0), s, 11.0, "", sub_ink, r.width() - 8.0);
         }
     }
+}
+
+/// Whether a row of buttons (each with its rect) should go bare together: true when any
+/// one's icon and word do not fit.
+pub fn bare_row(p: &Painter, row: &[(Btn<'_>, Rect)]) -> bool {
+    row.iter().any(|(b, r)| !b.fits(p, *r))
 }
 
 /// Whether the pointer is held down on `r` (a control that acts on press and on release).
@@ -187,6 +232,7 @@ pub fn held(ui: &mut Ui, r: Rect, id: impl std::hash::Hash + std::fmt::Debug) ->
 /// A segmented choice: the segments of `items` in `r`, the chosen one (if any) under a
 /// highlight that glides to it. The one clicked.
 pub fn segmented(ui: &mut Ui, p: &Painter, r: Rect, items: &[&str], chosen: Option<usize>, tone: Tone, id: impl std::hash::Hash + std::fmt::Debug) -> Option<usize> {
+    fit::inside(items.first().copied().unwrap_or("a choice"), r, ui.clip_rect());
     let id = ui.scope_id().with(id);
     let n = items.len().max(1);
     let cr = CornerRadius::same(t::R_CONTROL);
@@ -214,7 +260,7 @@ pub fn segmented(ui: &mut Ui, p: &Painter, r: Rect, items: &[&str], chosen: Opti
         let h = motion::tween_bool(ui.ctx(), id.with(("h", i)), resp.hovered(), motion::QUICK, motion::STANDARD);
         let on = motion::tween_bool(ui.ctx(), id.with(("on", i)), chosen == Some(i), motion::STANDARD, motion::STANDARD);
         let ink = mix(mix(t::label(), t::soft(), h), lit_ink, on);
-        label_sized(p, sr.center(), Align2::CENTER_CENTER, s, 11.0, ink);
+        fit::label(p, sr.center(), Align2::CENTER_CENTER, s, 11.0, ink, w - 8.0);
         if resp.clicked() {
             picked = Some(i);
         }
@@ -232,12 +278,13 @@ pub fn deck_chip(p: &Painter, left_center: Pos2, d: usize) -> Rect {
 
 /// A small glass tab over busy pictures (a waveform's lane, a stage picture's caption).
 pub fn glass_tab(p: &Painter, r: Rect) {
-    p.add(t::shadow(2).as_shape(r, CornerRadius::same(t::R_CONTROL)));
+    p.add(egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(r, CornerRadius::same(t::R_CONTROL)));
     p.rect(r, CornerRadius::same(t::R_CONTROL), Color32::from_rgba_unmultiplied(14, 15, 19, 214), Stroke::new(1.0, Color32::from_white_alpha(22)), StrokeKind::Inside);
 }
 
 /// A chip: a small pill of words, lit or not.
 pub fn chip(ui: &mut Ui, p: &Painter, r: Rect, s: &str, on: bool, tone: Tone, enabled: bool, id: impl std::hash::Hash + std::fmt::Debug) -> Response {
+    fit::inside(s, r, ui.clip_rect());
     let id = ui.scope_id().with(id);
     let resp = ui.interact(r, id, if enabled { Sense::click() } else { Sense::hover() });
     let (h, pr, _) = states(ui, id, &resp, enabled);
@@ -248,7 +295,7 @@ pub fn chip(ui: &mut Ui, p: &Painter, r: Rect, s: &str, on: bool, tone: Tone, en
     let edge = mix(mix(Color32::from_white_alpha(20), t::edge_hover(), h), le, on_t);
     let ink = if enabled { mix(mix(t::muted(), t::text(), h), li, on_t) } else { t::faint() };
     p.rect(r, cr, fill, Stroke::new(1.0, edge), StrokeKind::Inside);
-    label_sized(p, r.center(), Align2::CENTER_CENTER, s, 11.0, ink);
+    fit::label(p, r.center(), Align2::CENTER_CENTER, s, 11.0, ink, r.width() - 12.0);
     if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
 }
 
@@ -274,10 +321,10 @@ pub fn pad(ui: &mut Ui, p: &Painter, r: Rect, n: usize, set: Option<(&str, Color
             let fill = alpha_of(c, 0.13 + 0.1 * h + 0.35 * fl - 0.04 * pr);
             p.rect(r, cr, mix(Color32::TRANSPARENT, fill, set_t), Stroke::new(1.0, alpha_of(c, 0.5 + 0.25 * h)), StrokeKind::Inside);
             if narrow {
-                label_sized(&pc, r.center(), Align2::CENTER_CENTER, name, 10.5, t::text());
+                fit::label(&pc, r.center(), Align2::CENTER_CENTER, name, 10.5, t::text(), r.width() - 8.0);
             } else {
                 let num = text(&pc, pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, &n.to_string(), 11.0, "mono", Color32::from_white_alpha(200));
-                label_sized(&pc, pos2(num.right() + 7.0, r.center().y), Align2::LEFT_CENTER, name, 11.5, t::text());
+                fit::label(&pc, pos2(num.right() + 7.0, r.center().y), Align2::LEFT_CENTER, name, 11.5, t::text(), r.right() - 8.0 - num.right() - 7.0);
             }
         }
         None => {
@@ -445,6 +492,7 @@ pub fn sleeve(ui: &Ui, p: &Painter, r: Rect, cover: Option<TextureId>, initials:
 
 /// A text field over the glass: its frame lights while typed in; an icon at its left.
 pub fn field(ui: &mut Ui, p: &Painter, r: Rect, value: &mut String, hint_s: &str, icon: Option<Icon>, password: bool, id: impl std::hash::Hash + std::fmt::Debug) -> Response {
+    fit::inside(hint_s, r, ui.clip_rect());
     let id = ui.scope_id().with(id);
     let focused = ui.memory(|m| m.has_focus(id));
     let f = motion::tween_bool(ui.ctx(), id.with("f"), focused, motion::STANDARD, motion::STANDARD);
@@ -471,6 +519,7 @@ pub fn dot(p: &Painter, c: Pos2, color: Color32, r: f32) {
 /// The modal frame: the scrim over everything and a card rising into the middle, `k` its
 /// shown share (0..1). The card's rect.
 pub fn modal(p: &Painter, full: Rect, size: egui::Vec2, k: f32) -> Rect {
+    fit::panel(Rect::from_center_size(full.center(), size));
     let e = Ease::Out.at(k);
     p.rect_filled(full, CornerRadius::ZERO, Color32::from_black_alpha((140.0 * e) as u8));
     let s = 0.98 + 0.02 * e;

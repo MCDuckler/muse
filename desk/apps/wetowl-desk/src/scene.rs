@@ -458,8 +458,7 @@ impl App {
             kit::hint(&p, inner.min + vec2(0.0, 26.0), Align2::LEFT_TOP, if v.world { "each effect · a click: never, or back · a right click: less, more, play it" } else { "each mask and blend under the effect picked · a click: never, or back · a right click: less, more, play it" });
             let mut y = inner.top() + 50.0;
             if !v.world {
-                self.variant_fxs(ui, &p, pos2(inner.left(), y), &v, fx);
-                y += 36.0;
+                y += self.variant_fxs(ui, &p, pos2(inner.left(), y), inner.right(), &v, fx) + 10.0;
                 for (i, (_, name)) in v.mixes.iter().enumerate() {
                     kit::clipped(&p, pos2(inner.left() + 90.0 + i as f32 * (cw + 6.0), y + 8.0), name, 11.0, "", t::text(), cw);
                 }
@@ -493,13 +492,19 @@ impl App {
         });
     }
 
-    fn variant_fxs(&mut self, ui: &mut Ui, p: &Painter, at: egui::Pos2, v: &Variants, fx: &str) {
+    /// The effects as chips from `at`, wrapping before `right`; their height.
+    fn variant_fxs(&mut self, ui: &mut Ui, p: &Painter, at: egui::Pos2, right: f32, v: &Variants, fx: &str) -> f32 {
         kit::section(p, pos2(at.x, at.y + 13.0), Align2::LEFT_CENTER, "Effect");
         let mut x = at.x + 90.0;
+        let mut y = at.y;
         for (key, name, share, on) in &v.fxs {
             let word = format!("{name} {}", share_word(*share));
             let cw = kit::chip_width(p, &word) + 8.0;
-            let cr = Rect::from_min_size(pos2(x, at.y + 2.0), vec2(cw, 22.0));
+            if x + cw > right && x > at.x + 90.0 {
+                x = at.x + 90.0;
+                y += 28.0;
+            }
+            let cr = Rect::from_min_size(pos2(x, y + 2.0), vec2(cw.min(right - x), 22.0));
             if kit::chip(ui, p, cr, &word, key == fx, Tone::Neutral, *on || key == fx, ("vfx", key)).on_hover_text("The masks and blends under this effect (its share of the scene's time with this style on this background)").clicked()
                 && let Some(s) = &mut self.scene_ui.variants
             {
@@ -507,6 +512,7 @@ impl App {
             }
             x += cw + 6.0;
         }
+        y - at.y + 26.0
     }
 
     /// The dancers' moves: every one of the bank — switched off, starred, asked for. The height.

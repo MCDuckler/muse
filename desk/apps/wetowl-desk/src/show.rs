@@ -49,6 +49,8 @@ impl App {
         let right_w = 520.0;
         let col_x = main.right() - right_w;
         let left = Rect::from_min_max(main.min, pos2(col_x - g, main.bottom()));
+        // (the room's tabs sit on the page itself)
+        crate::ui::fit::panel(main);
         // the left: the stage, or the rotation
         let tabs = Rect::from_min_size(left.min, vec2(330.0, 28.0));
         if let Some(i) = kit::segmented(ui, p, tabs, &["Stage", "Rotation", "Favourites"], Some(self.show_room), Tone::Neutral, "show-room") {

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use wo_engine::{Bus, Channels, DeckId, Engine, Eq, Gains, Output, Source};
 use wo_wave::{Analyser, Tee, Wave};
+pub use wo_wave::Bin;
 
 pub mod backdrop;
 pub mod bench;
@@ -153,9 +154,40 @@ pub struct Row {
 #[derive(Clone, Debug, Default)]
 pub struct Lines {
     pub beats: Vec<f32>,
+    /// Bars, but for those that start a four-bar group.
     pub bars: Vec<f32>,
+    /// The bars that start a four-bar group (the house's markers, else every fourth from
+    /// the one): x and the bar's number, from 1 at the grid's one.
+    pub fours: Vec<(f32, i64)>,
     /// x, the pad's index, the pad.
     pub pads: Vec<(f32, usize, Pad)>,
+}
+
+/// A deck's waveform lane: bins fixed to the record's own columns (so as it scrolls its
+/// shape holds still), where each falls, and the lines over it. x from the lane's left.
+#[derive(Clone, Debug, Default)]
+pub struct LaneWave {
+    pub bins: Vec<Option<Bin>>,
+    /// The first bin's left edge, and each bin's width.
+    pub x0: f32,
+    pub bin_w: f32,
+    /// Pixels a second of the record (its own time), and where the playhead's time is.
+    pub px_per_s: f64,
+    pub heard: f64,
+    pub lines: Lines,
+    /// Where the record starts and ends in the lane.
+    pub start: f32,
+    pub end: f32,
+    /// How far it has come in, while it decodes.
+    pub arriving: Option<f32>,
+}
+
+/// What a record is made of in time, for drawing: its sections (a name, start, end) and
+/// its drops, in seconds.
+#[derive(Clone, Debug, Default)]
+pub struct Form {
+    pub sections: Vec<(String, f64, f64)>,
+    pub drops: Vec<f64>,
 }
 
 struct Slot {
@@ -934,47 +966,88 @@ impl Desk {
         rows
     }
 
-    /// A deck's waveform around `heard`, `width` px wide with the playhead in the
-    /// middle, beats `beat_px` apart: each band's peak per `step` px, and the lines.
-    pub fn waveform(&self, deck: usize, heard: f64, width: f32, step: f32, beat_px: f32) -> (Vec<[f32; 3]>, Lines) {
+    /// A deck's waveform lane around `heard`, `width` px wide with the playhead in the
+    /// middle, beats `beat_px` apart, about `step` px a bin. A bin is a power of two of the
+    /// record's columns and starts on a multiple of it: the same columns make the same bin
+    /// every frame, wherever the playhead is, so the picture scrolls without re-shaping (a
+    /// zoom changes the bins only where it crosses a power of two).
+    pub fn lane_wave(&self, deck: usize, heard: f64, width: f32, step: f32, beat_px: f32) -> LaneWave {
         let s = &self.slots[deck];
         let spb = self.spb(deck);
         let px_per_s = beat_px as f64 / spb;
-        let t0 = heard - (width as f64 / 2.0) / px_per_s;
+        let px_per_col = px_per_s / wo_wave::RATE;
+        let want = (step as f64 / px_per_col).max(1.0);
+        let k = 1usize << (want.log2().round().clamp(0.0, 12.0) as u32);
+        let half = width as f64 / 2.0;
+        let x_of = |t: f64| (half + (t - heard) * px_per_s) as f32;
+        let t0 = heard - half / px_per_s;
+        let first = ((t0 * wo_wave::RATE) / k as f64).floor() as i64 * k as i64;
+        let x0 = x_of(first as f64 / wo_wave::RATE);
+        let bin_w = (k as f64 * px_per_col) as f32;
+        let n = ((width - x0) / bin_w).ceil().max(0.0) as usize + 1;
         let wave = s.wave.lock().unwrap();
-        let n = (width / step).ceil() as usize;
-        let cols = (0..n)
-            .map(|i| {
-                let a = t0 + (i as f64 * step as f64) / px_per_s;
-                wave.span(a, a + step as f64 / px_per_s)
-            })
-            .collect();
+        let bins = wave.bins(first, k, n);
+        let length = if s.record.seconds > 0 { s.record.seconds as f64 } else { wave.seconds() };
+        let arriving = (!wave.done).then(|| x_of(wave.seconds()));
+        drop(wave);
         let t1 = t0 + width as f64 / px_per_s;
         let mut lines = Lines::default();
         let grid = &s.hands.grid;
-        let first = grid.beats.partition_point(|&b| b < t0);
-        for (i, &b) in grid.beats.iter().enumerate().skip(first) {
+        let markers = &s.timing.markers;
+        let first_beat = grid.beats.partition_point(|&b| b < t0);
+        for (i, &b) in grid.beats.iter().enumerate().skip(first_beat) {
             if b > t1 {
                 break;
             }
-            let x = ((b - t0) * px_per_s) as f32;
-            if grid.is_bar(i) { lines.bars.push(x) } else { lines.beats.push(x) }
+            let x = x_of(b);
+            if !grid.is_bar(i) {
+                lines.beats.push(x);
+                continue;
+            }
+            let bar = (i as i64 - grid.bar_one as i64).div_euclid(4) + 1;
+            let four = if markers.is_empty() { (bar - 1).rem_euclid(4) == 0 } else { markers.iter().any(|&m| (m - b).abs() < 0.08) };
+            if four { lines.fours.push((x, bar)) } else { lines.bars.push(x) }
         }
         for (i, p) in s.hands.pads.iter().enumerate() {
             let Some(p) = p else { continue };
             if p.at >= t0 && p.at <= t1 {
-                lines.pads.push((((p.at - t0) * px_per_s) as f32, i, *p));
+                lines.pads.push((x_of(p.at), i, *p));
             }
         }
-        (cols, lines)
+        LaneWave { bins, x0, bin_w, px_per_s, heard, lines, start: x_of(0.0), end: x_of(length), arriving }
     }
 
-    /// The whole record in `cols` columns.
-    pub fn overview(&self, deck: usize, cols: usize) -> Vec<[f32; 3]> {
+    /// The whole record in `n` bins, against its own ceiling (None where it has not come in).
+    pub fn overview(&self, deck: usize, n: usize) -> Vec<Option<Bin>> {
         let s = &self.slots[deck];
         let wave = s.wave.lock().unwrap();
         let len = if s.record.seconds > 0 { s.record.seconds as f64 } else { wave.seconds() };
-        (0..cols).map(|i| wave.span(i as f64 * len / cols as f64, (i + 1) as f64 * len / cols as f64)).collect()
+        wave.overview(len, n)
+    }
+
+    /// How much of a deck's record has come in (its waveform's columns; changes as it
+    /// decodes): what an overview's picture is kept by.
+    pub fn wave_len(&self, deck: usize) -> usize {
+        self.slots[deck].wave.lock().unwrap().cols.len()
+    }
+
+    /// A deck's record's sections and drops (the house's structure; empty without it).
+    pub fn form(&self, deck: usize) -> Form {
+        let t = &self.slots[deck].timing;
+        Form { sections: t.sections.iter().map(|x| (x.label.clone(), x.start, x.end)).collect(), drops: t.drops.clone() }
+    }
+
+    /// Where `t` falls on a deck's grid: how far into its beat (0..1) and which beat of its
+    /// bar (0..3). None without a grid, or outside it.
+    pub fn beat_at(&self, deck: usize, t: f64) -> Option<(f64, usize)> {
+        let g = &self.slots[deck].hands.grid;
+        let i = g.beats.partition_point(|&b| b <= t);
+        if i == 0 || i >= g.beats.len() {
+            return None;
+        }
+        let (a, b) = (g.beats[i - 1], g.beats[i]);
+        let beat = (i - 1 + 4 - g.bar_one % 4) % 4;
+        Some((((t - a) / (b - a).max(1e-6)).clamp(0.0, 1.0), beat))
     }
 
     // ---- the hands

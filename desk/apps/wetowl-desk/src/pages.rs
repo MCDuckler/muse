@@ -35,6 +35,8 @@ fn every_page_and_overlay_draws_at_every_size() {
     let mut slowest = (0.0f32, String::new());
     let mut total = 0.0f32;
     let mut frames = 0;
+    // words that did not fit, and where
+    let mut misses: Vec<String> = vec![];
     for size in [vec2(1280.0, 720.0), vec2(1400.0, 840.0), vec2(1920.0, 1080.0), vec2(2560.0, 1440.0)] {
         for page in [Page::Booth, Page::Show, Page::Kit] {
             for overlay in [None, Some(Overlay::Keys), Some(Overlay::Settings), Some(Overlay::Set), Some(Overlay::Controllers)] {
@@ -68,6 +70,16 @@ fn every_page_and_overlay_draws_at_every_size() {
                         window = app.frame(ui).0;
                     });
                     let ppp = out.pixels_per_point;
+                    // (the first frames lay things out and ease them in)
+                    let missed = crate::ui::fit::take();
+                    if n >= 3 {
+                        for m in missed {
+                            let line = format!("{page:?} {overlay:?} at {}×{} (frame {n}): {m}", size.x, size.y);
+                            if !misses.iter().any(|x| x.split(": ").nth(1) == line.split(": ").nth(1) && x.starts_with(&line[..line.find(" (frame").unwrap_or(0)])) {
+                                misses.push(line);
+                            }
+                        }
+                    }
                     let meshes = ctx.tessellate(out.shapes, ppp);
                     let ms = t0.elapsed().as_secs_f32() * 1000.0;
                     let what = format!("{page:?} {overlay:?} at {}×{}", size.x, size.y);
@@ -88,6 +100,7 @@ fn every_page_and_overlay_draws_at_every_size() {
             }
         }
     }
+    assert!(misses.is_empty(), "{} words did not fit their place:\n{}", misses.len(), misses.join("\n"));
     let average = total / frames as f32;
     eprintln!("{frames} frames, {average:.2} ms on average; slowest {:.2} ms ({})", slowest.0, slowest.1);
     // generous for a CI machine (the HP's Ryzen 3500U: about 2 ms)

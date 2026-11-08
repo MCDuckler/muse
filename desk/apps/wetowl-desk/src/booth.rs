@@ -7,7 +7,7 @@ use wo_deskcore::theme;
 use wo_deskcore::parts::{Part, Stems};
 use wo_deskcore::{Desk, Record, Shelf, ShowHand, Snapshot, Style, Transition};
 
-use crate::paint::{alpha, band, col, label_sized, label_width, mmss, pad_colour, pad_name, white};
+use crate::paint::{col, label_sized, label_width, mmss, pad_colour, pad_name, white};
 use crate::show::Page;
 use crate::ui::icons::Icon;
 use crate::ui::kit::{self, Btn, alpha_of};
@@ -91,17 +91,21 @@ impl App {
         kit::label(p, pos2(bpm.left() - 10.0, mid.y), Align2::RIGHT_CENTER, "Master");
         let chip = kit::deck_chip(p, pos2(bpm.right() + 10.0, mid.y), m);
         let v = &s.decks[m];
-        let pulse = if v.playing && v.bpm > 1.0 {
-            let (_, lines) = desk.waveform(m, v.heard, 400.0, 40.0, 100.0);
-            let phase = lines.beats.iter().chain(lines.bars.iter()).filter(|&&x| x <= 200.0).map(|x| (200.0 - x) / 100.0).fold(f32::MAX, f32::min);
-            let secs = phase * 60.0 / v.bpm as f32;
-            (1.0 - secs / 0.12).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let dot_c = pos2(chip.right() + 13.0, mid.y);
-        p.circle_filled(dot_c, 6.0, alpha_of(t::deck(m), 0.22 * pulse));
-        p.circle_filled(dot_c, 3.5, mix(Color32::from_rgb(0x3A, 0x3E, 0x47), t::tint(m), if v.playing { 0.35 + 0.65 * pulse } else { 0.0 }));
+        // the master's beat in its bar: four steps, the one lit on the beat
+        let beat = v.playing.then(|| desk.beat_at(m, v.heard)).flatten();
+        let mut bx = chip.right() + 12.0;
+        for i in 0..4 {
+            let r4 = Rect::from_min_size(pos2(bx, mid.y - 6.0), vec2(5.0, 12.0));
+            let (lit, k) = match beat {
+                Some((into, b)) if b == i => (true, (1.0 - (into * 60.0 / v.bpm.max(1.0)) as f32 / 0.18).clamp(0.0, 1.0)),
+                _ => (false, 0.0),
+            };
+            let base = if v.playing { Color32::from_rgb(0x3A, 0x3E, 0x47) } else { Color32::from_rgb(0x2A, 0x2D, 0x34) };
+            let on = if i == 0 { t::tint(m) } else { t::deck(m) };
+            p.rect_filled(r4, CornerRadius::same(2), if lit { mix(alpha_of(on, 0.55), on, k) } else { base });
+            bx = r4.right() + 3.0;
+        }
+        let dot_c = pos2(bx - 3.0, mid.y);
         let set = s.set_seconds as u64;
         let st = kit::label(p, pos2(dot_c.x + 30.0, mid.y), Align2::LEFT_CENTER, "Set");
         kit::text(p, pos2(st.right() + 8.0, mid.y), Align2::LEFT_CENTER, &format!("{}:{:02}:{:02}", set / 3600, set / 60 % 60, set % 60), 14.0, "mono", t::soft());
@@ -212,158 +216,6 @@ impl App {
             line(ui, "DSP", format!("{pct:.0}% of the sound's time, {:.0}% at worst; {} late", s.load.worst * 100.0, s.load.late));
         });
         (r, clicked)
-    }
-
-    pub(crate) fn overviews(&self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot) {
-        kit::panel(p, r, true);
-        for d in 0..2 {
-            let y = r.top() + 10.0 + d as f32 * 25.0;
-            kit::deck_chip(p, pos2(r.left() + 12.0, y + 10.0), d);
-            let bar = Rect::from_min_max(pos2(r.left() + 42.0, y), pos2(r.right() - 96.0, y + 20.0));
-            let v = &s.decks[d];
-            let len = v.length.max(1.0);
-            let cols = desk.overview(d, (bar.width() / 3.0) as usize);
-            let mut mesh = Mesh::default();
-            band(&mut mesh, bar.left(), 3.0, bar.center().y, cols.iter().map(|c| c[0] * 9.5 + 0.8), alpha(theme::DECKS[d], 0.85));
-            p.add(mesh);
-            let at = bar.left() + bar.width() * (v.heard / len).clamp(0.0, 1.0) as f32;
-            // what was heard, dimmed, with a soft edge up to the playhead
-            let edge = 18.0f32.min(at - bar.left());
-            p.rect_filled(Rect::from_min_max(bar.min, pos2(at - edge, bar.bottom())), CornerRadius::ZERO, alpha(theme::GROUND, 0.55));
-            if edge > 0.0 {
-                let mut g = Mesh::default();
-                let (c0, c1) = (alpha(theme::GROUND, 0.55), alpha(theme::GROUND, 0.0));
-                g.colored_vertex(pos2(at - edge, bar.top()), c0);
-                g.colored_vertex(pos2(at, bar.top()), c1);
-                g.colored_vertex(pos2(at, bar.bottom()), c1);
-                g.colored_vertex(pos2(at - edge, bar.bottom()), c0);
-                g.add_triangle(0, 1, 2);
-                g.add_triangle(0, 2, 3);
-                p.add(g);
-            }
-            if let Some((a, b)) = v.looped {
-                let xa = bar.left() + bar.width() * (a / len) as f32;
-                let xb = bar.left() + bar.width() * (b / len) as f32;
-                p.rect_filled(Rect::from_min_max(pos2(xa, bar.top()), pos2(xb.max(xa + 2.0), bar.bottom())), CornerRadius::same(2), alpha(theme::DECKS[d], 0.3));
-            }
-            for pad in v.pads.iter().flatten() {
-                let x = bar.left() + bar.width() * (pad.at / len) as f32;
-                let c = col(pad_colour(pad.auto));
-                p.rect_filled(Rect::from_min_size(pos2(x - 1.0, bar.top()), vec2(2.0, bar.height())), CornerRadius::ZERO, alpha_of(c, 0.9));
-            }
-            p.rect_filled(Rect::from_min_size(pos2(at - 3.0, bar.top() - 1.0), vec2(6.0, 22.0)), CornerRadius::same(2), white(0.12));
-            p.rect_filled(Rect::from_min_size(pos2(at - 1.0, bar.top() - 1.0), vec2(2.0, 22.0)), CornerRadius::ZERO, Color32::WHITE);
-            // hover: a ghost playhead and its time; a click (or a drag let go) goes there
-            let resp = ui.interact(bar.expand2(vec2(0.0, 2.0)), ui.scope_id().with(("overview", d)), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::PointingHand);
-            let ghost = resp.hover_pos().or(resp.interact_pointer_pos()).filter(|_| resp.hovered() || resp.dragged()).map(|pos| pos.x.clamp(bar.left(), bar.right()));
-            let time_at = |x: f32| (x - bar.left()) as f64 / bar.width() as f64 * len;
-            match ghost {
-                Some(x) => {
-                    p.rect_filled(Rect::from_min_size(pos2(x - 0.75, bar.top()), vec2(1.5, bar.height())), CornerRadius::ZERO, white(0.5));
-                    kit::text(p, pos2(r.right() - 12.0, y + 10.0), Align2::RIGHT_CENTER, &format!("→ {}", mmss(time_at(x))), 12.0, "mono", t::high());
-                    if (resp.clicked() || resp.drag_stopped()) && v.length > 0.0 {
-                        desk.seek_to(d, time_at(x));
-                    }
-                }
-                None => {
-                    kit::text(p, pos2(r.right() - 12.0, y + 10.0), Align2::RIGHT_CENTER, &format!("−{}", mmss(v.length - v.heard)), 12.0, "mono", t::muted());
-                }
-            }
-        }
-    }
-
-    fn waves(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot) {
-        kit::panel(p, r, true);
-        let clip = p.with_clip_rect(r.shrink(1.0));
-        // scroll over the waveforms zooms them
-        let over = ui.interact(r, ui.scope_id().with("waves"), Sense::hover());
-        if over.hovered() {
-            let dy = ui.input(|i| i.smooth_scroll_delta.y);
-            if dy.abs() > 0.1 {
-                self.zoom = (self.zoom * 1.0015f32.powf(dy)).clamp(40.0, 320.0);
-            }
-        }
-        let zoom = motion::spring(ui.ctx(), ui.scope_id().with("zoom"), self.zoom, 0.16);
-        let phase_h = 16.0;
-        let lane_h = (r.height() - 16.0 - phase_h) / 2.0;
-        for d in 0..2 {
-            let w = Rect::from_min_size(pos2(r.left(), r.top() + 8.0 + d as f32 * (lane_h + phase_h)), vec2(r.width(), lane_h));
-            let v = &s.decks[d];
-            let (cols, lines) = desk.waveform(d, v.heard, w.width(), 3.0, zoom);
-            for x in &lines.beats {
-                clip.line_segment([pos2(w.left() + x, w.top()), pos2(w.left() + x, w.bottom())], Stroke::new(1.0, white(0.08)));
-            }
-            for x in &lines.bars {
-                clip.line_segment([pos2(w.left() + x, w.top()), pos2(w.left() + x, w.bottom())], Stroke::new(1.5, white(0.24)));
-            }
-            // a record loaded grows from the centre line
-            let grow = motion::appear(ui.ctx(), ui.scope_id().with(("wave", d, v.record.id)), 0.32);
-            let a = (w.height() / 2.0 - 4.0) * grow;
-            let mid = w.center().y;
-            let mut mesh = Mesh::default();
-            band(&mut mesh, w.left(), 3.0, mid, cols.iter().map(|c| c[0] * a * 0.92), alpha(theme::DECKS[d], 0.92));
-            band(&mut mesh, w.left(), 3.0, mid, cols.iter().map(|c| c[1] * a * 0.55), alpha(theme::TINTS[d], 0.9));
-            band(&mut mesh, w.left(), 3.0, mid, cols.iter().map(|c| c[2] * a * 0.3), alpha(theme::HIGH, 0.85));
-            clip.add(mesh);
-            // the loop on it
-            let looped = motion::tween_bool(ui.ctx(), ui.scope_id().with(("looped", d)), v.looped.is_some(), motion::STANDARD, motion::STANDARD);
-            if let Some((a0, b0)) = v.looped.or_else(|| (looped > 0.0).then_some((0.0, 0.0))).filter(|(a, b)| b > a) {
-                let base = if v.rate > 0.0 { v.bpm / v.rate } else { v.bpm };
-                let px = zoom as f64 * base / 60.0;
-                let xa = w.center().x + ((a0 - v.heard) * px) as f32;
-                let xb = w.center().x + ((b0 - v.heard) * px) as f32;
-                let lr = Rect::from_min_max(pos2(xa, w.top()), pos2(xb, w.bottom()));
-                clip.rect_filled(lr, CornerRadius::ZERO, alpha(theme::DECKS[d], 0.14 * looped));
-                for x in [xa, xb] {
-                    clip.rect_filled(Rect::from_min_size(pos2(x - 1.0, w.top()), vec2(2.0, w.height())), CornerRadius::ZERO, alpha(theme::DECKS[d], 0.85 * looped));
-                }
-            }
-            clip.rect_filled(Rect::from_min_max(w.min, pos2(w.center().x, w.bottom())), CornerRadius::ZERO, alpha(theme::GROUND, 0.38));
-            for (x, i, pad) in &lines.pads {
-                let c = col(pad_colour(pad.auto));
-                let x = w.left() + x;
-                clip.rect_filled(Rect::from_min_size(pos2(x - 1.0, w.top()), vec2(2.0, w.height())), CornerRadius::ZERO, c);
-                clip.add(Shape::convex_polygon(vec![pos2(x - 1.0, w.top()), pos2(x + 11.0, w.top()), pos2(x - 1.0, w.top() + 11.0)], c, Stroke::NONE));
-                label_sized(&clip, pos2(x + 14.0, w.top() + 5.0), Align2::LEFT_TOP, &format!("{} {}", i + 1, pad_name(pad.auto)), 10.5, c);
-            }
-            clip.rect_filled(Rect::from_center_size(pos2(w.center().x, mid), vec2(6.0, w.height())), CornerRadius::ZERO, white(0.1));
-            clip.rect_filled(Rect::from_center_size(pos2(w.center().x, mid), vec2(2.0, w.height())), CornerRadius::ZERO, Color32::WHITE);
-            // the lane's tab: its deck and how it is
-            let state = if v.decoded <= 0.0 {
-                "Loading…".to_owned()
-            } else if v.decoded < 1.0 {
-                format!("Loading {:.0}%", v.decoded * 100.0)
-            } else if v.master && v.playing {
-                "Master".to_owned()
-            } else if v.synced {
-                "In step".to_owned()
-            } else if v.playing {
-                "Playing".to_owned()
-            } else {
-                "Parked".to_owned()
-            };
-            let tab = Rect::from_min_size(pos2(w.left() + 10.0, w.top() + 6.0), vec2(36.0 + label_width(p, &state, 10.5), 24.0));
-            kit::glass_tab(p, tab);
-            kit::deck_chip(p, pos2(tab.left() + 4.0, tab.center().y), d);
-            label_sized(p, pos2(tab.left() + 30.0, tab.center().y), Align2::LEFT_CENTER, &state, 10.5, t::soft());
-        }
-        // between the lanes: how far apart the beats are, while both play in step
-        let f = s.decks.iter().find(|d| d.synced && d.playing).filter(|_| s.decks.iter().all(|d| d.playing));
-        let shown = motion::tween_bool(ui.ctx(), ui.scope_id().with("phase"), f.is_some(), motion::STANDARD, motion::STANDARD);
-        if shown > 0.01 {
-            let ms = f.map_or(0.0, |f| f.phase_ms as f32);
-            let c = pos2(r.center().x, r.top() + 8.0 + lane_h + phase_h / 2.0);
-            let track = Rect::from_center_size(c, vec2(160.0, 4.0));
-            let pill = Rect::from_center_size(c, vec2(300.0, 16.0));
-            p.rect_filled(pill, CornerRadius::same(8), alpha(theme::GROUND, 0.88 * shown));
-            label_sized(p, pos2(pill.left() + 10.0, c.y), Align2::LEFT_CENTER, "Phase", 10.0, alpha_of(t::label(), shown));
-            p.rect_filled(track, CornerRadius::same(2), alpha_of(col(theme::EDGE), shown));
-            p.rect_filled(Rect::from_center_size(c, vec2(1.0, 8.0)), CornerRadius::ZERO, white(0.3 * shown));
-            let off = motion::spring(ui.ctx(), ui.scope_id().with("phase-x"), (ms / 20.0).clamp(-1.0, 1.0) * 78.0, 0.2);
-            let ok = ms.abs() < 5.0;
-            p.rect_filled(Rect::from_center_size(pos2(c.x + off, c.y), vec2(4.0, 10.0)), CornerRadius::same(2), alpha_of(if ok { t::ok() } else { t::warm() }, shown));
-            kit::text(p, pos2(pill.right() - 10.0, c.y), Align2::RIGHT_CENTER, &format!("{ms:+.1} ms"), 10.5, "mono", alpha_of(Color32::from_rgb(0xCF, 0xF5, 0xDF), shown));
-        }
     }
 
     fn deck(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
@@ -1322,9 +1174,11 @@ impl App {
             ("Hold", Icon::Lock, Tone::Neutral, v.held, ShowHand::Hold(!v.held)),
             ("Black", Icon::Power, Tone::Danger, v.blackout, ShowHand::Blackout(!v.blackout)),
         ];
+        let hand_r = |i: usize| Rect::from_min_size(pos2(inner.left() + i as f32 * (bw + 6.0), hy), vec2(bw, 30.0));
+        let bare = kit::bare_row(p, &hands.iter().enumerate().map(|(i, (w, ic, ..))| (Btn::new(w).icon(*ic).size(11.0), hand_r(i))).collect::<Vec<_>>());
         for (i, (name, icon, tone, lit, hand)) in hands.into_iter().enumerate() {
-            let br = Rect::from_min_size(pos2(inner.left() + i as f32 * (bw + 6.0), hy), vec2(bw, 30.0));
-            if Btn::new(name).icon(icon).tone(tone).on(lit).enabled(on).size(11.0).show(ui, p, br, ("show", i)).clicked() {
+            let br = hand_r(i);
+            if Btn::new(name).icon(icon).tone(tone).on(lit).enabled(on).size(11.0).bare(bare).show(ui, p, br, ("show", i)).clicked() {
                 desk.show(hand);
             }
         }
@@ -1345,14 +1199,21 @@ impl App {
         kit::section(p, pos2(inner.left(), inner.top() + 2.0), Align2::LEFT_TOP, "Auto DJ");
         // the style it mixes in
         let styles = [Style::Easy, Style::Normal, Style::Bold];
-        let seg = Rect::from_min_size(pos2(inner.right() - 186.0, inner.top() - 3.0), vec2(186.0, 24.0));
+        let seg_w = (inner.width() - 90.0).min(186.0);
+        let seg = Rect::from_min_size(pos2(inner.right() - seg_w, inner.top() - 3.0), vec2(seg_w, 24.0));
         if let Some(i) = kit::segmented(ui, p, seg, &["Easy", "Normal", "Bold"], styles.iter().position(|&st| st == desk.style), Tone::Neutral, "style") {
             desk.style = styles[i];
         }
-        // under the card: the hands on the move, the room's word, the last mix's thumb
+        // under the card: the hands on the move, the room's word, the last mix's thumb — the
+        // room and the thumb on one row where the panel is short
         let last = desk.last_mix();
-        let below = 36.0 + 36.0 + if last.is_some() { 36.0 } else { 0.0 };
-        let card_h = (inner.height() - 30.0 - below).max(120.0);
+        let avail = inner.height() - 30.0;
+        let mut below = if last.is_some() { 108.0 } else { 72.0 };
+        let merged = last.is_some() && avail - below < 150.0;
+        if merged {
+            below -= 36.0;
+        }
+        let card_h = (avail - below).max(64.0);
         let card = Rect::from_min_size(pos2(inner.left(), inner.top() + 30.0), vec2(inner.width(), card_h));
         p.rect(card, CornerRadius::same(t::R_PAD), white(0.035), Stroke::new(1.0, white(0.06)), StrokeKind::Inside);
         let c = card.shrink(12.0);
@@ -1369,37 +1230,39 @@ impl App {
                 if m.mixing { format!("bar {:.0} / {}", m.bar.floor() + 1.0, m.bars) } else { format!("in {}:{:02}", m.starts_in as u64 / 60, m.starts_in as u64 % 60) },
             ),
         };
-        let set_b = Rect::from_min_size(pos2(c.right() - 52.0 - 46.0, c.top() - 2.0), vec2(44.0, 22.0));
-        let set_on = desk.set_view().playing;
-        if Btn::new("Set").on(set_on).quiet().size(10.0).show(ui, p, set_b, "set-open").on_hover_text("Plan a set: the house picks and orders the records").clicked() {
-            self.overlay = Some(crate::Overlay::Set);
-        }
-        let plan_b = Rect::from_min_size(pos2(c.right() - 52.0, c.top() - 2.0), vec2(52.0, 22.0));
-        if Btn::new("Plan").on(self.plan_open).quiet().size(10.0).show(ui, p, plan_b, "plan-open").on_hover_text("The move drawn out, with a hand on it  (P)").clicked() {
+        // the set's page and the plan view: icons, their words on hover
+        let plan_b = Rect::from_min_size(pos2(c.right() - 28.0, c.top() - 2.0), vec2(28.0, 22.0));
+        if Btn::new("").icon(Icon::Timeline).on(self.plan_open).quiet().show(ui, p, plan_b, "plan-open").on_hover_text("The plan: the move drawn out, with a hand on it  (P)").clicked() {
             self.plan_open = !self.plan_open;
+        }
+        let set_b = Rect::from_min_size(pos2(plan_b.left() - 32.0, c.top() - 2.0), vec2(28.0, 22.0));
+        let set_on = desk.set_view().playing;
+        if Btn::new("").icon(Icon::List).on(set_on).quiet().show(ui, p, set_b, "set-open").on_hover_text("Plan a set: the house picks and orders the records").clicked() {
+            self.overlay = Some(crate::Overlay::Set);
         }
         let st = kit::text(p, pos2(set_b.left() - 8.0, c.top() + 9.0), Align2::RIGHT_CENTER, &status, 12.0, "mono", t::muted());
         kit::clipped(p, pos2(b.right() + 10.0, c.top() + 9.0), &what, 13.0, "semi", t::text(), st.left() - b.right() - 20.0);
-        // the mix as a timeline: the two levels crossing over the bars, the bass changing
-        // hands, a playhead
-        // the move, what is coming, or what it has done (tabs at the right of the second
-        // line); why the planner chose it, in its words, at its left
-        let tabs = Rect::from_min_size(pos2(c.right() - 168.0, c.top() + 24.0), vec2(168.0, 20.0));
-        if let Some(i) = kit::segmented(ui, p, tabs, &["Move", "Next", "Log"], Some(self.auto_tab), Tone::Neutral, "auto-tab") {
-            self.auto_tab = i;
-        }
-        let why = s.mix.as_ref().map(|m| m.why.clone()).filter(|w| !w.is_empty() && s.auto);
-        if let Some(w) = &why {
-            kit::clipped(p, pos2(c.left(), tabs.center().y), w, 11.5, "", t::label(), tabs.left() - c.left() - 10.0);
-            ui.interact(Rect::from_min_max(pos2(c.left(), c.top()), pos2(tabs.left() - 4.0, tabs.bottom())), ui.scope_id().with("why"), Sense::hover()).on_hover_text(w.as_str());
-        }
         let buttons_y = c.bottom() - 30.0;
-        let area = Rect::from_min_max(pos2(c.left(), tabs.bottom() + 6.0), pos2(c.right(), buttons_y - 8.0));
-        match self.auto_tab {
-            0 if area.height() >= 24.0 => self.timeline(ui, p, area, s, from, to),
-            1 => self.up_next(desk, ui, p, area, s),
-            2 => auto_log(desk, p, area),
-            _ => {}
+        // the move, what is coming, or what it has done (tabs at the right of the second
+        // line); why the planner chose it, in its words, at its left — where there is room
+        if buttons_y - (c.top() + 24.0) >= 28.0 {
+            let tabs_w = (c.width() * 0.5).min(168.0);
+            let tabs = Rect::from_min_size(pos2(c.right() - tabs_w, c.top() + 24.0), vec2(tabs_w, 20.0));
+            if let Some(i) = kit::segmented(ui, p, tabs, &["Move", "Next", "Log"], Some(self.auto_tab), Tone::Neutral, "auto-tab") {
+                self.auto_tab = i;
+            }
+            let why = s.mix.as_ref().map(|m| m.why.clone()).filter(|w| !w.is_empty() && s.auto);
+            if let Some(w) = &why {
+                kit::clipped(p, pos2(c.left(), tabs.center().y), w, 11.5, "", t::label(), tabs.left() - c.left() - 10.0);
+                ui.interact(Rect::from_min_max(pos2(c.left(), c.top()), pos2(tabs.left() - 4.0, tabs.bottom())), ui.scope_id().with("why"), Sense::hover()).on_hover_text(w.as_str());
+            }
+            let area = Rect::from_min_max(pos2(c.left(), tabs.bottom() + 6.0), pos2(c.right(), buttons_y - 8.0));
+            match self.auto_tab {
+                0 if area.height() >= 24.0 => self.timeline(ui, p, area, s, from, to),
+                1 if area.height() >= 24.0 => self.up_next(desk, ui, p, area, s),
+                2 if area.height() >= 18.0 => auto_log(desk, p, area),
+                _ => {}
+            }
         }
         let planned = s.mix.as_ref().is_some_and(|m| !m.mixing);
         let bw = (c.width() - 16.0) / 3.0;
@@ -1410,7 +1273,7 @@ impl App {
         if Btn::new("Not that").icon(Icon::Shuffle).enabled(planned && s.auto).size(11.0).show(ui, p, at(1.0), "not-that").on_hover_text("Another record next  (S)").clicked() {
             desk.not_that();
         }
-        if Btn::new(if s.auto { "Pause" } else { "Paused" }).icon(Icon::Pause).on(!s.auto).size(11.0).show(ui, p, at(2.0), "pause").clicked() {
+        if Btn::new(if s.auto { "Pause" } else { "Paused" }).icon(Icon::Pause).on(!s.auto).size(11.0).show(ui, p, at(2.0), "pause").on_hover_text("The Auto DJ stops mixing; the decks are yours  (A)").clicked() {
             desk.set_auto(!s.auto);
         }
         // the hands on the planned move: skip, later, sooner, longer; undo
@@ -1424,10 +1287,12 @@ impl App {
             ("Undo", Icon::Undo, can_undo.is_some(), "Go back on the last thing the Auto DJ changed"),
         ];
         let hw = (inner.width() - 4.0 * 6.0) / 5.0;
+        let hand_r = |i: usize| Rect::from_min_size(pos2(inner.left() + i as f32 * (hw + 6.0), hy), vec2(hw, 26.0));
+        let bare = kit::bare_row(p, &hands.iter().enumerate().map(|(i, (w, ic, ..))| (Btn::new(w).icon(*ic).size(10.5), hand_r(i))).collect::<Vec<_>>());
         for (i, (word, icon, on, tip)) in hands.into_iter().enumerate() {
-            let br = Rect::from_min_size(pos2(inner.left() + i as f32 * (hw + 6.0), hy), vec2(hw, 26.0));
+            let br = hand_r(i);
             let tip = if word == "Undo" { can_undo.as_ref().map_or(tip.to_owned(), |w| format!("Undo: {w}")) } else { tip.to_owned() };
-            if Btn::new(word).icon(icon).enabled(on).quiet().size(10.5).show(ui, p, br, ("auto-hand", i)).on_hover_text(tip).clicked() {
+            if Btn::new(word).icon(icon).enabled(on).quiet().size(10.5).bare(bare).show(ui, p, br, ("auto-hand", i)).on_hover_text(tip).clicked() {
                 match i {
                     0 => desk.skip(),
                     1 => desk.later(2),
@@ -1437,22 +1302,26 @@ impl App {
                 }
             }
         }
-        // the room's word on the next records: less or more energy, more like this one,
-        // something different (lit while it holds; a second press takes it back)
+        // the room's word on the next records: less or more energy (pips for how far), more
+        // like this one, something different — lit while it holds; again takes it back
         let steer = desk.steer();
         let ry = hy + 26.0 + 10.0;
-        kit::section(p, pos2(inner.left(), ry + 13.0), Align2::LEFT_CENTER, "Room");
-        let words: [(&str, bool); 4] = [
-            (if steer.energy < 0.0 { "Less ·" } else { "Less" }, steer.energy < 0.0),
-            (if steer.energy > 0.0 { "More ·" } else { "More" }, steer.energy > 0.0),
-            ("Like this", steer.like.is_some()),
-            ("Different", steer.different),
+        let room_l = kit::section(p, pos2(inner.left(), ry + 13.0), Align2::LEFT_CENTER, "Room");
+        let thumbs_w = if merged { 2.0 * 30.0 + 6.0 + 10.0 } else { 0.0 };
+        let x0 = room_l.right() + 12.0;
+        let rw = (inner.right() - thumbs_w - x0 - 3.0 * 6.0) / 4.0;
+        let pips = ((steer.energy.abs() / 0.12).ceil() as usize).min(3);
+        let words: [(&str, Icon, bool, &str); 4] = [
+            ("Less", Icon::ArrowDown, steer.energy < 0.0, "Less energy in the next records (again: less still)"),
+            ("More", Icon::ArrowUp, steer.energy > 0.0, "More energy in the next records (again: more still)"),
+            ("Like this", Icon::Similar, steer.like.is_some(), "More like the record playing (again: as before)"),
+            ("Different", Icon::Shuffle, steer.different, "Something different from it (again: as before)"),
         ];
-        let mut x = inner.left() + 52.0;
-        for (i, (word, on)) in words.into_iter().enumerate() {
-            let w = kit::chip_width(p, word);
-            let cr = Rect::from_min_size(pos2(x, ry), vec2(w, 26.0));
-            if kit::chip(ui, p, cr, word, on, Tone::Neutral, s.auto, ("room", i)).clicked() {
+        let room_r = |i: usize| Rect::from_min_size(pos2(x0 + i as f32 * (rw + 6.0), ry), vec2(rw, 26.0));
+        let bare = kit::bare_row(p, &words.iter().enumerate().map(|(i, (w, ic, ..))| (Btn::new(w).icon(*ic).size(10.5), room_r(i))).collect::<Vec<_>>());
+        for (i, (word, icon, on, tip)) in words.into_iter().enumerate() {
+            let cr = room_r(i);
+            if Btn::new(word).icon(icon).on(on).quiet().enabled(s.auto).size(10.5).bare(bare).show(ui, p, cr, ("room", i)).on_hover_text(tip).clicked() {
                 match (i, on) {
                     (0, _) => desk.more_energy(-1),
                     (1, _) => desk.more_energy(1),
@@ -1461,21 +1330,31 @@ impl App {
                     _ => desk.steer_neutral(),
                 }
             }
-            x = cr.right() + 6.0;
+            if on && i < 2 {
+                for k in 0..pips {
+                    p.circle_filled(pos2(cr.center().x + (k as f32 - (pips as f32 - 1.0) / 2.0) * 6.0, cr.bottom() - 3.0), 1.5, t::high());
+                }
+            }
         }
         // the last transition, and a thumb on it
-        let y0 = ry + 26.0 + 10.0;
         if let Some(last) = last {
-            let ty = y0 + 13.0;
-            let up = Rect::from_min_size(pos2(inner.right() - 2.0 * 84.0 - 6.0, y0), vec2(84.0, 26.0));
-            let down = Rect::from_min_size(pos2(inner.right() - 84.0, y0), vec2(84.0, 26.0));
-            let what = format!("Last: {} · {}", last.kind.word(), last.to.title);
-            kit::clipped(p, pos2(inner.left(), ty), &what, 12.0, "", t::muted(), up.left() - inner.left() - 10.0);
             let rated = last.rating;
-            if Btn::new("Good one").icon(Icon::Heart).on(rated == Some(1)).enabled(rated.is_none()).size(10.5).show(ui, p, up, "rate-up").on_hover_text("Tell the Auto DJ this mix worked").clicked() {
+            let (up, down) = if merged {
+                (Rect::from_min_size(pos2(inner.right() - 66.0, ry), vec2(30.0, 26.0)), Rect::from_min_size(pos2(inner.right() - 30.0, ry), vec2(30.0, 26.0)))
+            } else {
+                let y0 = ry + 26.0 + 10.0;
+                let up = Rect::from_min_size(pos2(inner.right() - 2.0 * 84.0 - 6.0, y0), vec2(84.0, 26.0));
+                let what = format!("Last: {} · {}", last.kind.word(), last.to.title);
+                kit::clipped(p, pos2(inner.left(), y0 + 13.0), &what, 12.0, "", t::muted(), up.left() - inner.left() - 10.0);
+                (up, Rect::from_min_size(pos2(inner.right() - 84.0, y0), vec2(84.0, 26.0)))
+            };
+            let about = format!("{} into {}", last.kind.word(), last.to.title);
+            let good = Btn::new(if merged { "" } else { "Good one" }).icon(if rated == Some(1) { Icon::HeartFull } else { Icon::Heart }).on(rated == Some(1)).enabled(rated.is_none()).size(10.5);
+            if good.show(ui, p, up, "rate-up").on_hover_text(format!("The last mix worked: {about}")).clicked() {
                 desk.rate(1);
             }
-            if Btn::new("So-so").on(rated == Some(-1)).enabled(rated.is_none()).quiet().size(10.5).show(ui, p, down, "rate-down").on_hover_text("Tell the Auto DJ this mix did not").clicked() {
+            let meh = Btn::new(if merged { "" } else { "So-so" }).icon(Icon::ThumbDown).on(rated == Some(-1)).enabled(rated.is_none()).quiet().size(10.5);
+            if meh.show(ui, p, down, "rate-down").on_hover_text(format!("The last mix did not work: {about}")).clicked() {
                 desk.rate(-1);
             }
         }

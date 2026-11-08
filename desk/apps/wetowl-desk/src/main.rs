@@ -34,6 +34,7 @@ mod set_page;
 #[cfg(test)]
 mod pages;
 mod show;
+mod tracks;
 mod ui;
 
 use paint::fonts;
@@ -130,6 +131,8 @@ pub(crate) struct App {
     pub(crate) pad_fired: [[u64; 8]; 2],
     /// The waveforms' zoom: pixels a beat.
     pub(crate) zoom: f32,
+    /// Each deck's overview, kept until its record, width or decoding changes.
+    pub(crate) overview_kept: [tracks::OverviewKept; 2],
     /// What the toasts last said of: the crate's trouble, the sign-in, the stage's trouble.
     seen: (Option<String>, bool, Option<String>),
 }
@@ -310,6 +313,7 @@ impl App {
             sort: (Sort::Fits, false),
             pad_fired: [[0; 8]; 2],
             zoom: 110.0,
+            overview_kept: [None, None],
             seen: (None, false, None),
         }
     }

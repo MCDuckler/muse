@@ -1,8 +1,8 @@
-//! The tokens as egui colours and fonts, labels, the waveform bands, and the words for a
+//! The tokens as egui colours and fonts, labels, and the words for a
 //! record's times and pads (the controls themselves: ui::kit).
 use std::sync::Arc;
 
-use eframe::egui::{self, Align2, Color32, FontFamily, FontId, Mesh, Painter, Pos2, Rect, TextFormat, pos2, text::LayoutJob};
+use eframe::egui::{self, Align2, Color32, FontFamily, FontId, Painter, Pos2, Rect, TextFormat, text::LayoutJob};
 use wo_deskcore::PadKind;
 use wo_deskcore::theme::{self, Rgba};
 
@@ -46,14 +46,28 @@ pub(crate) fn fonts(ctx: &egui::Context) {
     ctx.set_fonts(f);
 }
 
-pub(crate) fn label_sized(p: &Painter, pos: Pos2, anchor: Align2, s: &str, size: f32, color: Color32) -> Rect {
+/// A caps label's layout: Archivo condensed, upper case, `spacing` (a share of the size)
+/// between letters — none after the last, so it centres true.
+pub(crate) fn label_job(s: &str, size: f32, spacing: f32, color: Color32) -> LayoutJob {
     let mut job = LayoutJob::default();
-    job.append(
-        &s.to_uppercase(),
-        0.0,
-        TextFormat { font_id: FontId::new(size, family("label")), color, extra_letter_spacing: size * 0.09, ..Default::default() },
-    );
-    let galley = p.layout_job(job);
+    let up = s.to_uppercase();
+    let n = up.chars().count();
+    for (i, ch) in up.chars().enumerate() {
+        let mut buf = [0u8; 4];
+        job.append(
+            ch.encode_utf8(&mut buf),
+            0.0,
+            TextFormat { font_id: FontId::new(size, family("label")), color, extra_letter_spacing: if i + 1 < n { size * spacing } else { 0.0 }, ..Default::default() },
+        );
+    }
+    job
+}
+
+/// The letter spacing caps labels are set with, as a share of their size.
+pub(crate) const SPACING: f32 = 0.09;
+
+pub(crate) fn label_sized(p: &Painter, pos: Pos2, anchor: Align2, s: &str, size: f32, color: Color32) -> Rect {
+    let galley = p.layout_job(label_job(s, size, SPACING, color));
     let r = anchor.anchor_size(pos, galley.size());
     p.galley(r.min, galley, color);
     r
@@ -61,27 +75,7 @@ pub(crate) fn label_sized(p: &Painter, pos: Pos2, anchor: Align2, s: &str, size:
 
 /// How wide [label_sized] draws `s`.
 pub(crate) fn label_width(p: &Painter, s: &str, size: f32) -> f32 {
-    let mut job = LayoutJob::default();
-    job.append(&s.to_uppercase(), 0.0, TextFormat { font_id: FontId::new(size, family("label")), extra_letter_spacing: size * 0.09, ..Default::default() });
-    p.layout_job(job).size().x
-}
-
-/// The two edges of a band, mirrored around `mid`, as one mesh.
-pub(crate) fn band(mesh: &mut Mesh, x0: f32, step: f32, mid: f32, amps: impl Iterator<Item = f32>, color: Color32) {
-    let base = mesh.vertices.len() as u32;
-    let mut n = 0u32;
-    for (i, a) in amps.enumerate() {
-        let x = x0 + i as f32 * step;
-        mesh.colored_vertex(pos2(x, mid - a), color);
-        mesh.colored_vertex(pos2(x, mid + a), color);
-        if i > 0 {
-            let k = base + 2 * (i as u32 - 1);
-            mesh.add_triangle(k, k + 1, k + 2);
-            mesh.add_triangle(k + 1, k + 3, k + 2);
-        }
-        n += 1;
-    }
-    let _ = n;
+    p.layout_job(label_job(s, size, SPACING, Color32::WHITE)).size().x
 }
 
 pub(crate) fn mmss(s: f64) -> String {

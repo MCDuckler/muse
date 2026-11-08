@@ -10,11 +10,13 @@ use crate::ui::icons::{self, Icon};
 use crate::ui::kit::{self, Btn};
 use crate::ui::tokens::{self as t, Tone};
 
-const ICONS: [Icon; 33] = [
+const ICONS: [Icon; 57] = [
     Icon::Play, Icon::Pause, Icon::Cue, Icon::Sync, Icon::Lock, Icon::Loop, Icon::Back4, Icon::Ahead4, Icon::Brake, Icon::Kill, Icon::Search,
     Icon::Settings, Icon::Heart, Icon::HeartFull, Icon::Eye, Icon::Screen, Icon::Plus, Icon::Close, Icon::ChevronLeft, Icon::ChevronRight,
     Icon::ChevronDown, Icon::Check, Icon::Undo, Icon::Bolt, Icon::Next, Icon::Previous, Icon::Snow, Icon::Power, Icon::Shuffle, Icon::Keys,
-    Icon::Layers, Icon::Dice, Icon::Dot,
+    Icon::Layers, Icon::Dice, Icon::Dot, Icon::ArrowUp, Icon::ArrowDown, Icon::Similar, Icon::ThumbDown, Icon::AutoMix, Icon::List,
+    Icon::Timeline, Icon::House, Icon::Controller, Icon::Gauge, Icon::User, Icon::Pin, Icon::LogOut, Icon::Mic, Icon::MicOff, Icon::Drum,
+    Icon::Note, Icon::Grid, Icon::Sections, Icon::Disc, Icon::Alert, Icon::Info, Icon::CheckCircle, Icon::Live,
 ];
 
 pub(crate) fn draw(app: &mut App, ui: &mut Ui, p: &Painter, full: Rect) {

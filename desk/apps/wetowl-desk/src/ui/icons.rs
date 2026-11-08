@@ -38,6 +38,30 @@ pub enum Icon {
     Layers,
     Dice,
     Dot,
+    ArrowUp,
+    ArrowDown,
+    Similar,
+    ThumbDown,
+    AutoMix,
+    List,
+    Timeline,
+    House,
+    Controller,
+    Gauge,
+    User,
+    Pin,
+    LogOut,
+    Mic,
+    MicOff,
+    Drum,
+    Note,
+    Grid,
+    Sections,
+    Disc,
+    Alert,
+    Info,
+    CheckCircle,
+    Live,
 }
 
 /// Points of the 24 grid into `r`.
@@ -72,6 +96,20 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, color: Color32) {
             .collect();
         p.add(Shape::line(pts, s));
     };
+    // a rectangle with round corners (radius `rr`), closed
+    let rrect = |x0: f32, y0: f32, x1: f32, y1: f32, rr: f32| {
+        let mut pts = vec![];
+        for (cx, cy, a0) in [(x1 - rr, y0 + rr, -90.0f32), (x1 - rr, y1 - rr, 0.0), (x0 + rr, y1 - rr, 90.0), (x0 + rr, y0 + rr, 180.0)] {
+            for i in 0..=5 {
+                let a = (a0 + 90.0 * i as f32 / 5.0).to_radians();
+                pts.push(g.p(cx + rr * a.cos(), cy + rr * a.sin()));
+            }
+        }
+        p.add(Shape::closed_line(pts, s));
+    };
+    let dot = |x: f32, y: f32, rr: f32| {
+        p.circle_filled(g.p(x, y), rr * g.k, color);
+    };
     match icon {
         Icon::Play => fill(&[(7.0, 4.5), (19.5, 12.0), (7.0, 19.5)]),
         Icon::Pause => {
@@ -89,7 +127,7 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, color: Color32) {
             line(&[(6.5, 18.5), (4.8, 14.6), (8.8, 13.8)]);
         }
         Icon::Lock => {
-            closed(&[(5.5, 11.0), (18.5, 11.0), (18.5, 20.0), (5.5, 20.0)]);
+            rrect(5.0, 11.0, 19.0, 20.5, 2.0);
             arc(12.0, 9.0, 4.0, 180.0, 360.0);
             line(&[(8.0, 9.0), (8.0, 11.0)]);
             line(&[(16.0, 9.0), (16.0, 11.0)]);
@@ -161,7 +199,7 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, color: Color32) {
             circle(12.0, 12.0, 3.0);
         }
         Icon::Screen => {
-            closed(&[(3.0, 5.0), (21.0, 5.0), (21.0, 16.0), (3.0, 16.0)]);
+            rrect(3.0, 4.5, 21.0, 16.0, 2.0);
             line(&[(9.0, 20.0), (15.0, 20.0)]);
             line(&[(12.0, 16.0), (12.0, 20.0)]);
         }
@@ -208,7 +246,7 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, color: Color32) {
             line(&[(18.0, 14.5), (20.5, 17.0), (18.0, 19.5)]);
         }
         Icon::Keys => {
-            closed(&[(2.5, 6.5), (21.5, 6.5), (21.5, 17.5), (2.5, 17.5)]);
+            rrect(2.5, 6.0, 21.5, 18.0, 2.0);
             for x in [6.5, 10.0, 13.5, 17.0] {
                 p.circle_filled(g.p(x, 10.0), 0.9 * g.k, color);
             }
@@ -220,13 +258,154 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, color: Color32) {
             line(&[(3.0, 16.0), (12.0, 21.0), (21.0, 16.0)]);
         }
         Icon::Dice => {
-            closed(&[(4.0, 4.0), (20.0, 4.0), (20.0, 20.0), (4.0, 20.0)]);
+            rrect(4.0, 4.0, 20.0, 20.0, 3.0);
             for (x, y) in [(8.5, 8.5), (15.5, 15.5), (12.0, 12.0)] {
                 p.circle_filled(g.p(x, y), 1.4 * g.k, color);
             }
         }
         Icon::Dot => {
             p.circle_filled(g.p(12.0, 12.0), 4.0 * g.k, color);
+        }
+        Icon::ArrowUp => {
+            line(&[(12.0, 19.0), (12.0, 5.0)]);
+            line(&[(6.0, 11.0), (12.0, 5.0), (18.0, 11.0)]);
+        }
+        Icon::ArrowDown => {
+            line(&[(12.0, 5.0), (12.0, 19.0)]);
+            line(&[(6.0, 13.0), (12.0, 19.0), (18.0, 13.0)]);
+        }
+        Icon::Similar => {
+            for y in [9.0f32, 15.0] {
+                let pts: Vec<(f32, f32)> = (0..=16).map(|i| {
+                    let x = 4.0 + i as f32;
+                    (x, y - 1.8 * ((x - 4.0) / 16.0 * std::f32::consts::TAU).sin())
+                }).collect();
+                line(&pts);
+            }
+        }
+        Icon::ThumbDown => {
+            rrect(17.0, 3.0, 21.0, 14.0, 1.0);
+            closed(&[(17.0, 3.0), (7.0, 3.0), (5.2, 4.6), (3.2, 12.4), (4.7, 14.5), (10.0, 14.5), (9.2, 19.0), (10.8, 21.0), (12.4, 21.0), (17.0, 14.0)]);
+        }
+        Icon::AutoMix => {
+            let ease = |t: f32| t * t * (3.0 - 2.0 * t);
+            let a: Vec<(f32, f32)> = (0..=12).map(|i| { let t = i as f32 / 12.0; (3.0 + 18.0 * t, 6.0 + 12.0 * ease(t)) }).collect();
+            let b: Vec<(f32, f32)> = (0..=12).map(|i| { let t = i as f32 / 12.0; (3.0 + 18.0 * t, 18.0 - 12.0 * ease(t)) }).collect();
+            line(&a);
+            line(&b);
+        }
+        Icon::List => {
+            for y in [6.0, 12.0, 18.0] {
+                line(&[(9.0, y), (20.0, y)]);
+                dot(4.5, y, 1.3);
+            }
+        }
+        Icon::Timeline => {
+            line(&[(4.0, 4.0), (4.0, 20.0), (20.0, 20.0)]);
+            line(&[(8.0, 8.0), (14.0, 8.0)]);
+            line(&[(11.0, 12.0), (19.0, 12.0)]);
+            line(&[(8.0, 16.0), (15.0, 16.0)]);
+        }
+        Icon::House => {
+            closed(&[(4.0, 10.5), (12.0, 3.8), (20.0, 10.5), (20.0, 20.0), (4.0, 20.0)]);
+            line(&[(10.0, 20.0), (10.0, 14.0), (14.0, 14.0), (14.0, 20.0)]);
+        }
+        Icon::Controller => {
+            rrect(2.5, 6.0, 21.5, 18.0, 2.5);
+            circle(8.5, 12.0, 2.8);
+            line(&[(15.0, 9.0), (15.0, 15.0)]);
+            line(&[(18.5, 9.0), (18.5, 15.0)]);
+        }
+        Icon::Gauge => {
+            arc(12.0, 15.0, 8.5, 180.0, 360.0);
+            line(&[(12.0, 15.0), (16.5, 9.5)]);
+            dot(12.0, 15.0, 1.6);
+        }
+        Icon::User => {
+            circle(12.0, 8.0, 4.0);
+            arc(12.0, 21.0, 7.0, 180.0, 360.0);
+        }
+        Icon::Pin => {
+            let pts: Vec<(f32, f32)> = (0..=16).map(|i| {
+                let a = (140.0 + 260.0 * i as f32 / 16.0f32).to_radians();
+                (12.0 + 6.5 * a.cos(), 9.5 + 6.5 * a.sin())
+            }).collect();
+            let mut all = pts.clone();
+            all.push((12.0, 21.5));
+            closed(&all);
+            circle(12.0, 9.5, 2.2);
+        }
+        Icon::LogOut => {
+            line(&[(10.0, 4.0), (5.0, 4.0), (5.0, 20.0), (10.0, 20.0)]);
+            line(&[(10.0, 12.0), (20.0, 12.0)]);
+            line(&[(16.0, 8.0), (20.0, 12.0), (16.0, 16.0)]);
+        }
+        Icon::Mic | Icon::MicOff => {
+            arc(12.0, 6.5, 3.0, 180.0, 360.0);
+            line(&[(9.0, 6.5), (9.0, 11.0)]);
+            line(&[(15.0, 6.5), (15.0, 11.0)]);
+            arc(12.0, 11.0, 3.0, 0.0, 180.0);
+            arc(12.0, 11.0, 6.5, 0.0, 180.0);
+            line(&[(12.0, 17.5), (12.0, 21.0)]);
+            if icon == Icon::MicOff {
+                line(&[(4.0, 4.0), (20.0, 20.0)]);
+            }
+        }
+        Icon::Drum => {
+            let ell = |cy: f32, a0: f32, a1: f32| {
+                let pts: Vec<(f32, f32)> = (0..=20).map(|i| {
+                    let a = (a0 + (a1 - a0) * i as f32 / 20.0).to_radians();
+                    (12.0 + 8.5 * a.cos(), cy + 3.2 * a.sin())
+                }).collect();
+                line(&pts);
+            };
+            ell(8.5, 0.0, 360.0);
+            ell(16.5, 0.0, 180.0);
+            line(&[(3.5, 8.5), (3.5, 16.5)]);
+            line(&[(20.5, 8.5), (20.5, 16.5)]);
+            line(&[(14.0, 7.0), (19.5, 2.5)]);
+        }
+        Icon::Note => {
+            line(&[(9.0, 18.0), (9.0, 5.0), (21.0, 3.0), (21.0, 16.0)]);
+            circle(6.0, 18.0, 3.0);
+            circle(18.0, 16.0, 3.0);
+        }
+        Icon::Grid => {
+            line(&[(4.0, 4.0), (4.0, 20.0)]);
+            for x in [9.5, 15.0, 20.5] {
+                line(&[(x, 9.0), (x, 15.0)]);
+            }
+        }
+        Icon::Sections => {
+            rrect(2.5, 12.0, 8.0, 20.0, 1.2);
+            rrect(9.5, 5.0, 15.0, 20.0, 1.2);
+            rrect(16.5, 9.0, 21.5, 20.0, 1.2);
+        }
+        Icon::Disc => {
+            circle(12.0, 12.0, 9.0);
+            circle(12.0, 12.0, 2.5);
+            arc(12.0, 12.0, 5.8, 200.0, 280.0);
+        }
+        Icon::Alert => {
+            closed(&[(12.0, 3.5), (21.5, 20.0), (2.5, 20.0)]);
+            line(&[(12.0, 9.5), (12.0, 13.5)]);
+            dot(12.0, 16.8, 1.3);
+        }
+        Icon::Info => {
+            circle(12.0, 12.0, 9.0);
+            line(&[(12.0, 11.0), (12.0, 16.5)]);
+            dot(12.0, 7.8, 1.3);
+        }
+        Icon::CheckCircle => {
+            circle(12.0, 12.0, 9.0);
+            line(&[(8.0, 12.2), (11.0, 15.0), (16.5, 9.3)]);
+        }
+        Icon::Live => {
+            dot(12.0, 12.0, 2.2);
+            arc(12.0, 12.0, 5.5, -40.0, 40.0);
+            arc(12.0, 12.0, 5.5, 140.0, 220.0);
+            arc(12.0, 12.0, 9.5, -40.0, 40.0);
+            arc(12.0, 12.0, 9.5, 140.0, 220.0);
         }
     }
 }
