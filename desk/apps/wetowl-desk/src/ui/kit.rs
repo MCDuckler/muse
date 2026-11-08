@@ -186,6 +186,11 @@ impl<'a> Btn<'a> {
         }
         let cr = CornerRadius::same(t::R_CONTROL);
         p.rect(r, cr, fill, Stroke::new(1.0, edge), StrokeKind::Inside);
+        // lit: a fine inner ring draws in
+        if on > 0.01 && !self.quiet && r.width() > 12.0 && r.height() > 12.0 {
+            let inset = 2.0 + 2.0 * (1.0 - on);
+            p.rect_stroke(r.shrink(inset), CornerRadius::same(t::R_CONTROL.saturating_sub(2)), Stroke::new(1.0, alpha_of(lit_edge, 0.35 * on)), StrokeKind::Inside);
+        }
         // the content sinks a pixel while pressed
         let c = r.center() + vec2(0.0, pr);
         let has_text = !self.text.is_empty();

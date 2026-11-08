@@ -50,16 +50,16 @@ pub(crate) fn fonts(ctx: &egui::Context) {
 /// between letters — none after the last, so it centres true.
 pub(crate) fn label_job(s: &str, size: f32, spacing: f32, color: Color32) -> LayoutJob {
     let mut job = LayoutJob::default();
-    let up = s.to_uppercase();
-    let n = up.chars().count();
-    for (i, ch) in up.chars().enumerate() {
-        let mut buf = [0u8; 4];
-        job.append(
-            ch.encode_utf8(&mut buf),
-            0.0,
-            TextFormat { font_id: FontId::new(size, family("label")), color, extra_letter_spacing: if i + 1 < n { size * spacing } else { 0.0 }, ..Default::default() },
-        );
+    // (the condensed face's word space is narrower than its letters' gaps: doubled)
+    let up = s.to_uppercase().replace(' ', "  ");
+    let font = FontId::new(size, family("label"));
+    // every letter but the last spaced out (one section, so its spaces stay spaces); the
+    // last one not, so the word centres true
+    let split = up.char_indices().last().map_or(0, |(i, _)| i);
+    if split > 0 {
+        job.append(&up[..split], 0.0, TextFormat { font_id: font.clone(), color, extra_letter_spacing: size * spacing, ..Default::default() });
     }
+    job.append(&up[split..], 0.0, TextFormat { font_id: font, color, extra_letter_spacing: 0.0, ..Default::default() });
     job
 }
 
