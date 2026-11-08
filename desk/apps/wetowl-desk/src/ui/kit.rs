@@ -374,31 +374,51 @@ pub fn alpha_of(c: Color32, a: f32) -> Color32 {
 /// A knob on a 270° sweep (bipolar from 12 o'clock); drag up or down, double-click to `rest`.
 /// Its picture follows the value on a spring, so a controller's steps glide.
 pub fn knob(ui: &mut Ui, p: &Painter, c: Pos2, v: f32, color: Color32, bipolar: bool, rest: f32, id: impl std::hash::Hash + std::fmt::Debug) -> Option<f32> {
+    knob_with(ui, p, c, v, color, bipolar, rest, id, |_| String::new())
+}
+
+/// A knob whose value `tag` puts into words on a small tab above it while a hand is on it.
+pub fn knob_with(ui: &mut Ui, p: &Painter, c: Pos2, v: f32, color: Color32, bipolar: bool, rest: f32, id: impl std::hash::Hash + std::fmt::Debug, tag: impl Fn(f32) -> String) -> Option<f32> {
     let id = ui.scope_id().with(id);
     let r = Rect::from_center_size(c, vec2(38.0, 38.0));
     let resp = ui.interact(r, id, Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::ResizeVertical);
     let h = motion::tween_bool(ui.ctx(), id.with("h"), resp.hovered() || resp.dragged(), motion::QUICK, motion::STANDARD);
     let shown = motion::spring(ui.ctx(), id.with("v"), v, 0.06);
     let arc = |a0: f32, a1: f32, color: Color32, w: f32| {
-        let n = 28;
+        let n = ((a1 - a0).abs() / 270.0 * 28.0).ceil().max(2.0) as usize;
         let pts: Vec<Pos2> = (0..=n)
             .map(|i| {
                 let a = (a0 + (a1 - a0) * i as f32 / n as f32).to_radians();
-                pos2(c.x + 14.0 * a.cos(), c.y + 14.0 * a.sin())
+                pos2(c.x + 14.5 * a.cos(), c.y + 14.5 * a.sin())
             })
             .collect();
         p.add(Shape::line(pts, Stroke::new(w, color)));
     };
-    arc(135.0, 405.0, mix(col(theme::EDGE), Color32::from_rgb(0x3A, 0x3E, 0x47), h), 3.0);
+    arc(135.0, 405.0, mix(col(theme::LINE), Color32::from_rgb(0x34, 0x37, 0x40), h), 3.0);
     let at = 135.0 + 270.0 * shown;
     if bipolar {
-        arc(270.0f32.min(at), 270.0f32.max(at), color, 3.0);
+        // the detent at 12 o'clock
+        p.line_segment([pos2(c.x, c.y - 17.5), pos2(c.x, c.y - 19.5)], Stroke::new(1.5, Color32::from_white_alpha(90)));
+        if (at - 270.0).abs() > 0.5 {
+            arc(270.0f32.min(at), 270.0f32.max(at), color, 3.0);
+        }
     } else {
         arc(135.0, at, color, 3.0);
     }
-    p.circle(c, 10.0, mix(Color32::from_rgb(0x1E, 0x20, 0x27), Color32::from_rgb(0x26, 0x29, 0x31), h), Stroke::new(1.0, Color32::from_rgb(0x36, 0x39, 0x42)));
+    // the cap: a little light from above, a soft shadow under
+    p.circle_filled(c + vec2(0.0, 1.5), 11.0, Color32::from_black_alpha(90));
+    p.circle(c, 10.5, mix(Color32::from_rgb(0x1F, 0x21, 0x28), Color32::from_rgb(0x28, 0x2B, 0x33), h), Stroke::new(1.0, Color32::from_rgb(0x3A, 0x3D, 0x46)));
+    p.circle_filled(c - vec2(0.0, 3.0), 6.5, Color32::from_white_alpha(7));
     let a = at.to_radians();
-    p.line_segment([pos2(c.x + 3.0 * a.cos(), c.y + 3.0 * a.sin()), pos2(c.x + 8.5 * a.cos(), c.y + 8.5 * a.sin())], Stroke::new(2.0, t::text()));
+    p.line_segment([pos2(c.x + 3.5 * a.cos(), c.y + 3.5 * a.sin()), pos2(c.x + 9.0 * a.cos(), c.y + 9.0 * a.sin())], Stroke::new(2.0, t::text()));
+    let words = tag(v);
+    if !words.is_empty() && (resp.dragged() || resp.hovered()) {
+        let g = p.layout_no_wrap(words, FontId::new(11.0, family("mono")), t::text());
+        let tr = Rect::from_center_size(pos2(c.x, c.y - 30.0), g.size() + vec2(12.0, 6.0));
+        let fp = p.clone().with_layer_id(egui::LayerId::new(egui::Order::Tooltip, id.with("tag")));
+        glass_tab(&fp, tr);
+        fp.galley(tr.center() - g.size() / 2.0, g, t::text());
+    }
     if resp.double_clicked() {
         return Some(rest);
     }
@@ -436,7 +456,16 @@ pub fn crossfader(ui: &mut Ui, p: &Painter, r: Rect, x: f32, id: impl std::hash:
         let lean = if cx < mid { t::deck(0) } else { t::deck(1) };
         p.rect_filled(Rect::from_min_max(pos2(cx.min(mid), track.top()), pos2(cx.max(mid), track.bottom())), CornerRadius::same(2), alpha_of(lean, 0.6));
     }
-    p.line_segment([pos2(mid, r.top() + 4.0), pos2(mid, r.bottom() - 4.0)], Stroke::new(1.0, Color32::from_rgb(0x4A, 0x4E, 0x57)));
+    // the middle: a detent that flashes as the cap crosses it
+    let side = ui.ctx().data_mut(|d| {
+        let was = d.get_temp_mut_or_insert_with(id.with("side"), || (x >= 0.5, 0u64));
+        if (x >= 0.5) != was.0 && (x - 0.5).abs() > 0.004 {
+            *was = (x >= 0.5, was.1 + 1);
+        }
+        was.1
+    });
+    let fl = motion::flash(ui.ctx(), id.with("detent"), side, 0.2);
+    p.line_segment([pos2(mid, r.top() + 4.0), pos2(mid, r.bottom() - 4.0)], Stroke::new(1.0 + fl, mix(Color32::from_rgb(0x4A, 0x4E, 0x57), t::high(), fl)));
     let cap = Rect::from_center_size(pos2(cx, r.center().y), vec2(30.0, 22.0));
     p.add(t::shadow(2).as_shape(cap, CornerRadius::same(4)));
     p.rect(cap, CornerRadius::same(4), mix(col(theme::CAP), t::high(), h), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
@@ -471,12 +500,13 @@ pub fn hslider(ui: &mut Ui, p: &Painter, r: Rect, k: f32, on: bool, rest: f32, i
     None
 }
 
-/// A level meter of `n` segments: up at once, down over 300 ms, the peak held a second.
-pub fn meter(ui: &Ui, p: &Painter, r: Rect, level: f32, n: usize, id: impl std::hash::Hash + std::fmt::Debug) {
-    let ctx = ui.ctx();
+/// A level meter of `n` segments: up at once, down over 300 ms, the peak held a second; a
+/// level at full scale lights the clip mark over it, held until it is clicked.
+pub fn meter(ui: &mut Ui, p: &Painter, r: Rect, level: f32, n: usize, id: impl std::hash::Hash + std::fmt::Debug) {
+    let ctx = ui.ctx().clone();
     let id = ui.scope_id().with(id);
     let now = ctx.input(|i| i.time);
-    let (mut shown, mut peak, mut peak_at, mut at) = ctx.data(|d| d.get_temp::<(f32, f32, f64, f64)>(id)).unwrap_or((0.0, 0.0, now, now));
+    let (mut shown, mut peak, mut peak_at, mut at, mut clip) = ctx.data(|d| d.get_temp::<(f32, f32, f64, f64, bool)>(id)).unwrap_or((0.0, 0.0, now, now, false));
     let dt = (now - at).clamp(0.0, 0.1) as f32;
     at = now;
     shown = if level >= shown { level } else { (shown - dt / 0.3).max(level) };
@@ -486,17 +516,25 @@ pub fn meter(ui: &Ui, p: &Painter, r: Rect, level: f32, n: usize, id: impl std::
     } else if now - peak_at > 1.0 {
         peak = (peak - dt / 0.4).max(shown);
     }
-    ctx.data_mut(|d| d.insert_temp(id, (shown, peak, peak_at, at)));
+    if level >= 0.999 {
+        clip = true;
+    }
+    let mark = Rect::from_min_size(pos2(r.left(), r.top() - 7.0), vec2(r.width(), 4.0));
+    if clip && ui.interact(mark.expand(4.0), id.with("clip"), Sense::click()).on_hover_text("It reached full scale: a click clears it").clicked() {
+        clip = false;
+    }
+    ctx.data_mut(|d| d.insert_temp(id, (shown, peak, peak_at, at, clip)));
     if shown > 0.0 || peak > 0.0 {
         ctx.request_repaint();
     }
+    p.rect_filled(mark, CornerRadius::same(1), if clip { col(theme::HOT) } else { Color32::from_rgb(0x22, 0x25, 0x2C) });
     let gap = 2.0;
     let h = (r.height() - (n - 1) as f32 * gap) / n as f32;
     let peak_i = ((1.0 - peak) * n as f32).floor() as usize;
     for i in 0..n {
         let on = (n - i) as f32 / n as f32 <= shown + 1e-4;
-        let hot = if i < 2 { col(theme::HOT) } else if i < 5 { col(theme::WARM) } else { Color32::from_rgb(0xD7, 0xDA, 0xE0) };
-        let c = if on || (i == peak_i.min(n - 1) && peak > 0.02) { hot } else { Color32::from_rgb(0x22, 0x25, 0x2C) };
+        let hot = if i < 2 { col(theme::HOT) } else if i < 5 { col(theme::WARM) } else { Color32::from_rgb(0xB4, 0xB9, 0xC4) };
+        let c = if on || (i == peak_i.min(n - 1) && peak > 0.02) { hot } else { Color32::from_rgb(0x20, 0x23, 0x2A) };
         p.rect_filled(Rect::from_min_size(pos2(r.left(), r.top() + i as f32 * (h + gap)), vec2(r.width(), h)), CornerRadius::same(1), c);
     }
 }

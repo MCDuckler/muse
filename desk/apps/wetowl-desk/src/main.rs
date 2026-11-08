@@ -134,6 +134,9 @@ pub(crate) struct App {
     pub(crate) overview_kept: [tracks::OverviewKept; 2],
     /// The decks' platters: how each turns, its pictures.
     pub(crate) platters: platter::Platters,
+    /// Where each deck's platter was last drawn, and records flying from the crate to a deck.
+    pub(crate) platter_at: [Rect; 2],
+    pub(crate) flights: Vec<(wo_deskcore::Record, Rect, usize, Instant)>,
     /// What the toasts last said of: the crate's trouble, the sign-in, the stage's trouble.
     seen: (Option<String>, bool, Option<String>),
 }
@@ -315,6 +318,8 @@ impl App {
             zoom: 110.0,
             overview_kept: [None, None],
             platters: Default::default(),
+            platter_at: [Rect::NOTHING; 2],
+            flights: vec![],
             seen: (None, false, None),
         }
     }

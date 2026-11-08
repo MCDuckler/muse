@@ -72,6 +72,11 @@ pub struct DeckView {
     pub phase_ms: f64,
     /// Peak since the last frame, 0..1.
     pub peak: f32,
+    /// The same, each side: left, right.
+    pub peak_lr: (f32, f32),
+    /// How much of it the room hears: its fader through the crossfader's law, 0..1 (0
+    /// while it is not playing).
+    pub audible: f32,
     /// Knobs 0..1 (EQ and filter centred at 0.5).
     pub gain: f32,
     pub eq: [f32; 3],
@@ -857,6 +862,7 @@ impl Desk {
         let view = |i: usize| {
             let s = &self.slots[i];
             let st = self.engine.deck(DeckId::new(i).unwrap()).read();
+            let lr = self.engine.deck(DeckId::new(i).unwrap()).take_peak();
             let wave = s.wave.lock().unwrap();
             let length = if s.record.seconds > 0 { s.record.seconds as f64 } else { wave.seconds() };
             DeckView {
@@ -871,7 +877,14 @@ impl Desk {
                 master: i == self.master,
                 keylock: s.keylock,
                 phase_ms: st.phase_error * 1000.0,
-                peak: { let (l, r) = self.engine.deck(DeckId::new(i).unwrap()).take_peak(); l.max(r) },
+                peak_lr: lr,
+                peak: lr.0.max(lr.1),
+                audible: if st.playing {
+                    let (ga, gb) = transition::law(self.crossfader, self.full_law);
+                    (s.fader * s.fader * if i == 0 { ga } else { gb }).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                },
                 gain: s.gain,
                 eq: s.eq,
                 filter: s.filter,

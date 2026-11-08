@@ -102,7 +102,7 @@ pub(crate) fn draw(app: &mut App, ui: &mut Ui, p: &Painter, full: Rect) {
     if let Some(x) = kit::vfader(ui, p, Rect::from_min_size(pos2(inner.left() + 190.0, inner.top() + 24.0), vec2(34.0, 180.0)), vals[3], t::deck(0), "g-fader") {
         nv[3] = x;
     }
-    kit::meter(ui, p, Rect::from_min_size(pos2(inner.left() + 240.0, inner.top() + 26.0), vec2(6.0, 176.0)), vals[3], 18, "g-meter");
+    kit::meter(ui, p, Rect::from_min_size(pos2(inner.left() + 240.0, inner.top() + 32.0), vec2(6.0, 170.0)), vals[3], 18, "g-meter");
     if let Some(x) = kit::crossfader(ui, p, Rect::from_min_size(pos2(inner.left(), inner.bottom() - 30.0), vec2(inner.width(), 30.0)), vals[4], "g-xf") {
         nv[4] = x;
     }

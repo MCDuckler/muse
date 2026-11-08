@@ -26,7 +26,7 @@ impl App {
         let k = motion::tween_bool(&ctx, egui::Id::unique("overlay"), self.overlay.is_some(), motion::EMPHASIS, motion::STANDARD);
         let Some(which) = self.overlay.or(self.overlay_was).filter(|_| k > 0.0) else { return };
         let size = match which {
-            Overlay::Keys => vec2(760.0, 470.0),
+            Overlay::Keys => vec2(780.0, 500.0),
             Overlay::Settings => vec2(620.0, 612.0),
             Overlay::Set => vec2((full.width() - 80.0).min(1180.0), (full.height() - 80.0).min(720.0)),
             Overlay::Controllers => vec2((full.width() - 80.0).min(1080.0), (full.height() - 80.0).min(680.0)),
@@ -177,9 +177,12 @@ impl App {
 /// The keys as keycaps, grouped.
 fn keys(p: &Painter, r: Rect) {
     let col_w = (r.width() - 32.0) / 2.0;
+    // each column's groups one under the other, as tall as they are
+    let mut col_y = [r.top(); 2];
     for (g, (group, rows)) in KEYS.iter().enumerate() {
         let x = r.left() + (g % 2) as f32 * (col_w + 32.0);
-        let y0 = r.top() + (g / 2) as f32 * 200.0;
+        let y0 = col_y[g % 2];
+        col_y[g % 2] = y0 + 34.0 + rows.len() as f32 * 32.0 + 18.0;
         kit::section(p, pos2(x, y0), Align2::LEFT_TOP, group);
         for (i, (k, what)) in rows.iter().enumerate() {
             let y = y0 + 34.0 + i as f32 * 32.0;
@@ -187,7 +190,7 @@ fn keys(p: &Painter, r: Rect) {
             for cap in k.split(' ') {
                 kx = keycap(p, pos2(kx, y), cap).right() + 5.0;
             }
-            kit::text(p, pos2(x + 128.0, y), Align2::LEFT_CENTER, what, 13.0, "", t::muted());
+            kit::clipped(p, pos2(x + 128.0, y), what, 13.0, "", t::muted(), col_w - 128.0);
         }
     }
 }

@@ -49,6 +49,7 @@ impl App {
         self.auto_dj(desk, ui, p, l.auto, s);
         ui.set_opacity(1.0);
         self.drag_ghost(desk, ui);
+        self.flights(desk, ui);
     }
 
     fn top_bar(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot) {
@@ -205,6 +206,24 @@ impl App {
         let v = &s.decks[d];
         let inner = r.shrink(t::INSET);
         let ctx = ui.ctx().clone();
+        // on air: the panel's top edge lit in the deck's colour by how much of it the room hears
+        let air = motion::spring(&ctx, ui.scope_id().with(("air", d)), v.audible, 0.08);
+        if air > 0.01 {
+            let y = r.top() + 1.5;
+            let mut g = Mesh::default();
+            let (c0, c1) = (alpha_of(t::deck(d), 0.0), alpha_of(t::deck(d), 0.9 * air));
+            let (x0, x1) = (r.left() + 14.0, r.right() - 14.0);
+            let xm = (x0 + x1) / 2.0;
+            for (x, c) in [(x0, c0), (xm, c1), (x1, c0)] {
+                g.colored_vertex(pos2(x, y - 1.0), c);
+                g.colored_vertex(pos2(x, y + 1.0), c);
+            }
+            g.add_triangle(0, 1, 2);
+            g.add_triangle(1, 3, 2);
+            g.add_triangle(2, 3, 4);
+            g.add_triangle(3, 5, 4);
+            p.add(g);
+        }
 
         // a record dragged from the crate: this deck lights where it can take it
         if let Some(rec) = egui::DragAndDrop::payload::<Record>(&ctx) {
@@ -227,6 +246,7 @@ impl App {
         if !wide {
             let pr = Rect::from_min_size(inner.min, vec2(72.0, 72.0));
             self.platter(desk, ui, p, pr, v, d, true);
+            self.platter_at[d] = pr;
             x = pr.right() + 14.0;
         }
         // the readouts at the right: tempo and pitch · key; the time left and gone
@@ -283,6 +303,7 @@ impl App {
             let side = (pitch_r.left() - 12.0 - x - 340.0).min(body.height()).max(120.0);
             let pr = Rect::from_center_size(pos2(x + side / 2.0, body.center().y), vec2(side, side));
             self.platter(desk, ui, p, pr, v, d, false);
+            self.platter_at[d] = pr;
             coming_at = Some(pos2(pr.center().x, pr.bottom() - 12.0));
             x = pr.right() + 14.0;
         } else if let Some((w, c, _)) = &coming {
@@ -540,11 +561,13 @@ impl App {
         let cf_h = 30.0;
         let strip_bottom = inner.bottom() - cf_h - 16.0;
         let step = ((strip_bottom - inner.top() - 4.0) / 5.0).min(54.0);
+        let level = |pk: f32| (1.0 + 20.0 * pk.max(1e-6).log10() / 48.0).clamp(0.0, 1.0);
+        let db = |v: f32| if v >= 0.5 { (v - 0.5) * 12.0 } else { -40.0 * ((0.5 - v) * 2.0).powf(1.5) };
         for d in 0..2 {
             let v = &s.decks[d];
             let side = if d == 0 { 1.0 } else { -1.0 };
             let edge = if d == 0 { inner.left() } else { inner.right() };
-            let knobs_x = edge + side * 21.0;
+            let knobs_x = edge + side * 22.0;
             for (i, name) in names.iter().enumerate() {
                 let c = pos2(knobs_x, inner.top() + 16.0 + i as f32 * step);
                 let (val, bip, color) = match i {
@@ -554,7 +577,16 @@ impl App {
                     3 => (v.eq[0], true, t::deck(d)),
                     _ => (v.filter, true, Color32::from_rgb(0x9D, 0xA1, 0xAA)),
                 };
-                if let Some(nv) = kit::knob(ui, p, c, val, color, bip, 0.5, (d, "knob", i)) {
+                let tag = move |x: f32| match i {
+                    0 => format!("{:+.1} dB", (x - 0.5) * 24.0),
+                    4 => {
+                        let k = (x - 0.5) * 2.0;
+                        if k.abs() < 0.04 { "off".to_owned() } else if k < 0.0 { format!("low-pass {:.0}%", -k * 100.0) } else { format!("high-pass {:.0}%", k * 100.0) }
+                    }
+                    _ if x <= 0.01 => "killed".to_owned(),
+                    _ => format!("{:+.1} dB", db(x)),
+                };
+                if let Some(nv) = kit::knob_with(ui, p, c, val, color, bip, 0.5, (d, "knob", i), tag) {
                     match i {
                         0 => desk.set_gain(d, nv),
                         1 => desk.set_eq(d, 2, nv),
@@ -564,26 +596,42 @@ impl App {
                     }
                 }
                 label_sized(p, pos2(c.x, c.y + 17.0), Align2::CENTER_TOP, name, 9.5, t::label());
+                // the bands' kills beside their knobs
+                if (1..=3).contains(&i) {
+                    let band = 3 - i;
+                    let killed = v.eq[band] <= 0.01;
+                    let kr = Rect::from_center_size(pos2(edge + side * 56.0, c.y), vec2(22.0, 22.0));
+                    let word = ["The lows", "The mids", "The highs"][band];
+                    let keys = if band == 0 { format!("  ({})", ["F", "G"][d]) } else { String::new() };
+                    if Btn::new("").icon(Icon::Kill).tone(Tone::Danger).on(killed).quiet().show(ui, p, kr, (d, "kill", band)).on_hover_text(format!("{word} off and on{keys}")).clicked() {
+                        desk.kill(d, band);
+                    }
+                }
             }
-            // the channel fader beside its knobs, its meter on the inside
-            let fx = edge + side * 72.0;
+            // the channel fader, its meter on the inside
+            let fx = edge + side * 100.0;
             kit::deck_chip(p, pos2(fx - 10.0, inner.top() + 6.0), d);
             let top = inner.top() + 26.0;
             let fr = Rect::from_min_max(pos2(fx - 17.0, top), pos2(fx + 17.0, strip_bottom));
             if let Some(nv) = kit::vfader(ui, p, fr, v.fader, t::deck(d), (d, "fader")) {
                 desk.set_fader(d, nv);
             }
-            let level = (1.0 + 20.0 * v.peak.max(1e-6).log10() / 48.0).clamp(0.0, 1.0);
-            let mx = fx + side * 30.0 - 3.0;
-            kit::meter(ui, p, Rect::from_min_max(pos2(mx, top + 2.0), pos2(mx + 6.0, strip_bottom - 2.0)), level, 18, (d, "meter"));
+            let mx = fx + side * 27.0 - 3.0;
+            kit::meter(ui, p, Rect::from_min_max(pos2(mx, top + 8.0), pos2(mx + 6.0, strip_bottom - 2.0)), level(v.peak), 18, (d, "meter"));
         }
-        // the master, as heard
+        // the master: each side as the decks give it, a scale beside it
         let mc = inner.center().x;
         kit::label(p, pos2(mc, inner.top() + 6.0), Align2::CENTER_CENTER, "Master");
-        let top = inner.top() + 28.0;
-        let lvl = (1.0 + 20.0 * s.decks[0].peak.max(s.decks[1].peak).max(1e-6).log10() / 48.0).clamp(0.0, 1.0);
-        kit::meter(ui, p, Rect::from_min_max(pos2(mc - 9.0, top), pos2(mc - 2.0, strip_bottom - 2.0)), lvl, 18, "master-l");
-        kit::meter(ui, p, Rect::from_min_max(pos2(mc + 2.0, top), pos2(mc + 9.0, strip_bottom - 2.0)), lvl * 0.97, 18, "master-r");
+        let top = inner.top() + 34.0;
+        let (l, rr) = (s.decks[0].peak_lr.0.max(s.decks[1].peak_lr.0), s.decks[0].peak_lr.1.max(s.decks[1].peak_lr.1));
+        let mr = Rect::from_min_max(pos2(mc - 9.0, top), pos2(mc - 2.0, strip_bottom - 2.0));
+        kit::meter(ui, p, mr, level(l), 18, "master-l");
+        kit::meter(ui, p, Rect::from_min_max(pos2(mc + 2.0, top), pos2(mc + 9.0, strip_bottom - 2.0)), level(rr), 18, "master-r");
+        for (dbv, word) in [(0.0f32, "0"), (-6.0, "6"), (-12.0, "12"), (-24.0, "24"), (-36.0, "36")] {
+            let k = 1.0 + dbv / 48.0;
+            let y = mr.bottom() - k * mr.height();
+            kit::text(p, pos2(mc - 15.0, y), Align2::RIGHT_CENTER, word, 8.5, "mono", t::faint());
+        }
         // the crossfader: a hand on it takes over from the Auto DJ
         let cf = Rect::from_min_max(pos2(inner.left() + 22.0, inner.bottom() - cf_h), pos2(inner.right() - 22.0, inner.bottom()));
         kit::deck_chip(p, pos2(inner.left() - 2.0, cf.center().y), 0);
@@ -819,6 +867,8 @@ impl App {
         let row_k = |i: usize| if reduced { 1.0 } else { Ease::Out.at((since - i.min(8) as f32 * 0.012) / motion::STANDARD) };
 
         let mut load: Option<Record> = None;
+        // where the loaded row's sleeve was (it flies from there to the deck)
+        let mut from: Option<Rect> = None;
         let mut queue_it: Option<Record> = None;
         let mut unqueue: Option<i64> = None;
         let mut load_on: Option<(usize, Record)> = None;
@@ -873,6 +923,16 @@ impl App {
                 if let Some(d) = row.on_deck {
                     let c = kit::deck_chip(&p, pos2(tx, y), d);
                     tx = c.right() + 8.0;
+                    // playing: three bars that move with what it plays
+                    if s.decks[d].playing {
+                        let lvl = (1.0 + 20.0 * s.decks[d].peak.max(1e-6).log10() / 48.0).clamp(0.0, 1.0);
+                        let shown = motion::spring(&ctx, ui.scope_id().with(("air-bars", d)), lvl, 0.12);
+                        for (i, k) in [0.7f32, 1.0, 0.55].into_iter().enumerate() {
+                            let h = 3.0 + 9.0 * (shown * k).clamp(0.0, 1.0);
+                            p.rect_filled(Rect::from_min_max(pos2(tx + i as f32 * 4.0, y + 6.0 - h), pos2(tx + i as f32 * 4.0 + 2.5, y + 6.0)), CornerRadius::same(1), t::tint(d));
+                        }
+                        tx += 18.0;
+                    }
                 }
                 let ink = if row.on_deck.is_some() { t::muted() } else if row.record.playable() { t::text() } else { t::muted() };
                 kit::clipped(&p, pos2(tx, y), &row.record.title, 13.0, "", ink, at(3) - tx - 12.0);
@@ -900,6 +960,7 @@ impl App {
                 }
                 if resp.double_clicked() && playable {
                     load = Some(row.record.clone());
+                    from = Some(sl);
                 }
                 // a hand on a record: queue it, or put it on a deck that is free
                 let rec = row.record.clone();
@@ -934,6 +995,7 @@ impl App {
                     for d in 0..2 {
                         if ui.add_enabled(playable && free_decks[d], egui::Button::new(format!("On deck {}", ["A", "B"][d]))).clicked() {
                             load_on = Some((d, rec.clone()));
+                            from = Some(sl);
                             ui.close();
                         }
                     }
@@ -952,6 +1014,23 @@ impl App {
                 }
             }
         });
+        // the list fades out at its foot where more is below, and under its head when scrolled
+        let fade = |y0: f32, y1: f32, top_solid: bool| {
+            let mut g = Mesh::default();
+            let solid = Color32::from_rgba_unmultiplied(11, 12, 16, 230);
+            let clear = Color32::from_rgba_unmultiplied(11, 12, 16, 0);
+            let (a, b) = if top_solid { (solid, clear) } else { (clear, solid) };
+            g.colored_vertex(pos2(list.left() + 1.0, y0), a);
+            g.colored_vertex(pos2(list.right() - 1.0, y0), a);
+            g.colored_vertex(pos2(list.right() - 1.0, y1), b);
+            g.colored_vertex(pos2(list.left() + 1.0, y1), b);
+            g.add_triangle(0, 1, 2);
+            g.add_triangle(0, 2, 3);
+            p.add(g);
+        };
+        if rows.len() as f32 * ROW > list.height() {
+            fade(list.bottom() - 18.0, list.bottom(), false);
+        }
         if rows.is_empty() && !desk.library().loading {
             let why = if self.search.is_empty() { "Nothing on this shelf" } else { "Nothing found" };
             kit::hint(p, list.center(), Align2::CENTER_CENTER, why);
@@ -978,6 +1057,9 @@ impl App {
         }
         if let Some((d, r)) = load_on {
             self.toasts.say(format!("{} on deck {}", r.title, ["A", "B"][d]), Tone::Deck(d));
+            if let Some(f) = from {
+                self.flights.push((r.clone(), f, d, std::time::Instant::now()));
+            }
             desk.load_by_hand(d, r);
         }
         // the whole library comes a page at a time: the next as the end comes into view
@@ -990,8 +1072,43 @@ impl App {
             let free = s.decks.iter().position(|d| !d.master).unwrap_or(1);
             if !s.decks[free].playing {
                 self.toasts.say(format!("{} on deck {}", rec.title, ["A", "B"][free]), Tone::Deck(free));
+                if let Some(f) = from {
+                    self.flights.push((rec.clone(), f, free, std::time::Instant::now()));
+                }
                 desk.load_by_hand(free, rec);
             }
+        }
+    }
+
+    /// Records on their way from the crate to a deck: each sleeve flies on a curve from its
+    /// row to the platter, shrinking into it.
+    pub(crate) fn flights(&mut self, desk: &mut Desk, ui: &mut Ui) {
+        const FOR: f32 = 0.3;
+        self.flights.retain(|f| f.3.elapsed().as_secs_f32() < FOR);
+        if self.flights.is_empty() || motion::reduced(ui.ctx()) {
+            self.flights.clear();
+            return;
+        }
+        let ctx = ui.ctx().clone();
+        ctx.request_repaint();
+        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("flights")));
+        for (rec, from, d, at) in self.flights.clone() {
+            let k = Ease::InOut.at(at.elapsed().as_secs_f32() / FOR);
+            let to = self.platter_at[d];
+            if to.width() < 1.0 {
+                continue;
+            }
+            let side = from.width() + (to.width() * 0.62 - from.width()) * k;
+            let (a, b) = (from.center(), to.center());
+            // a little arc over the straight line
+            let lift = -60.0 * (4.0 * k * (1.0 - k));
+            let c = pos2(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k + lift);
+            let r = Rect::from_center_size(c, vec2(side, side));
+            let mut fp = p.clone();
+            fp.multiply_opacity(1.0 - (k - 0.75).max(0.0) * 4.0);
+            fp.add(t::shadow(2).as_shape(r, CornerRadius::same(4)));
+            let tex = self.sleeves.of(&ctx, desk, &rec);
+            kit::sleeve(ui, &fp, r, tex, &rec.initials(), col(theme::sleeve(rec.id)), 4, ("flight", rec.id));
         }
     }
 
@@ -1163,35 +1280,42 @@ impl App {
         }
         let buttons = 30.0 + 8.0 + 30.0;
         let room = inner.height() - 26.0 - buttons - 10.0;
-        let pic_h = inner.width() * 9.0 / 16.0;
+        // the picture as large as the card lets it be, 16:9
+        let pic_size = if inner.width() * 9.0 / 16.0 <= room { vec2(inner.width(), inner.width() * 9.0 / 16.0) } else { vec2(room * 16.0 / 9.0, room) };
         let scene = match (on, v.untold) {
             (true, true) => "an older stage: it says nothing of its scene".to_owned(),
             (true, false) => v.told.look.clone().or(v.scene.clone()).unwrap_or_else(|| "—".into()),
             _ => "—".into(),
         };
-        if room >= pic_h {
-            let pic = Rect::from_min_size(pos2(inner.left(), inner.top() + 26.0), vec2(inner.width(), pic_h));
-            p.rect_filled(pic, CornerRadius::same(t::R_PAD), Color32::BLACK);
+        if pic_size.y >= 60.0 {
+            let pic = Rect::from_min_size(pos2(inner.center().x - pic_size.x / 2.0, inner.top() + 26.0), pic_size);
             match (&self.stage_pic, on) {
                 (Some((_, tex)), true) => {
+                    p.rect_filled(pic, CornerRadius::same(t::R_PAD), Color32::BLACK);
                     p.add(egui::epaint::RectShape::filled(pic, CornerRadius::same(t::R_PAD), Color32::WHITE).with_texture(tex.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
                     // the caption on glass over the picture's foot
                     let cap = Rect::from_min_max(pos2(pic.left() + 6.0, pic.bottom() - 30.0), pos2(pic.right() - 6.0, pic.bottom() - 6.0));
                     kit::glass_tab(p, cap);
                     let held = if v.held { label_sized(p, pos2(cap.right() - 8.0, cap.center().y), Align2::RIGHT_CENTER, "Held", 10.0, t::warm()).left() } else { cap.right() };
                     kit::clipped(p, pos2(cap.left() + 8.0, cap.center().y), &scene, 11.5, "", t::text(), held - cap.left() - 16.0);
+                    p.rect_stroke(pic, CornerRadius::same(t::R_PAD), Stroke::new(1.0, white(0.08)), StrokeKind::Inside);
                 }
                 _ => {
+                    // no show: a screen's outline, dashed, and what to do
+                    p.rect_filled(pic, CornerRadius::same(t::R_PAD), Color32::from_black_alpha(70));
+                    dashed_rect(p, pic.shrink(1.0), white(0.14));
                     let (say, ink) = match (&v.trouble, v.starting) {
                         (Some(why), _) => (why.clone(), t::warm()),
                         (None, true) => ("The stage window is opening".to_owned(), t::muted()),
                         (None, false) => ("The show, in a window of its own".to_owned(), t::faint()),
                     };
-                    let g = p.layout(say, egui::FontId::new(12.0, crate::paint::family("")), ink, pic.width() - 32.0);
-                    p.galley(pic.center() - g.size() / 2.0, g, ink);
+                    crate::ui::icons::paint(p, Rect::from_center_size(pic.center() - vec2(0.0, 12.0), vec2(22.0, 22.0)), Icon::Screen, alpha_of(t::faint(), 0.7));
+                    let mut job = egui::text::LayoutJob::simple(say, egui::FontId::new(12.0, crate::paint::family("")), ink, pic.width() - 24.0);
+                    job.halign = egui::Align::Center;
+                    let g = p.layout_job(job);
+                    p.galley(pos2(pic.center().x, pic.center().y + 6.0), g, ink);
                 }
             }
-            p.rect_stroke(pic, CornerRadius::same(t::R_PAD), Stroke::new(1.0, white(0.08)), StrokeKind::Inside);
             // the picture opens the Show page, where the show is played
             if ui.interact(pic, ui.scope_id().with("stage-pic"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("The Show page  (K)").clicked() {
                 self.page = Page::Show;
@@ -1254,7 +1378,16 @@ impl App {
         let master = s.decks.iter().position(|d| d.master).unwrap_or(0);
         let (from, to) = s.mix.as_ref().map(|m| (m.from, m.to)).unwrap_or((master, 1 - master));
         let a = kit::deck_chip(p, pos2(c.left(), c.top() + 9.0), from);
-        crate::ui::icons::paint(p, Rect::from_center_size(pos2(a.right() + 12.0, c.top() + 9.0), vec2(12.0, 12.0)), Icon::ChevronRight, t::muted());
+        // under way: the arrow lights on each beat of the record going out
+        let beat = s.mix.as_ref().filter(|m| m.mixing && s.auto).and_then(|_| {
+            let v = &s.decks[from];
+            desk.beat_at(from, v.heard).map(|(into, _)| (1.0 - (into * 60.0 / v.bpm.max(1.0)) as f32 / 0.2).clamp(0.0, 1.0))
+        });
+        let arrow = match beat {
+            Some(k) => mix(t::soft(), t::tint(to), k),
+            None => t::muted(),
+        };
+        crate::ui::icons::paint(p, Rect::from_center_size(pos2(a.right() + 12.0, c.top() + 9.0), vec2(12.0, 12.0)), Icon::ChevronRight, arrow);
         let b = kit::deck_chip(p, pos2(a.right() + 24.0, c.top() + 9.0), to);
         let (what, status) = match (s.auto, s.mix.clone()) {
             (false, _) => ("Paused".to_owned(), "".to_owned()),
@@ -1467,7 +1600,10 @@ impl App {
         curve(&|lv| lv.1, t::deck(to));
         if let Some(sw) = m.swap_bar {
             let x = r.left() + r.width() * (sw / bars as f64) as f32;
-            p.line_segment([pos2(x, r.top() + 4.0), pos2(x, r.bottom() - 4.0)], Stroke::new(1.0, white(0.5 * dim)));
+            // the bass changing hands: a flash as the mix passes it
+            let passed = (m.mixing && m.bar >= sw) as u64;
+            let fl = motion::flash(ui.ctx(), ui.scope_id().with(("swap", m.to, m.bars)), passed, 0.3);
+            p.line_segment([pos2(x, r.top() + 4.0), pos2(x, r.bottom() - 4.0)], Stroke::new(1.0 + 2.0 * fl, mix(white(0.5 * dim), t::tint(to), fl)));
             // (on the move's last bar the word goes the other side of its line)
             let (lx, anchor) = if x > r.right() - 40.0 { (x - 5.0, Align2::RIGHT_TOP) } else { (x + 5.0, Align2::LEFT_TOP) };
             label_sized(p, pos2(lx, r.top() + 4.0), anchor, "Bass", 9.5, alpha_of(t::soft(), dim));
@@ -1585,4 +1721,25 @@ fn play_pause(p: &Painter, c: egui::Pos2, r: f32, k: f32, ink: Color32) {
         let pts: Vec<egui::Pos2> = (0..4).map(|i| lerp(a[i], b[i])).collect();
         p.add(Shape::convex_polygon(pts, ink, Stroke::NONE));
     }
+}
+
+/// A rectangle's outline in dashes (a place for something not there).
+fn dashed_rect(p: &Painter, r: Rect, c: Color32) {
+    let dash = 6.0;
+    let gap = 5.0;
+    let edge = |a: egui::Pos2, b: egui::Pos2| {
+        let len = (b - a).length();
+        let dir = (b - a) / len.max(1.0);
+        let mut t = 0.0;
+        while t < len {
+            let e = (t + dash).min(len);
+            p.line_segment([a + dir * t, a + dir * e], Stroke::new(1.0, c));
+            t += dash + gap;
+        }
+    };
+    let r = r.shrink(4.0);
+    edge(r.left_top(), r.right_top());
+    edge(r.right_top(), r.right_bottom());
+    edge(r.right_bottom(), r.left_bottom());
+    edge(r.left_bottom(), r.left_top());
 }
