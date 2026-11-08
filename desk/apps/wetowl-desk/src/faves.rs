@@ -176,7 +176,7 @@ impl App {
         }
         // the one on, held; the last one forgotten
         if let Some(on) = view.on.as_ref().and_then(|id| view.faves.iter().find(|f| &f.id == id)) {
-            kit::dot(p, pos2(inner.left() + 5.0, y + 12.0), t::red(), 3.5);
+            kit::on_air(p, pos2(inner.left() + 6.0, y + 12.0), 12.0);
             kit::clipped(p, pos2(inner.left() + 16.0, y + 12.0), &format!("On the stage, held: {}", on.title), 12.5, "", t::text(), inner.width() - 130.0);
             let br = Rect::from_min_size(pos2(inner.right() - 100.0, y), vec2(100.0, 24.0));
             if Btn::new("Let go").size(11.0).tone(Tone::Danger).accent(true).show(ui, p, br, "fave-let-go").on_hover_text("Back to the rotation").clicked() {
@@ -258,7 +258,7 @@ impl App {
             p.add(egui::epaint::RectShape::filled(pic, CornerRadius::same(4), Color32::WHITE).with_texture(tex.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
         }
         if on {
-            kit::dot(p, pic.right_top() + vec2(-9.0, 9.0), t::red(), 4.0);
+            kit::on_air(p, pic.right_top() + vec2(-11.0, 11.0), 13.0);
         }
         kit::clipped(p, pos2(r.left() + 8.0, pic.bottom() + 14.0), &f.title, 12.5, "", if on { t::high() } else { t::text() }, r.width() - 16.0);
         if let Some(n) = stars(ui, p, pos2(r.left() + 14.0, pic.bottom() + 34.0), f.stars, 6.5, ("fave", f.id.as_str())) {

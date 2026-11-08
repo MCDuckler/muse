@@ -94,8 +94,7 @@ impl App {
         }
         let nr = kit::text(p, pos2(back.right() + 16.0, back.center().y), Align2::LEFT_CENTER, &page.name, 19.0, "label", t::high());
         if page.live {
-            kit::dot(p, pos2(nr.right() + 10.0, nr.center().y), t::red(), 3.5);
-            kit::hint(p, pos2(nr.right() + 20.0, nr.center().y), Align2::LEFT_CENTER, "on now");
+            kit::tally(p, pos2(nr.right() + 10.0, nr.center().y), "On now");
         }
         let play = Rect::from_min_size(pos2(inner.right() - 96.0, back.top()), vec2(96.0, 28.0));
         if Btn::new("Play it").icon(Icon::Play).accent(true).size(11.0).show(ui, p, play, "scene-play").on_hover_text("One of its looks on the stage, held until you let go (on the LAND ON)").clicked() {
@@ -393,7 +392,7 @@ impl App {
             badge(pic.left_bottom() + vec2(2.0, -2.0), Align2::LEFT_BOTTOM, "allowed", false);
         }
         if sq.live {
-            kit::dot(p, pic.right_bottom() - vec2(6.0, 6.0), t::red(), 3.5);
+            kit::on_air(p, pic.right_bottom() - vec2(9.0, 9.0), 12.0);
         }
         let dim = sq.dead() || sq.cut || !sq.here;
         kit::text(p, pos2(r.left() + 4.0, r.bottom() - 8.0), Align2::LEFT_CENTER, &sq.word(), 10.5, "mono", if dim { t::faint() } else { t::text() });

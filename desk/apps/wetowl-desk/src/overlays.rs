@@ -144,7 +144,7 @@ impl App {
         }
         for (i, c) in controllers.iter().take(2).enumerate() {
             let cy = y + 13.0 + i as f32 * 22.0;
-            kit::dot(p, pos2(x + 4.0, cy), if c.trouble.is_none() { t::ok() } else { t::warm() }, 3.0);
+            crate::ui::icons::paint(p, Rect::from_center_size(pos2(x + 6.0, cy), vec2(13.0, 13.0)), Icon::Controller, if c.trouble.is_none() { t::ok() } else { t::warm() });
             let words = match &c.trouble {
                 None => format!("{} · {}", c.name, c.layout),
                 Some(why) => format!("{}: {why}", c.name),
@@ -156,7 +156,7 @@ impl App {
         match desk.house().map(|(s, u)| (s.trim_start_matches("https://").to_owned(), u.map(str::to_owned))) {
             Some((server, user)) => {
                 let who = user.map(|u| format!("{u} at {server}")).unwrap_or(server);
-                kit::dot(p, pos2(x + 4.0, y + 13.0), t::ok(), 3.0);
+                crate::ui::icons::paint(p, Rect::from_center_size(pos2(x + 6.0, y + 13.0), vec2(13.0, 13.0)), Icon::House, t::ok());
                 kit::clipped(p, pos2(x + 16.0, y + 13.0), &who, 13.0, "", t::soft(), r.right() - x - 120.0);
                 let out = Rect::from_min_size(pos2(r.right() - 96.0, y), vec2(96.0, 28.0));
                 if Btn::new("Sign out").size(11.0).show(ui, p, out, "set-sign-out").clicked() {

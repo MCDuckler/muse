@@ -110,10 +110,10 @@ impl App {
         let st = kit::label(p, pos2(dot_c.x + 30.0, mid.y), Align2::LEFT_CENTER, "Set");
         kit::text(p, pos2(st.right() + 8.0, mid.y), Align2::LEFT_CENTER, &format!("{}:{:02}:{:02}", set / 3600, set / 60 % 60, set % 60), 14.0, "mono", t::soft());
 
-        // the right: settings, keys, one status pill, the Auto DJ
+        // the right: settings, keys; the house, the gear and the stage as icons (each as it
+        // is, its detail on hover); the Auto DJ
         let y = r.center().y;
-        let mut rx = r.right() - 9.0;
-        let gear = Rect::from_min_size(pos2(rx - 32.0, y - 16.0), vec2(32.0, 32.0));
+        let gear = Rect::from_min_size(pos2(r.right() - 9.0 - 32.0, y - 16.0), vec2(32.0, 32.0));
         if Btn::new("").icon(Icon::Settings).quiet().on(self.overlay == Some(Overlay::Settings)).show(ui, p, gear, "settings").on_hover_text("Settings  (Ctrl ,)").clicked() {
             self.overlay = if self.overlay == Some(Overlay::Settings) { None } else { Some(Overlay::Settings) };
         }
@@ -121,101 +121,83 @@ impl App {
         if Btn::new("").icon(Icon::Keys).quiet().on(self.overlay == Some(Overlay::Keys)).show(ui, p, keys, "keys").on_hover_text("The keys  (?)").clicked() {
             self.overlay = if self.overlay == Some(Overlay::Keys) { None } else { Some(Overlay::Keys) };
         }
-        rx = keys.left() - 12.0;
-        let (pill, open_gear) = self.status_pill(desk, ui, p, pos2(rx, y), s);
-        if open_gear {
-            self.overlay = Some(Overlay::Controllers);
-        }
-        let auto = Rect::from_min_size(pos2(pill.left() - 12.0 - 108.0, y - 16.0), vec2(108.0, 32.0));
-        if Btn::new("Auto DJ").icon(Icon::Dot).tone(Tone::Ok).on(s.auto).show(ui, p, auto, "auto").on_hover_text("The Auto DJ mixes the next record in  (A)").clicked() {
+        let div = keys.left() - 10.0;
+        p.line_segment([pos2(div, y - 11.0), pos2(div, y + 11.0)], Stroke::new(1.0, white(0.1)));
+        let left = self.status_icons(desk, ui, p, pos2(div - 10.0, y), s);
+        let auto = Rect::from_min_size(pos2(left - 14.0 - 118.0, y - 16.0), vec2(118.0, 32.0));
+        if Btn::new("Auto DJ").icon(Icon::AutoMix).tone(Tone::Ok).on(s.auto).show(ui, p, auto, "auto").on_hover_text("The Auto DJ mixes the next record in  (A)").clicked() {
             desk.set_auto(!s.auto);
+        }
+        // a mix under way: its progress along the button's foot, in the deck it goes to
+        if let Some(m) = s.mix.as_ref().filter(|m| m.mixing && s.auto) {
+            let k = (m.bar / m.bars.max(1) as f64).clamp(0.0, 1.0) as f32;
+            let x = motion::spring(ui.ctx(), ui.scope_id().with("auto-foot"), auto.left() + 6.0 + (auto.width() - 12.0) * k, 0.1);
+            p.rect_filled(Rect::from_min_max(pos2(auto.left() + 6.0, auto.bottom() - 4.0), pos2(x, auto.bottom() - 2.0)), CornerRadius::same(1), t::deck(m.to));
         }
     }
 
-    /// The house, the controllers, the stage and the sound's load as one pill, its right
-    /// edge at `right`; the details on hover.
-    /// (A click: the controllers page.)
-    fn status_pill(&self, desk: &Desk, ui: &mut Ui, p: &Painter, right: egui::Pos2, s: &Snapshot) -> (Rect, bool) {
+    /// The house, the controllers and the stage as icons, right to left from `right`; the
+    /// sound's load too while it works hard. Their left edge.
+    fn status_icons(&mut self, desk: &Desk, ui: &mut Ui, p: &Painter, right: egui::Pos2, s: &Snapshot) -> f32 {
+        use crate::ui::kit::State;
         let house = desk.house().map(|(sv, u)| (sv.trim_start_matches("https://").to_owned(), u.map(str::to_owned)));
         let controllers = desk.controllers();
         let stage = desk.stage();
+        let lib = desk.library();
+        let mut x = right.x;
+        let mut item = |icon: Icon, state: State, tip: String, key: &str| -> bool {
+            let rr = Rect::from_min_size(pos2(x - 30.0, right.y - 15.0), vec2(30.0, 30.0));
+            let clicked = Btn::new("").quiet().show(ui, p, rr, ("status", key)).on_hover_text(tip).clicked();
+            kit::status(ui, p, rr, icon, state, ("status-icon", key));
+            x = rr.left() - 4.0;
+            clicked
+        };
+        // the stage: open (lit), opening (busy), in trouble, closed
+        let (st, tip) = if stage.trouble.is_some() {
+            (State::Trouble, format!("The stage: {}", stage.trouble.clone().unwrap_or_default()))
+        } else if stage.stages > 0 {
+            (State::On, format!("The stage is showing{}  ·  a click: the Show page", if stage.rust { " (the Rust one)" } else { "" }))
+        } else if stage.starting {
+            (State::Busy, "The stage window is opening".to_owned())
+        } else {
+            (State::Off, "The stage is closed  ·  a click: the Show page".to_owned())
+        };
+        if item(Icon::Screen, st, tip, "stage") {
+            self.page = Page::Show;
+        }
+        // the controllers
+        let (st, tip) = if controllers.is_empty() {
+            (State::Off, "No controller found  ·  a click: the controllers".to_owned())
+        } else {
+            let lines: Vec<String> = controllers.iter().map(|c| match &c.trouble { None => format!("{} · {}", c.name, c.layout), Some(why) => format!("{}: {why}", c.name) }).collect();
+            (if controllers.iter().all(|c| c.trouble.is_none()) { State::On } else { State::Trouble }, format!("{}\na click: the controllers", lines.join("\n")))
+        };
+        if item(Icon::Controller, st, tip, "gear") {
+            self.overlay = Some(Overlay::Controllers);
+        }
+        // the house
+        let (st, tip) = match &house {
+            _ if lib.signing_in => (State::Busy, "Signing in…".to_owned()),
+            Some((sv, Some(u))) => (State::On, format!("Signed in to the house: {u} at {sv}")),
+            Some((sv, None)) => (State::On, format!("Signed in to the house at {sv}")),
+            None => (State::Off, "Not signed in to the house: the crate's left column signs in".to_owned()),
+        };
+        if item(Icon::House, st, tip, "house") {
+            self.overlay = Some(Overlay::Settings);
+        }
+        // the sound's load: only while it works hard
         let pct = (s.load.average * 100.0).round();
-        let words = format!("{pct:.0}%");
-        let dots: Vec<(Color32, &str)> = vec![
-            (if house.is_some() { t::ok() } else { t::faint() }, "House"),
-            (
-                if controllers.is_empty() {
-                    t::faint()
-                } else if controllers.iter().all(|c| c.trouble.is_none()) {
-                    t::ok()
-                } else {
-                    t::warm()
-                },
-                "Gear",
-            ),
-            (
-                if stage.stages > 0 {
-                    t::ok()
-                } else if stage.starting {
-                    t::warm()
-                } else {
-                    t::faint()
-                },
-                "Stage",
-            ),
-        ];
-        let mut w = 14.0;
-        for (_, word) in &dots {
-            w += 13.0 + label_width(p, word, 10.5) + 12.0;
+        let hot = s.load.average > 0.6 || s.load.worst > 0.95;
+        let tip = format!("The sound is working hard: {pct:.0}% of its time, {:.0}% at worst; {} late", s.load.worst * 100.0, s.load.late);
+        if hot {
+            item(Icon::Gauge, State::Trouble, tip.clone(), "dsp");
         }
-        let dsp_w = label_width(p, "DSP", 10.5) + 8.0 + 34.0;
-        w += dsp_w + 6.0;
-        let r = Rect::from_min_size(pos2(right.x - w, right.y - 15.0), vec2(w, 30.0));
-        let resp = ui.interact(r, ui.scope_id().with("status"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-        let clicked = resp.clicked();
-        let h = motion::tween_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), motion::QUICK, motion::STANDARD);
-        p.rect(r, CornerRadius::same(15), mix(Color32::from_white_alpha(7), Color32::from_white_alpha(14), h), Stroke::new(1.0, mix(t::edge_rest(), t::edge_hover(), h)), StrokeKind::Inside);
-        let mut x = r.left() + 14.0;
-        for (c, word) in &dots {
-            kit::dot(p, pos2(x + 3.5, r.center().y), *c, 3.0);
-            let l = label_sized(p, pos2(x + 13.0, r.center().y), Align2::LEFT_CENTER, word, 10.5, t::muted());
-            x = l.right() + 12.0;
+        if hot {
+            let tr = kit::text(p, pos2(x - 2.0, right.y), Align2::RIGHT_CENTER, &format!("{pct:.0}%"), 11.5, "mono", t::warm());
+            x = tr.left() - 2.0;
+            ui.interact(tr, ui.scope_id().with("dsp-tip"), Sense::hover()).on_hover_text(tip);
         }
-        let l = label_sized(p, pos2(x, r.center().y), Align2::LEFT_CENTER, "DSP", 10.5, t::label());
-        let hot = s.load.average > 0.7;
-        kit::text(p, pos2(l.right() + 8.0, r.center().y), Align2::LEFT_CENTER, &words, 11.5, "mono", if hot { t::warm() } else { t::soft() });
-        resp.on_hover_ui(|ui| {
-            ui.set_min_width(260.0);
-            let line = |ui: &mut Ui, head: &str, body: String| {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(head).color(t::label()).size(11.0));
-                    ui.label(egui::RichText::new(body).color(t::text()).size(12.5));
-                });
-            };
-            line(ui, "House", match &house {
-                Some((sv, Some(u))) => format!("{u} at {sv}"),
-                Some((sv, None)) => sv.clone(),
-                None => "not signed in".into(),
-            });
-            if controllers.is_empty() {
-                line(ui, "Gear", "no controller found".into());
-            }
-            for c in &controllers {
-                line(ui, "Gear", match &c.trouble {
-                    None => format!("{} · {}", c.name, c.layout),
-                    Some(why) => format!("{}: {why}", c.name),
-                });
-            }
-            line(ui, "Stage", if stage.stages > 0 {
-                format!("showing{}", if stage.rust { " (Rust)" } else { "" })
-            } else if stage.starting {
-                "starting…".into()
-            } else {
-                "closed".into()
-            });
-            line(ui, "DSP", format!("{pct:.0}% of the sound's time, {:.0}% at worst; {} late", s.load.worst * 100.0, s.load.late));
-        });
-        (r, clicked)
+        x
     }
 
     fn deck(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
@@ -1094,16 +1076,16 @@ impl App {
                 }
                 // the pinned ones (first in the list) marked
                 if l.pinned.unwrap_or(false) {
-                    kit::dot(ui.painter(), pos2(rr.left() + 14.0, rr.center().y), t::soft(), 2.0);
+                    crate::ui::icons::paint(ui.painter(), Rect::from_center_size(pos2(rr.left() + 14.0, rr.center().y), vec2(10.0, 10.0)), Icon::Pin, t::muted());
                 }
             }
         });
         p.line_segment([pos2(tree.left() + 14.0, tree.bottom() - 44.0), pos2(tree.right() - 14.0, tree.bottom() - 44.0)], Stroke::new(1.0, white(0.06)));
         let who = user.unwrap_or_else(|| server.trim_start_matches("https://").to_owned());
-        kit::dot(p, pos2(tree.left() + 21.0, tree.bottom() - 22.0), t::ok(), 3.0);
-        kit::clipped(p, pos2(tree.left() + 32.0, tree.bottom() - 22.0), &who, 12.0, "", t::muted(), tree.width() - 130.0);
-        let out = Rect::from_min_size(pos2(tree.right() - 88.0, tree.bottom() - 35.0), vec2(76.0, 26.0));
-        if Btn::new("Sign out").quiet().size(11.0).show(ui, p, out, "sign-out").on_hover_text(server.clone()).clicked() {
+        kit::avatar(p, pos2(tree.left() + 26.0, tree.bottom() - 22.0), 10.0, &who);
+        kit::clipped(p, pos2(tree.left() + 44.0, tree.bottom() - 22.0), &who, 12.5, "", t::soft(), tree.width() - 44.0 - 50.0);
+        let out = Rect::from_min_size(pos2(tree.right() - 44.0, tree.bottom() - 35.0), vec2(30.0, 26.0));
+        if Btn::new("").icon(Icon::LogOut).quiet().show(ui, p, out, "sign-out").on_hover_text(format!("Sign out of {server}")).clicked() {
             desk.sign_out();
         }
         if self.fits_asked {
@@ -1135,14 +1117,14 @@ impl App {
         let lib = desk.library();
         let busy = lib.signing_in;
         let mut go = false;
-        for (hint, which, icon) in [("House address", 0, Icon::Screen), ("Name", 1, Icon::Dot), ("Password", 2, Icon::Lock)] {
+        for (hint, which, icon) in [("House address", 0, Icon::House), ("Name", 1, Icon::User), ("Password", 2, Icon::Lock)] {
             let fr = Rect::from_min_size(pos2(x, y), vec2(w, 30.0));
             let value = match which {
                 0 => &mut self.form.0,
                 1 => &mut self.form.1,
                 _ => &mut self.form.2,
             };
-            let resp = kit::field(ui, p, fr, value, hint, (which != 1).then_some(icon), which == 2, ("sign-in", which));
+            let resp = kit::field(ui, p, fr, value, hint, Some(icon), which == 2, ("sign-in", which));
             if which == 2 && resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 go = true;
             }
@@ -1159,7 +1141,7 @@ impl App {
         y += 42.0;
         if self.app_sign_in && y + 30.0 < tree.bottom() {
             let app = Rect::from_min_size(pos2(x, y), vec2(w, 30.0));
-            if Btn::new("Use the WetOwl app's").quiet().size(11.0).show(ui, p, app, "app-sign-in").clicked() {
+            if Btn::new("Use the app's sign-in").quiet().size(11.0).show(ui, p, app, "app-sign-in").clicked() {
                 desk.use_app_sign_in();
             }
         }
@@ -1172,13 +1154,13 @@ impl App {
         let v = desk.stage();
         let on = v.stages > 0;
         kit::section(p, inner.left_top(), Align2::LEFT_TOP, "Stage");
-        let (dot, word) = match (on, v.starting) {
-            (true, _) => (t::ok(), "Showing"),
-            (false, true) => (t::warm(), "Starting…"),
-            _ => (t::faint(), "Closed"),
-        };
-        let w = label_sized(p, pos2(inner.right(), inner.top() + 6.0), Align2::RIGHT_CENTER, word, 10.5, t::muted());
-        kit::dot(p, pos2(w.left() - 9.0, w.center().y), dot, 3.0);
+        // on the stage now: the tally; opening: the screen with its arc; closed: nothing to say
+        if on {
+            let w = crate::paint::label_width(p, "Live", 9.5) + 12.0;
+            kit::tally(p, pos2(inner.right() - w, inner.top() + 6.0), "Live");
+        } else if v.starting {
+            kit::status(ui, p, Rect::from_center_size(pos2(inner.right() - 11.0, inner.top() + 6.0), vec2(22.0, 22.0)), Icon::Screen, kit::State::Busy, "stage-busy");
+        }
         let buttons = 30.0 + 8.0 + 30.0;
         let room = inner.height() - 26.0 - buttons - 10.0;
         let pic_h = inner.width() * 9.0 / 16.0;

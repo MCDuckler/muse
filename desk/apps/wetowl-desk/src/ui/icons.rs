@@ -288,11 +288,16 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, color: Color32) {
             closed(&[(17.0, 3.0), (7.0, 3.0), (5.2, 4.6), (3.2, 12.4), (4.7, 14.5), (10.0, 14.5), (9.2, 19.0), (10.8, 21.0), (12.4, 21.0), (17.0, 14.0)]);
         }
         Icon::AutoMix => {
-            let ease = |t: f32| t * t * (3.0 - 2.0 * t);
-            let a: Vec<(f32, f32)> = (0..=12).map(|i| { let t = i as f32 / 12.0; (3.0 + 18.0 * t, 6.0 + 12.0 * ease(t)) }).collect();
-            let b: Vec<(f32, f32)> = (0..=12).map(|i| { let t = i as f32 / 12.0; (3.0 + 18.0 * t, 18.0 - 12.0 * ease(t)) }).collect();
+            // two levels crossing over a mix: one held, then falling; the other rising, then held
+            let ease = |t: f32| {
+                let t = ((t - 0.2) / 0.6).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            };
+            let a: Vec<(f32, f32)> = (0..=16).map(|i| { let t = i as f32 / 16.0; (2.5 + 19.0 * t, 6.5 + 11.0 * ease(t)) }).collect();
+            let b: Vec<(f32, f32)> = (0..=16).map(|i| { let t = i as f32 / 16.0; (2.5 + 19.0 * t, 17.5 - 11.0 * ease(t)) }).collect();
             line(&a);
             line(&b);
+            line(&[(2.5, 21.0), (21.5, 21.0)]);
         }
         Icon::List => {
             for y in [6.0, 12.0, 18.0] {

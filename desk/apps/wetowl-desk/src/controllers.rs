@@ -26,12 +26,12 @@ impl App {
             y += LINE + 6.0;
         }
         for c in &controllers {
-            kit::dot(p, pos2(r.left() + 4.0, y + 10.0), if c.trouble.is_none() { t::ok() } else { t::warm() }, 3.5);
+            crate::ui::icons::paint(p, Rect::from_center_size(pos2(r.left() + 6.0, y + 10.0), vec2(14.0, 14.0)), crate::ui::icons::Icon::Controller, if c.trouble.is_none() { t::ok() } else { t::warm() });
             let words = match &c.trouble {
                 None => format!("{} — taken as {}", c.name, c.layout),
                 Some(why) => format!("{}: {why}", c.name),
             };
-            kit::clipped(p, pos2(r.left() + 16.0, y + 10.0), &words, 13.0, "", t::text(), r.width() - 16.0);
+            kit::clipped(p, pos2(r.left() + 20.0, y + 10.0), &words, 13.0, "", t::text(), r.width() - 20.0);
             y += LINE + 4.0;
         }
         let known: Vec<String> = layouts.iter().map(|l| format!("{} ({})", l.name, if l.protocol == wo_control::Protocol::Hid { "USB" } else { "MIDI" })).collect();

@@ -150,8 +150,11 @@ impl<'a> Btn<'a> {
 
     /// The room a word has in `r` (beside the icon, if any).
     fn text_room(&self, r: Rect) -> f32 {
-        r.width() - 16.0 - if self.icon.is_some() { Self::icon_side(r) + 7.0 } else { 0.0 }
+        r.width() - 12.0 - if self.icon.is_some() { Self::icon_side(r) + Self::GAP } else { 0.0 }
     }
+
+    /// Between an icon and its word.
+    const GAP: f32 = 6.0;
 
     /// An icon and a word that do not fit together: the icon alone.
     fn icon_only(&self, p: &Painter, r: Rect) -> bool {
@@ -197,10 +200,10 @@ impl<'a> Btn<'a> {
                 let s = Self::icon_side(r);
                 let (z, sp) = fit::caps(p, self.text, self.size, self.text_room(r)).unwrap_or((self.size, 0.0));
                 let g = p.layout_job(label_job(self.text, z, sp, ink));
-                let w = g.size().x + s + 7.0;
+                let w = g.size().x + s + Self::GAP;
                 let x0 = c.x - w / 2.0;
                 icons::paint(p, Rect::from_center_size(pos2(x0 + s / 2.0, c.y - sub_h), vec2(s, s)), i, ink);
-                p.galley(pos2(x0 + s + 7.0, c.y - sub_h - g.size().y / 2.0), g, ink);
+                p.galley(pos2(x0 + s + Self::GAP, c.y - sub_h - g.size().y / 2.0), g, ink);
             }
             (None, _) => {
                 fit::label(p, pos2(c.x, c.y - sub_h), Align2::CENTER_CENTER, self.text, self.size, ink, self.text_room(r));
@@ -534,10 +537,69 @@ pub fn field(ui: &mut Ui, p: &Painter, r: Rect, value: &mut String, hint_s: &str
     )
 }
 
-/// A status dot: steady, or breathing slowly (live: recording, on air).
-pub fn dot(p: &Painter, c: Pos2, color: Color32, r: f32) {
-    p.circle_filled(c, r + 2.5, alpha_of(color, 0.16));
-    p.circle_filled(c, r, color);
+/// How a status is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    /// Not there (not signed in, nothing plugged in, closed).
+    Off,
+    /// There and well.
+    On,
+    /// On its way: a short arc circles it.
+    Busy,
+    /// There, with trouble: warm, with a small badge.
+    Trouble,
+}
+
+/// A status as an icon in the square `r`: lit when on, outlined and faint when off, a short
+/// arc circling it while busy, warm with a badge in trouble — never a dot and a word.
+pub fn status(ui: &Ui, p: &Painter, r: Rect, icon: Icon, state: State, id: impl std::hash::Hash + std::fmt::Debug) {
+    let ctx = ui.ctx();
+    let id = ui.scope_id().with(id);
+    let on = motion::tween_bool(ctx, id.with("on"), state == State::On, motion::STANDARD, motion::STANDARD);
+    let warm = motion::tween_bool(ctx, id.with("warm"), state == State::Trouble, motion::STANDARD, motion::STANDARD);
+    let ink = mix(mix(alpha_of(t::faint(), 0.7), t::soft(), on), t::warm(), warm);
+    let side = r.width().min(r.height()) * 0.56;
+    icons::paint(p, Rect::from_center_size(r.center(), vec2(side, side)), icon, ink);
+    if state == State::Busy {
+        let t0 = ctx.input(|i| i.time) as f32;
+        let a0 = (t0 * 1.6).fract() * std::f32::consts::TAU;
+        let rad = r.width().min(r.height()) / 2.0 - 1.5;
+        let pts: Vec<Pos2> = (0..=16).map(|i| {
+            let a = a0 + i as f32 / 16.0 * 1.6;
+            pos2(r.center().x + rad * a.cos(), r.center().y + rad * a.sin())
+        }).collect();
+        p.add(Shape::line(pts, Stroke::new(1.5, t::warm())));
+        ctx.request_repaint();
+    }
+    if warm > 0.01 {
+        let c = r.right_top() + vec2(-6.0, 6.0);
+        p.circle_filled(c, 4.5 * warm, t::warm());
+        p.line_segment([c + vec2(0.0, -2.2), c + vec2(0.0, 0.6)], Stroke::new(1.3, alpha_of(col(theme::GROUND), warm)));
+        p.circle_filled(c + vec2(0.0, 2.1), 0.7, alpha_of(col(theme::GROUND), warm));
+    }
+}
+
+/// The tally: `words` in white caps on red (on the stage now, on air). Its rect, from its
+/// left middle.
+pub fn tally(p: &Painter, left_center: Pos2, words: &str) -> Rect {
+    let w = label_width(p, words, 9.5) + 12.0;
+    let r = Rect::from_min_size(pos2(left_center.x, left_center.y - 8.0), vec2(w, 16.0));
+    p.rect_filled(r, CornerRadius::same(3), t::red());
+    label_sized(p, r.center(), Align2::CENTER_CENTER, words, 9.5, Color32::WHITE);
+    r
+}
+
+/// "On the stage now", small: the live icon in red, centred at `c`.
+pub fn on_air(p: &Painter, c: Pos2, side: f32) {
+    p.circle_filled(c, side * 0.62, Color32::from_black_alpha(150));
+    icons::paint(p, Rect::from_center_size(c, vec2(side, side)), Icon::Live, t::red());
+}
+
+/// Someone's initial in a ring, centred at `c`.
+pub fn avatar(p: &Painter, c: Pos2, r: f32, name: &str) {
+    p.circle(c, r, alpha_of(t::soft(), 0.14), Stroke::new(1.0, alpha_of(t::soft(), 0.4)));
+    let first: String = name.chars().filter(|c| c.is_alphanumeric()).take(1).flat_map(char::to_uppercase).collect();
+    text(p, c + vec2(0.0, 0.5), Align2::CENTER_CENTER, &first, r * 1.05, "semi", t::text());
 }
 
 /// The modal frame: the scrim over everything and a card rising into the middle, `k` its
@@ -558,12 +620,19 @@ pub fn modal(p: &Painter, full: Rect, size: egui::Vec2, k: f32) -> Rect {
 pub fn toast(p: &Painter, full: Rect, n: usize, words: &str, tone: Tone, k: f32) {
     let e = Ease::Out.at(k);
     let g = p.layout_no_wrap(words.to_owned(), FontId::new(t::BODY, family("")), t::text());
-    let w = g.size().x + 44.0;
+    let w = g.size().x + 50.0;
     let r = Rect::from_center_size(pos2(full.center().x, full.bottom() - 40.0 - n as f32 * 48.0 + 12.0 * (1.0 - e)), vec2(w, 38.0));
     p.add(t::shadow(2).as_shape(r, CornerRadius::same(19)));
     let (_, edge, ink) = tone.lit();
     let a = (e * 255.0) as u8;
     p.rect(r, CornerRadius::same(19), Color32::from_rgba_unmultiplied(20, 21, 27, a), Stroke::new(1.0, alpha_of(edge, e * 0.8)), StrokeKind::Inside);
-    p.circle_filled(pos2(r.left() + 18.0, r.center().y), 3.5, alpha_of(ink, e));
-    p.galley(pos2(r.left() + 30.0, r.center().y - g.size().y / 2.0), g, alpha_of(t::text(), e));
+    let (icon, ic) = match tone {
+        Tone::Ok => (Icon::CheckCircle, t::ok()),
+        Tone::Danger => (Icon::Alert, t::hot()),
+        Tone::Warm => (Icon::Alert, t::warm()),
+        Tone::Deck(d) => (Icon::Disc, t::tint(d)),
+        Tone::Neutral => (Icon::Info, ink),
+    };
+    icons::paint(p, Rect::from_center_size(pos2(r.left() + 20.0, r.center().y), vec2(15.0, 15.0)), icon, alpha_of(ic, e));
+    p.galley(pos2(r.left() + 34.0, r.center().y - g.size().y / 2.0), g, alpha_of(t::text(), e));
 }

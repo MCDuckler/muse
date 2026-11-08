@@ -126,20 +126,26 @@ impl App {
             (true, false) => v.told.look.clone().or_else(|| v.scene.clone()).unwrap_or_else(|| "—".into()),
             _ => String::new(),
         };
-        let (dot, state) = match (on, v.starting) {
-            (true, _) if v.blackout => (t::hot(), "Blackout"),
-            (true, _) if v.freeze => (t::warm(), "Frozen"),
-            (true, _) => (t::red(), "Live"),
-            (false, true) => (t::warm(), "Starting"),
-            _ => (t::faint(), "Closed"),
+        let (icon, ink, state) = match (on, v.starting) {
+            (true, _) if v.blackout => (Some(Icon::Power), t::hot(), "Blackout"),
+            (true, _) if v.freeze => (Some(Icon::Snow), t::warm(), "Frozen"),
+            (true, _) => (None, t::red(), "Live"),
+            (false, true) => (Some(Icon::Screen), t::warm(), "Starting"),
+            _ => (Some(Icon::Screen), t::faint(), "Closed"),
         };
         let font = egui::FontId::new(13.0, crate::paint::family(""));
         let ww = if words.is_empty() { 0.0 } else { p.layout_no_wrap(words.clone(), font.clone(), t::text()).size().x.min(pic.width() * 0.6) + 16.0 };
         let sw = crate::paint::label_width(p, state, 10.5);
         let cap = Rect::from_min_size(pic.left_top() + vec2(12.0, 12.0), vec2(30.0 + sw + ww + if v.held { 50.0 } else { 0.0 }, 30.0));
         kit::glass_tab(p, cap);
-        kit::dot(p, pos2(cap.left() + 14.0, cap.center().y), dot, 3.5);
-        let st = label_sized(p, pos2(cap.left() + 26.0, cap.center().y), Align2::LEFT_CENTER, state, 10.5, t::soft());
+        // live: the tally; else the state's icon and its word
+        let st = match icon {
+            None => kit::tally(p, pos2(cap.left() + 8.0, cap.center().y), state),
+            Some(i) => {
+                crate::ui::icons::paint(p, Rect::from_center_size(pos2(cap.left() + 15.0, cap.center().y), vec2(13.0, 13.0)), i, ink);
+                label_sized(p, pos2(cap.left() + 26.0, cap.center().y), Align2::LEFT_CENTER, state, 10.5, t::soft())
+            }
+        };
         let mut x = st.right() + 10.0;
         if !words.is_empty() {
             kit::clipped(p, pos2(x, cap.center().y), &words, 13.0, "", t::text(), ww - 12.0);

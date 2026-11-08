@@ -329,7 +329,7 @@ pub(crate) fn level_row(ui: &mut Ui, p: &Painter, r: Rect, row: &RotationRow, id
     let can = row.note.is_none();
     if row.live {
         p.rect_filled(r.shrink2(vec2(0.0, 1.0)), CornerRadius::same(t::R_CONTROL), white(0.045));
-        kit::dot(p, pos2(r.left() + 7.0, r.center().y), t::red(), 3.0);
+        kit::on_air(p, pos2(r.left() + 8.0, r.center().y), 11.0);
     }
     let ink = if !row.on || !can { t::faint() } else if row.live { t::high() } else { t::text() };
     let name_w = (r.width() * 0.3).clamp(110.0, 170.0);
