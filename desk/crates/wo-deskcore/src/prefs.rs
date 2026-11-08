@@ -10,11 +10,13 @@ pub struct Prefs {
     pub still_backdrop: bool,
     /// How much of the stage's light comes through the glass (0.5 dim .. 1.5 bright).
     pub backdrop_light: f32,
+    /// How much of a record's radius its label covers (v1's; 0.18 .. 0.92).
+    pub disc_label: f32,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { reduced_motion: false, still_backdrop: false, backdrop_light: 1.0 }
+        Prefs { reduced_motion: false, still_backdrop: false, backdrop_light: 1.0, disc_label: 0.31 }
     }
 }
 

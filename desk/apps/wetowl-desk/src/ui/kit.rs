@@ -232,7 +232,14 @@ pub fn held(ui: &mut Ui, r: Rect, id: impl std::hash::Hash + std::fmt::Debug) ->
 /// A segmented choice: the segments of `items` in `r`, the chosen one (if any) under a
 /// highlight that glides to it. The one clicked.
 pub fn segmented(ui: &mut Ui, p: &Painter, r: Rect, items: &[&str], chosen: Option<usize>, tone: Tone, id: impl std::hash::Hash + std::fmt::Debug) -> Option<usize> {
-    fit::inside(items.first().copied().unwrap_or("a choice"), r, ui.clip_rect());
+    let items: Vec<(&str, Option<Icon>)> = items.iter().map(|s| (*s, None)).collect();
+    segmented_with(ui, p, r, &items, chosen, tone, id)
+}
+
+/// A segmented choice whose segments may carry icons: each icon with its word where every
+/// word fits beside its icon, else the icons alone (each word on hover).
+pub fn segmented_with(ui: &mut Ui, p: &Painter, r: Rect, items: &[(&str, Option<Icon>)], chosen: Option<usize>, tone: Tone, id: impl std::hash::Hash + std::fmt::Debug) -> Option<usize> {
+    fit::inside(items.first().map(|i| i.0).unwrap_or("a choice"), r, ui.clip_rect());
     let id = ui.scope_id().with(id);
     let n = items.len().max(1);
     let cr = CornerRadius::same(t::R_CONTROL);
@@ -253,14 +260,31 @@ pub fn segmented(ui: &mut Ui, p: &Painter, r: Rect, items: &[&str], chosen: Opti
         let hl = Rect::from_min_size(pos2(x, r.top()), vec2(w, r.height())).shrink(2.0);
         p.rect(hl, CornerRadius::same(t::R_CONTROL - 1), lit_fill.gamma_multiply(some), Stroke::new(1.0, lit_edge.gamma_multiply(some)), StrokeKind::Inside);
     }
+    let is = (r.height() * 0.5).min(14.0);
+    let bare = items.iter().any(|(s, i)| i.is_some() && fit::caps(p, s, 11.0, w - 12.0 - is - 5.0).is_none());
     let mut picked = None;
-    for (i, s) in items.iter().enumerate() {
+    for (i, (s, icon)) in items.iter().enumerate() {
         let sr = Rect::from_min_size(pos2(r.left() + i as f32 * w, r.top()), vec2(w, r.height()));
-        let resp = ui.interact(sr, id.with(i), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let mut resp = ui.interact(sr, id.with(i), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
         let h = motion::tween_bool(ui.ctx(), id.with(("h", i)), resp.hovered(), motion::QUICK, motion::STANDARD);
         let on = motion::tween_bool(ui.ctx(), id.with(("on", i)), chosen == Some(i), motion::STANDARD, motion::STANDARD);
         let ink = mix(mix(t::label(), t::soft(), h), lit_ink, on);
-        fit::label(p, sr.center(), Align2::CENTER_CENTER, s, 11.0, ink, w - 8.0);
+        match icon {
+            Some(ic) if bare => {
+                icons::paint(p, Rect::from_center_size(sr.center(), vec2(is + 2.0, is + 2.0)), *ic, ink);
+                resp = resp.on_hover_text(*s);
+            }
+            Some(ic) => {
+                let (z, sp) = fit::caps(p, s, 11.0, w - 12.0 - is - 5.0).unwrap_or((11.0, 0.0));
+                let g = p.layout_job(label_job(s, z, sp, ink));
+                let x0 = sr.center().x - (g.size().x + is + 5.0) / 2.0;
+                icons::paint(p, Rect::from_center_size(pos2(x0 + is / 2.0, sr.center().y), vec2(is, is)), *ic, ink);
+                p.galley(pos2(x0 + is + 5.0, sr.center().y - g.size().y / 2.0), g, ink);
+            }
+            None => {
+                fit::label(p, sr.center(), Align2::CENTER_CENTER, s, 11.0, ink, w - 8.0);
+            }
+        }
         if resp.clicked() {
             picked = Some(i);
         }
@@ -315,7 +339,7 @@ pub fn pad(ui: &mut Ui, p: &Painter, r: Rect, n: usize, set: Option<(&str, Color
     let cr = CornerRadius::same(t::R_PAD);
     // narrow pads (a small window) keep their colour and word, losing the number
     let pc = p.with_clip_rect(r.shrink(2.0));
-    let narrow = r.width() < 72.0;
+    let narrow = r.width() < 64.0;
     match set {
         Some((name, c)) => {
             let fill = alpha_of(c, 0.13 + 0.1 * h + 0.35 * fl - 0.04 * pr);

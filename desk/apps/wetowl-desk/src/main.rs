@@ -27,6 +27,7 @@ mod gallery;
 mod overlays;
 mod paint;
 mod plan;
+mod platter;
 mod rotation;
 mod scene;
 mod stills;
@@ -88,8 +89,6 @@ pub(crate) struct App {
     /// The crate's "Similar" asked for (at this freshness), and the freshness last chosen.
     similar_asked: Option<u8>,
     similar_fresh: u8,
-    /// The nudge held, per deck.
-    nudge_held: [i8; 2],
     /// The search as typed, when typing last changed it, what the house was last asked.
     search_at: Option<std::time::Instant>,
     searched: String,
@@ -133,6 +132,8 @@ pub(crate) struct App {
     pub(crate) zoom: f32,
     /// Each deck's overview, kept until its record, width or decoding changes.
     pub(crate) overview_kept: [tracks::OverviewKept; 2],
+    /// The decks' platters: how each turns, its pictures.
+    pub(crate) platters: platter::Platters,
     /// What the toasts last said of: the crate's trouble, the sign-in, the stage's trouble.
     seen: (Option<String>, bool, Option<String>),
 }
@@ -287,7 +288,6 @@ impl App {
             fits_asked: false,
             similar_asked: None,
             similar_fresh: 50,
-            nudge_held: [0; 2],
             search_at: None,
             searched: String::new(),
             form: (wo_house::DEFAULT_SERVER.to_owned(), String::new(), String::new()),
@@ -314,6 +314,7 @@ impl App {
             pad_fired: [[0; 8]; 2],
             zoom: 110.0,
             overview_kept: [None, None],
+            platters: Default::default(),
             seen: (None, false, None),
         }
     }

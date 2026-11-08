@@ -27,7 +27,7 @@ impl App {
         let Some(which) = self.overlay.or(self.overlay_was).filter(|_| k > 0.0) else { return };
         let size = match which {
             Overlay::Keys => vec2(760.0, 470.0),
-            Overlay::Settings => vec2(600.0, 560.0),
+            Overlay::Settings => vec2(620.0, 612.0),
             Overlay::Set => vec2((full.width() - 80.0).min(1180.0), (full.height() - 80.0).min(720.0)),
             Overlay::Controllers => vec2((full.width() - 80.0).min(1080.0), (full.height() - 80.0).min(680.0)),
         };
@@ -94,6 +94,14 @@ impl App {
         row(p, y, "Motion", "Reduced: fades only, nothing glides");
         if let Some(i) = kit::segmented(ui, p, seg_r(y, 240.0), &["Full", "Reduced"], Some(self.prefs.reduced_motion as usize), Tone::Neutral, "set-motion") {
             self.prefs.reduced_motion = i == 1;
+            changed = true;
+        }
+        y += 52.0;
+        row(p, y, "Records' labels", "How much of a record its label covers");
+        let labels = [0.22f32, 0.31, 0.5, 0.9];
+        let at = labels.iter().position(|l| (l - self.prefs.disc_label).abs() < 0.03);
+        if let Some(i) = kit::segmented(ui, p, seg_r(y, 300.0), &["Small", "Usual", "Large", "Picture"], at, Tone::Neutral, "set-label") {
+            self.prefs.disc_label = labels[i];
             changed = true;
         }
         y += 64.0;

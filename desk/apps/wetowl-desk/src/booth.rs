@@ -237,76 +237,132 @@ impl App {
             }
         }
 
-        // the header: sleeve, deck, title, artist; the readouts (smaller in a narrow deck)
-        let compact = inner.width() < 600.0;
-        let side = if compact { 60.0 } else { 72.0 };
-        let sleeve = Rect::from_min_size(inner.min, vec2(side, side));
-        let cover = self.sleeves.of(&ctx, desk, &v.record);
-        kit::sleeve(ui, p, sleeve, cover, &v.record.initials(), col(theme::sleeve(v.record.id)), 8, ("sleeve", d, v.record.id));
-        if v.decoded < 1.0 {
-            let bar = Rect::from_min_size(pos2(sleeve.left() + 6.0, sleeve.bottom() - 8.0), vec2(sleeve.width() - 12.0, 3.0));
-            p.rect_filled(bar, CornerRadius::same(1), Color32::from_black_alpha(140));
-            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * v.decoded, 3.0)), CornerRadius::same(1), t::tint(d));
+        // a wide deck: the platter large in a column of its own; a narrow one: small, in the
+        // header, where a sleeve would be
+        let wide = inner.width() >= 600.0;
+        let head_h = if wide { 52.0 } else { 72.0 };
+        let mut x = inner.left();
+        if !wide {
+            let pr = Rect::from_min_size(inner.min, vec2(72.0, 72.0));
+            self.platter(desk, ui, p, pr, v, d, true);
+            x = pr.right() + 14.0;
         }
-        let (time_size, bpm_size) = if compact { (17.0, 24.0) } else { (t::DISPLAY_M, t::DISPLAY_L) };
-        let left = kit::text(p, pos2(inner.right(), inner.top() + 15.0), Align2::RIGHT_CENTER, &format!("−{}", mmss(v.length - v.heard)), time_size, "mono", t::text());
-        kit::text(p, pos2(inner.right(), inner.top() + 44.0), Align2::RIGHT_CENTER, &mmss(v.heard), 12.0, "mono", t::label());
-        let sep = left.left().min(inner.right() - if compact { 84.0 } else { 112.0 }) - 14.0;
-        p.line_segment([pos2(sep, inner.top() + 8.0), pos2(sep, inner.top() + 56.0)], Stroke::new(1.0, col(theme::EDGE)));
-        let bpm = kit::text(p, pos2(sep - 14.0, inner.top() + 18.0), Align2::RIGHT_CENTER, &format!("{:.2}", v.bpm), bpm_size, "mono-semi", t::text());
+        // the readouts at the right: tempo and pitch · key; the time left and gone
+        let (time_size, bpm_size) = if wide { (t::DISPLAY_M, t::DISPLAY_L) } else { (17.0, 24.0) };
+        let (y1, y2) = if wide { (inner.top() + 14.0, inner.top() + 40.0) } else { (inner.top() + 15.0, inner.top() + 44.0) };
+        let left = kit::text(p, pos2(inner.right(), y1), Align2::RIGHT_CENTER, &format!("−{}", mmss(v.length - v.heard)), time_size, "mono", if v.playing && v.length > 0.0 && v.length - v.heard < 30.0 { t::warm() } else { t::text() });
+        kit::text(p, pos2(inner.right(), y2), Align2::RIGHT_CENTER, &mmss(v.heard), 12.0, "mono", t::label());
+        let sep = left.left().min(inner.right() - if wide { 112.0 } else { 84.0 }) - 14.0;
+        p.line_segment([pos2(sep, inner.top() + 4.0), pos2(sep, inner.top() + head_h - 8.0)], Stroke::new(1.0, col(theme::EDGE)));
+        let bpm = kit::text(p, pos2(sep - 14.0, y1 + 2.0), Align2::RIGHT_CENTER, &format!("{:.2}", v.bpm), bpm_size, "mono-semi", t::text());
         let pitch = (v.rate - 1.0) * 100.0;
-        kit::text(p, pos2(sep - 14.0, inner.top() + 47.0), Align2::RIGHT_CENTER, &format!("{pitch:+.2}%  {}", if v.record.key.is_empty() { "—" } else { &v.record.key }), 12.0, "mono", t::muted());
+        let key_w = self.key_chip(p, pos2(sep - 14.0, y2), v, s, d);
+        kit::text(p, pos2(sep - 14.0 - key_w - 8.0, y2), Align2::RIGHT_CENTER, &format!("{pitch:+.2}%"), 12.0, "mono", if pitch.abs() < 0.005 { t::muted() } else { t::soft() });
         // title and artist rise into place when a record loads
         let k = motion::appear(&ctx, ui.scope_id().with(("title", d, v.record.id)), motion::EMPHASIS);
         let dy = 6.0 * (1.0 - k);
-        let x = sleeve.right() + 16.0;
-        let chip = kit::deck_chip(p, pos2(x, inner.top() + 18.0), d);
+        let chip = kit::deck_chip(p, pos2(x, y1 + 1.0), d);
         let room = bpm.left() - chip.right() - 28.0;
-        kit::clipped(p, pos2(chip.right() + 10.0, inner.top() + 18.0 + dy), &v.record.title, t::TITLE, "semi", alpha_of(t::text(), k), room);
-        kit::clipped(p, pos2(x, inner.top() + 45.0 + dy), &v.record.artist, t::BODY, "", alpha_of(t::muted(), k), bpm.left() - x - 28.0);
-        // what is known of the record: lit where it is there
-        let mut mx = x;
-        for (i, (word, tip)) in [("STEMS", "Its stems: the parts and the stem moves"), ("BEATS", "Its beat grid"), ("FORM", "Its sections: intro, drops, breakdowns"), ("VOICE", "Where it sings")].into_iter().enumerate() {
-            let c = if v.marks[i] { t::soft() } else { alpha_of(t::faint(), 0.6) };
-            let r = kit::text(p, pos2(mx, inner.top() + 66.0), Align2::LEFT_CENTER, word, 8.5, "mono-semi", c);
-            ui.interact(r.expand(2.0), ui.scope_id().with(("mark", d, i)), Sense::hover()).on_hover_text(format!("{tip}: {}", if v.marks[i] { "here" } else { "not known" }));
-            mx = r.right() + 8.0;
+        let empty = !v.record.playable();
+        let title = if empty { "No record" } else { v.record.title.as_str() };
+        let tr = kit::clipped(p, pos2(chip.right() + 10.0, y1 + 1.0 + dy), title, t::TITLE, "semi", alpha_of(if empty { t::faint() } else { t::text() }, k), room);
+        if tr.width() >= room - 1.0 {
+            ui.interact(tr, ui.scope_id().with(("title-tip", d)), Sense::hover()).on_hover_text(format!("{} — {}", v.record.title, v.record.artist));
+        }
+        // the artist, and what is known of the record: four icons, lit where it is there
+        let marks_w = 4.0 * 19.0;
+        let ar = kit::clipped(p, pos2(x, y2 + dy), &v.record.artist, t::BODY, "", alpha_of(t::muted(), k), (bpm.left() - x - 28.0 - marks_w).max(40.0));
+        if !empty {
+            let mut mx = if v.record.artist.is_empty() { x } else { ar.right() + 12.0 };
+            for (i, (icon, tip)) in [(Icon::Layers, "Its stems: the parts and the stem moves"), (Icon::Grid, "Its beat grid"), (Icon::Sections, "Its sections: intro, drops, breakdowns"), (Icon::Mic, "Where it sings")].into_iter().enumerate() {
+                let ir = Rect::from_center_size(pos2(mx + 7.0, y2), vec2(13.0, 13.0));
+                crate::ui::icons::paint(p, ir, icon, if v.marks[i] { t::soft() } else { alpha_of(t::faint(), 0.45) });
+                ui.interact(ir.expand(3.0), ui.scope_id().with(("mark", d, i)), Sense::hover()).on_hover_text(format!("{tip}: {}", if v.marks[i] { "here" } else { "not known" }));
+                mx = ir.right() + 6.0;
+            }
         }
         // what is on its way to this deck (v1's deck_coming): the record being put on, or the
         // Auto DJ's next, chosen and waiting for this deck to be free
         let coming = if v.loading {
-            Some(("LOADING".to_owned(), String::new(), t::warm()))
+            Some(("Loading".to_owned(), t::warm(), "Being put on: its audio and its analysis on their way".to_owned()))
         } else if s.auto && !v.master && s.mix.is_none() {
-            s.up_next.first().filter(|n| n.id != v.record.id).map(|n| ("NEXT".to_owned(), format!("{} — {}", n.title, n.artist), t::soft()))
+            s.up_next.first().filter(|n| n.id != v.record.id).map(|n| (format!("Next · {}", n.title), t::soft(), format!("The Auto DJ's next: {} — {}; it goes on this deck once it is free", n.title, n.artist)))
         } else {
             None
         };
-        if let Some((word, what, c)) = coming {
-            let wr = kit::text(p, pos2(mx + 10.0, inner.top() + 66.0), Align2::LEFT_CENTER, &word, 8.5, "mono-semi", c);
-            if !what.is_empty() {
-                kit::clipped(p, pos2(wr.right() + 6.0, inner.top() + 66.0), &what, 11.0, "", t::muted(), bpm.left() - wr.right() - 34.0);
-            }
-            ui.interact(wr.expand(2.0), ui.scope_id().with(("coming", d)), Sense::hover()).on_hover_text(if v.loading { "Being put on: its audio and its analysis on their way" } else { "The Auto DJ's next: it goes on this deck once it is free" });
-        }
 
-        // the body: transport | hot cues | pitch; the loop row under it
-        let body = Rect::from_min_max(pos2(inner.left(), inner.top() + 72.0 + 16.0), inner.max);
-        let pitch_r = Rect::from_min_max(pos2(body.right() - 48.0, body.top()), body.max);
-        let main = Rect::from_min_max(body.min, pos2(pitch_r.left() - 16.0, body.bottom() - 26.0 - 12.0));
-        let loop_r = Rect::from_min_max(pos2(body.left(), main.bottom() + 12.0), pos2(pitch_r.left() - 16.0, body.bottom()));
-        self.transport(desk, ui, p, Rect::from_min_size(main.min, vec2(160.0, main.height())), s, d);
-        self.pads(desk, ui, p, Rect::from_min_max(pos2(main.left() + 176.0, main.top()), main.max), s, d);
+        // the body: transport | platter | hot cues, parts, loop | pitch
+        let body = Rect::from_min_max(pos2(inner.left(), inner.top() + head_h + 12.0), inner.max);
+        let pitch_r = Rect::from_min_max(pos2(body.right() - if wide { 44.0 } else { 40.0 }, body.top()), body.max);
+        let trans_r = Rect::from_min_size(body.min, vec2(if wide { 84.0 } else { 72.0 }, body.height()));
+        let mut x = trans_r.right() + 14.0;
+        let mut coming_at = None;
+        if wide {
+            let side = (pitch_r.left() - 12.0 - x - 340.0).min(body.height()).max(120.0);
+            let pr = Rect::from_center_size(pos2(x + side / 2.0, body.center().y), vec2(side, side));
+            self.platter(desk, ui, p, pr, v, d, false);
+            coming_at = Some(pos2(pr.center().x, pr.bottom() - 12.0));
+            x = pr.right() + 14.0;
+        } else if let Some((w, c, _)) = &coming {
+            coming_at = None;
+            let _ = (w, c);
+        }
+        if let Some((words, ink, tip)) = coming {
+            match coming_at {
+                Some(at) => {
+                    crate::platter::coming_tab(p, at, &words.to_uppercase(), ink);
+                    ui.interact(Rect::from_center_size(at, vec2(120.0, 20.0)), ui.scope_id().with(("coming", d)), Sense::hover()).on_hover_text(tip);
+                }
+                None => {
+                    let wr = kit::clipped(p, pos2(x - 14.0 - 72.0 + 86.0, inner.top() + 64.0), &words, 11.0, "", ink, bpm.left() - x - 20.0);
+                    ui.interact(wr, ui.scope_id().with(("coming", d)), Sense::hover()).on_hover_text(tip);
+                }
+            }
+        }
+        let right = Rect::from_min_max(pos2(x, body.top()), pos2(pitch_r.left() - 12.0, body.bottom()));
+        let rows_h = 26.0 + 8.0 + 26.0;
+        let pads_r = Rect::from_min_max(right.min, pos2(right.right(), right.bottom() - rows_h - 10.0));
+        let loop_r = Rect::from_min_max(pos2(right.left(), right.bottom() - rows_h), right.max);
+        self.transport(desk, ui, p, trans_r, s, d, wide);
+        self.pads(desk, ui, p, pads_r, s, d);
         self.loop_row(desk, ui, p, loop_r, s, d);
         self.pitch(desk, ui, p, pitch_r, s, d);
     }
 
-    fn transport(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
+    /// The key as a chip in its colour on the Camelot wheel, its edge green where it mixes
+    /// with the other deck's (the same, one round, or its relative); its width. Right-aligned
+    /// at `right_center`.
+    fn key_chip(&self, p: &Painter, right_center: egui::Pos2, v: &wo_deskcore::DeckView, s: &Snapshot, d: usize) -> f32 {
+        let key = v.record.key.as_str();
+        if key.is_empty() {
+            return kit::text(p, right_center, Align2::RIGHT_CENTER, "—", 12.0, "mono", t::faint()).width();
+        }
+        let g = p.layout_no_wrap(key.to_owned(), egui::FontId::new(11.5, crate::paint::family("mono-semi")), t::text());
+        let r = Align2::RIGHT_CENTER.anchor_size(right_center, vec2(g.size().x + 12.0, 18.0));
+        let (n, ab) = camelot(key);
+        let hue = if n <= 12 { ((n as f32 - 1.0) / 12.0 * 360.0 + 20.0) % 360.0 } else { 0.0 };
+        let c = if n <= 12 { egui::ecolor::Hsva::new(hue / 360.0, if ab == 1 { 0.45 } else { 0.62 }, 0.92, 1.0).into() } else { t::soft() };
+        let other = &s.decks[1 - d];
+        let fits = other.record.playable() && {
+            let (m, mb) = camelot(&other.record.key);
+            m <= 12 && n <= 12 && ((m == n) || (mb == ab && (m % 12 + 1 == n || n % 12 + 1 == m)))
+        };
+        p.rect(r, CornerRadius::same(4), alpha_of(c, 0.16), Stroke::new(1.0, if fits { t::ok() } else { alpha_of(c, 0.5) }), StrokeKind::Inside);
+        p.galley(pos2(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, c);
+        r.width()
+    }
+
+    /// CUE and PLAY large; SYNC, KEY LOCK, the bass's kill and BRAKE as icon toggles (the
+    /// nudge is the platter's: a drag on it).
+    #[allow(clippy::too_many_arguments)]
+    fn transport(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize, wide: bool) {
         let v = &s.decks[d];
-        let (bw, g) = ((r.width() - 8.0) / 2.0, 8.0);
-        let small = ((r.height() - 44.0 - 3.0 * g) / 3.0).clamp(24.0, 30.0);
-        let cell = |c: usize, y: f32, h: f32| Rect::from_min_size(pos2(r.left() + c as f32 * (bw + g), r.top() + y), vec2(bw, h));
+        let g = 8.0;
+        let small = if wide { 36.0 } else { 30.0 };
+        let big = ((r.height() - 3.0 * g - 2.0 * small) / 2.0).clamp(36.0, 56.0);
+        let top = r.top() + (r.height() - (2.0 * big + 2.0 * small + 3.0 * g)) / 2.0;
         // CUE acts on press and on release (a preview runs while it is held)
-        let cue_r = cell(0, 0.0, 44.0);
+        let cue_r = Rect::from_min_size(pos2(r.left(), top), vec2(r.width(), big));
         let (cue_id, cue) = kit::held(ui, cue_r, (d, "cue"));
         let down = cue.is_pointer_button_down_on();
         if down && !self.cue_held[d] {
@@ -317,40 +373,36 @@ impl App {
         self.cue_held[d] = down;
         let on_cue = v.cue.is_some_and(|c| (c - v.heard).abs() < 0.06);
         Btn::new("Cue").icon(Icon::Cue).tone(Tone::Deck(d)).on(down || (on_cue && !v.playing)).size(12.5).paint(ui, p, cue_r, cue_id, &cue);
-        let play = Btn::new("").icon(if v.playing { Icon::Pause } else { Icon::Play }).tone(Tone::Deck(d)).on(v.playing);
-        if play.show(ui, p, cell(1, 0.0, 44.0), (d, "play")).on_hover_text(["Play A  (1)", "Play B  (2)"][d]).clicked() {
+        let play_r = Rect::from_min_size(pos2(r.left(), cue_r.bottom() + g), vec2(r.width(), big));
+        // PLAY's icon turns into PAUSE and back
+        let k = motion::tween_bool(ui.ctx(), ui.scope_id().with(("playing", d)), v.playing, motion::STANDARD, motion::STANDARD);
+        let play = Btn::new("").tone(Tone::Deck(d)).on(v.playing);
+        let resp = play.show(ui, p, play_r, (d, "play")).on_hover_text(["Play A  (1)", "Play B  (2)"][d]);
+        let ink = mix(t::soft(), t::tint(d), k);
+        play_pause(p, play_r.center(), (big * 0.24).min(11.0), k, ink);
+        if resp.clicked() {
             desk.toggle_play(d);
         }
-        let y1 = 44.0 + g;
-        if Btn::new("Sync").icon(Icon::Sync).tone(Tone::Ok).on(v.synced).show(ui, p, cell(0, y1, small), (d, "sync")).clicked() {
-            desk.toggle_sync(d);
-        }
-        if Btn::new("Key lock").icon(Icon::Lock).on(v.keylock).show(ui, p, cell(1, y1, small), (d, "kl")).clicked() {
-            desk.toggle_keylock(d);
-        }
-        let y2 = y1 + small + g;
         let killed = v.eq[0] <= 0.01;
-        if Btn::new("Bass").icon(Icon::Kill).tone(Tone::Danger).on(killed).show(ui, p, cell(0, y2, small), (d, "kill")).on_hover_text(["The bass off and on  (F)", "The bass off and on  (G)"][d]).clicked() {
-            desk.kill(d, 0);
-        }
-        if Btn::new("Brake").icon(Icon::Brake).quiet().show(ui, p, cell(1, y2, small), (d, "brake")).clicked() {
-            desk.brake(d);
-        }
-        // the nudges bend the record while held
-        let y3 = y2 + small + g;
-        let mut nudge = 0i8;
-        for (k, (word, icon, dir)) in [("Nudge", Icon::ChevronLeft, -1i8), ("Nudge", Icon::ChevronRight, 1)].into_iter().enumerate() {
-            let nr = cell(k, y3, small);
-            let (id, resp) = kit::held(ui, nr, (d, "nudge", k));
-            let down = resp.is_pointer_button_down_on();
-            if down {
-                nudge = dir;
+        let cell = |i: usize| {
+            let w = (r.width() - g) / 2.0;
+            Rect::from_min_size(pos2(r.left() + (i % 2) as f32 * (w + g), play_r.bottom() + g + (i / 2) as f32 * (small + g)), vec2(w, small))
+        };
+        let toggles: [(&str, Icon, Tone, bool, String); 4] = [
+            ("Sync", Icon::Sync, Tone::Ok, v.synced, format!("Sync: in step with the other deck  ({})", ["Q", "W"][d])),
+            ("Key lock", Icon::Lock, Tone::Neutral, v.keylock, "Key lock: its key stays as its tempo moves".to_owned()),
+            ("Bass", Icon::Kill, Tone::Danger, killed, format!("The bass off and on  ({})", ["F", "G"][d])),
+            ("Brake", Icon::Brake, Tone::Neutral, false, "Brake: the record runs down to a stop".to_owned()),
+        ];
+        for (i, (word, icon, tone, on, tip)) in toggles.into_iter().enumerate() {
+            if Btn::new(word).icon(icon).tone(tone).on(on).bare(true).show(ui, p, cell(i), (d, "toggle", i)).on_hover_text(tip).clicked() {
+                match i {
+                    0 => desk.toggle_sync(d),
+                    1 => desk.toggle_keylock(d),
+                    2 => desk.kill(d, 0),
+                    _ => desk.brake(d),
+                }
             }
-            Btn::new(word).icon(icon).tone(Tone::Deck(d)).on(down).quiet().paint(ui, p, nr, id, &resp);
-        }
-        if nudge != self.nudge_held[d] {
-            desk.nudge(d, nudge);
-            self.nudge_held[d] = nudge;
         }
     }
 
@@ -358,8 +410,7 @@ impl App {
     /// clears. Under them, the record's parts.
     fn pads(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
         let v = &s.decks[d];
-        kit::section(p, r.left_top(), Align2::LEFT_TOP, "Hot cues");
-        let top = r.top() + 22.0;
+        let top = r.top();
         let g = 8.0;
         let parts_h = 26.0;
         let parts_r = Rect::from_min_max(pos2(r.left(), r.bottom() - parts_h), r.max);
@@ -408,7 +459,9 @@ impl App {
         if !word.is_empty() {
             kit::text(p, pos2(r.right(), r.top() - 6.0), Align2::RIGHT_BOTTOM, word, 11.0, "", tone);
         }
-        let seg = kit::segmented(ui, p, r, &names, chosen, Tone::Deck(d), (d, "parts"));
+        let icons = [Icon::Disc, Icon::Drum, Icon::Note, Icon::MicOff, Icon::Mic];
+        let items: Vec<(&str, Option<Icon>)> = names.iter().enumerate().map(|(i, n)| (*n, icons.get(i).copied())).collect();
+        let seg = kit::segmented_with(ui, p, r, &items, chosen, Tone::Deck(d), (d, "parts"));
         // the stems' parts faint until they are on the deck
         if !ready {
             p.rect_filled(r, CornerRadius::same(t::R_CONTROL), Color32::from_black_alpha(if usable { 70 } else { 120 }));
@@ -424,26 +477,27 @@ impl App {
         ui.interact(r, ui.scope_id().with((d, "parts-tip")), Sense::hover()).on_hover_text(tip);
     }
 
-    /// The loop: a length from the bar (again lets go), IN / OUT, half and double; jumps.
+    /// The loop: a length from the bar (again lets go); under it IN / OUT, half and double,
+    /// and the jumps.
     fn loop_row(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
         let v = &s.decks[d];
         let lengths = [("¼", 0.25), ("½", 0.5), ("1", 1.0), ("2", 2.0), ("4", 4.0), ("8", 8.0), ("16", 16.0), ("32", 32.0)];
-        crate::ui::icons::paint(p, Rect::from_center_size(pos2(r.left() + 9.0, r.center().y), vec2(16.0, 16.0)), Icon::Loop, t::label());
-        let jumps = r.width() >= 430.0;
-        let buttons_w = 4.0 * 34.0 + 3.0 * 4.0;
-        let jumps_w = if jumps { 2.0 * 30.0 + 4.0 + 10.0 } else { 0.0 };
-        let seg_w = (r.width() - 26.0 - 10.0 - buttons_w - jumps_w).clamp(160.0, 300.0);
-        let seg = Rect::from_min_size(pos2(r.left() + 26.0, r.top()), vec2(seg_w, r.height()));
+        let row1 = Rect::from_min_size(r.min, vec2(r.width(), 26.0));
+        let row2 = Rect::from_min_max(pos2(r.left(), r.bottom() - 26.0), r.max);
+        crate::ui::icons::paint(p, Rect::from_center_size(pos2(row1.left() + 9.0, row1.center().y), vec2(16.0, 16.0)), Icon::Loop, if v.looped.is_some() { t::tint(d) } else { t::label() });
+        let seg = Rect::from_min_max(pos2(row1.left() + 26.0, row1.top()), row1.max);
         let chosen = v.looped.and(v.loop_beats).and_then(|b| lengths.iter().position(|l| l.1 == b));
         let names: Vec<&str> = lengths.iter().map(|l| l.0).collect();
         if let Some(i) = kit::segmented(ui, p, seg, &names, chosen, Tone::Deck(d), (d, "loops")) {
             desk.loop_beats(d, lengths[i].1);
         }
-        let mut x = seg.right() + 10.0;
         let looped_by_hand = v.looped.is_some() && v.loop_beats.is_none();
-        for (word, on, act) in [("In", v.loop_open, 0), ("Out", looped_by_hand, 1), ("½", false, 2), ("×2", false, 3)] {
-            let br = Rect::from_min_size(pos2(x, r.top()), vec2(34.0, r.height()));
-            if Btn::new(word).tone(Tone::Deck(d)).on(on).size(11.0).show(ui, p, br, (d, "loopbtn", act)).clicked() {
+        let jumps_w = 2.0 * 34.0 + 4.0;
+        let bw = ((row2.width() - jumps_w - 12.0 - 3.0 * 4.0) / 4.0).min(52.0);
+        let mut x = row2.left();
+        for (word, on, act, tip) in [("In", v.loop_open, 0, "A loop's start here"), ("Out", looped_by_hand, 1, "Its end here: it loops"), ("½", false, 2, "The loop half as long"), ("×2", false, 3, "The loop twice as long")] {
+            let br = Rect::from_min_size(pos2(x, row2.top()), vec2(bw, row2.height()));
+            if Btn::new(word).tone(Tone::Deck(d)).on(on).size(11.0).show(ui, p, br, (d, "loopbtn", act)).on_hover_text(tip).clicked() {
                 match act {
                     0 => desk.loop_in(d),
                     1 => desk.loop_out(d),
@@ -453,15 +507,13 @@ impl App {
             }
             x = br.right() + 4.0;
         }
-        if jumps {
-            x += 6.0;
-            for (icon, beats, k) in [(Icon::Back4, -4.0, 0), (Icon::Ahead4, 4.0, 1)] {
-                let br = Rect::from_min_size(pos2(x, r.top()), vec2(30.0, r.height()));
-                if Btn::new("").icon(icon).quiet().show(ui, p, br, (d, "jump", k)).on_hover_text(if k == 0 { "Back 4 beats" } else { "Ahead 4 beats" }).clicked() {
-                    desk.jump(d, beats);
-                }
-                x = br.right() + 4.0;
+        let mut x = row2.right() - jumps_w;
+        for (icon, beats, k) in [(Icon::Back4, -4.0, 0), (Icon::Ahead4, 4.0, 1)] {
+            let br = Rect::from_min_size(pos2(x, row2.top()), vec2(34.0, row2.height()));
+            if Btn::new("").icon(icon).quiet().show(ui, p, br, (d, "jump", k)).on_hover_text(if k == 0 { "Back 4 beats" } else { "Ahead 4 beats" }).clicked() {
+                desk.jump(d, beats);
             }
+            x = br.right() + 4.0;
         }
     }
 
@@ -1534,5 +1586,21 @@ fn auto_log(desk: &Desk, p: &Painter, area: Rect) {
         };
         let tr = kit::text(p, pos2(area.left(), y), Align2::LEFT_CENTER, &wo_deskcore::autodj::clock(line.at), 10.5, "mono", t::faint());
         kit::clipped(p, pos2(tr.right() + 8.0, y), &line.text, 11.5, "", c, area.right() - tr.right() - 8.0);
+    }
+}
+
+/// PLAY's icon at `c`, `r` its half size: a triangle at `k` 0, two bars at 1, between them
+/// in between (each bar the triangle's half, squared off).
+fn play_pause(p: &Painter, c: egui::Pos2, r: f32, k: f32, ink: Color32) {
+    let k = Ease::InOut.at(k);
+    let lerp = |a: egui::Pos2, b: egui::Pos2| pos2(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k);
+    // the triangle's halves, and the bars they become
+    let tri_top = [pos2(c.x - r * 0.62, c.y - r), pos2(c.x + r * 0.95, c.y), pos2(c.x + r * 0.95, c.y), pos2(c.x - r * 0.62, c.y)];
+    let bar_l = [pos2(c.x - r * 0.75, c.y - r * 0.9), pos2(c.x - r * 0.2, c.y - r * 0.9), pos2(c.x - r * 0.2, c.y + r * 0.9), pos2(c.x - r * 0.75, c.y + r * 0.9)];
+    let tri_bot = [pos2(c.x - r * 0.62, c.y), pos2(c.x + r * 0.95, c.y), pos2(c.x + r * 0.95, c.y), pos2(c.x - r * 0.62, c.y + r)];
+    let bar_r = [pos2(c.x + r * 0.2, c.y - r * 0.9), pos2(c.x + r * 0.75, c.y - r * 0.9), pos2(c.x + r * 0.75, c.y + r * 0.9), pos2(c.x + r * 0.2, c.y + r * 0.9)];
+    for (a, b) in [(tri_top, bar_l), (tri_bot, bar_r)] {
+        let pts: Vec<egui::Pos2> = (0..4).map(|i| lerp(a[i], b[i])).collect();
+        p.add(Shape::convex_polygon(pts, ink, Stroke::NONE));
     }
 }
