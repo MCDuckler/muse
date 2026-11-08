@@ -173,7 +173,8 @@ pub(crate) type OverviewKept = Option<(i64, usize, usize, Vec<Option<Bin>>)>;
 
 impl App {
     /// The two overviews: each whole record, its sections under it, what was heard dimmed,
-    /// pads as notches, the loop, the playhead; hover shows where, a click goes there.
+    /// every second bar ticked, pads as notches, the loop, the playhead; hover shows where,
+    /// a click goes there.
     pub(crate) fn overviews(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot) {
         kit::panel(p, r, true);
         let ppp = ui.ctx().pixels_per_point();
@@ -205,6 +206,23 @@ impl App {
             let mut cp = clip.clone();
             cp.multiply_opacity(k);
             draw_bins(&cp, bar, bins, bar.left(), bar.width() / n as f32, strip_h / 2.0 - 1.0, d, at, 16.0);
+            // every second bar: ticks at the edges, taller where a four-bar group starts (the
+            // twos left out where they would crowd, then the fours)
+            let twos = desk.two_bars(d);
+            if let (Some(a), Some(b)) = (twos.first(), twos.last())
+                && twos.len() > 1
+            {
+                let apart = (x_of(b.0) - x_of(a.0)) / (twos.len() - 1) as f32;
+                for &(at, four) in &twos {
+                    let (h, c) = if four { (5.0, white(0.5)) } else { (3.0, white(0.3)) };
+                    if apart * if four { 2.0 } else { 1.0 } < 4.0 {
+                        continue;
+                    }
+                    let tx = x_of(at);
+                    vline(&cp, tx, bar.top(), bar.top() + h, 1.0, ppp, c);
+                    vline(&cp, tx, bar.bottom() - h, bar.bottom(), 1.0, ppp, c);
+                }
+            }
             if let Some((a, b)) = v.looped {
                 let (xa, xb) = (x_of(a), x_of(b).max(x_of(a) + 2.0));
                 clip.rect_filled(Rect::from_min_max(pos2(xa, bar.top()), pos2(xb, bar.bottom())), CornerRadius::same(2), alpha_of(t::deck(d), 0.22));
@@ -292,7 +310,8 @@ impl App {
         kit::text(p, pos2(track.right() + 10.0, c.y), Align2::LEFT_CENTER, &words, 10.5, "mono", alpha_of(if ok && f.is_some() { Color32::from_rgb(0xCF, 0xF5, 0xDF) } else { t::muted() }, 0.5 + 0.5 * live));
     }
 
-    /// One lane: where the record is not hatched, the grid, the record (as it comes in),
+    /// One lane: where the record is not hatched, the grid (every second bar marked), the
+    /// record (as it comes in),
     /// the loop, the pads' flags, the playhead; its glass tab.
     #[allow(clippy::too_many_arguments)]
     fn wave_lane(&mut self, desk: &Desk, ui: &Ui, p: &Painter, w: Rect, lw: &LaneWave, v: &DeckView, d: usize, ppp: f32) {
@@ -313,8 +332,9 @@ impl App {
         let mut wp = clip.clone();
         wp.multiply_opacity(k);
         draw_bins(&wp, w, &lw.bins, w.left() + lw.x0, lw.bin_w, w.height() / 2.0 - 3.0, d, play, 24.0);
-        // the grid over it: beats as ticks at the edges, bars faint, four-bar groups brighter
-        // and numbered
+        // the grid over it: beats as ticks at the edges, bars faint; every second bar marked
+        // (a brighter line, caps at top and bottom), four-bar groups brighter still and
+        // numbered
         for &bx in &lw.lines.beats {
             vline(&clip, x(bx), w.top(), w.top() + 5.0, 1.0, ppp, white(0.24));
             vline(&clip, x(bx), w.bottom() - 5.0, w.bottom(), 1.0, ppp, white(0.24));
@@ -323,9 +343,18 @@ impl App {
             vline(&clip, x(bx), w.top(), w.bottom(), 1.0, ppp, Color32::from_black_alpha(70));
             vline(&clip, x(bx) + 1.0 / ppp, w.top(), w.bottom(), 1.0, ppp, white(0.06));
         }
+        let caps = |bx: f32, len: f32, c: Color32| {
+            vline(&clip, bx, w.top(), w.top() + len, 3.0, ppp, c);
+            vline(&clip, bx, w.bottom() - len, w.bottom(), 3.0, ppp, c);
+        };
+        for &bx in &lw.lines.twos {
+            vline(&clip, x(bx), w.top(), w.bottom(), 1.0, ppp, white(0.14));
+            caps(x(bx), 8.0, white(0.42));
+        }
         for &(bx, n) in &lw.lines.fours {
             vline(&clip, x(bx), w.top(), w.bottom(), 1.0, ppp, white(0.26));
-            kit::text(&clip, pos2(snap(x(bx), ppp) + 4.0, w.bottom() - 3.0), Align2::LEFT_BOTTOM, &n.to_string(), 9.5, "mono", white(0.4));
+            caps(x(bx), 12.0, white(0.7));
+            kit::text(&clip, pos2(snap(x(bx), ppp) + 5.0, w.bottom() - 3.0), Align2::LEFT_BOTTOM, &n.to_string(), 9.5, "mono", white(0.4));
         }
         // still coming in: its front edge
         if let Some(a) = lw.arriving.map(x).filter(|a| *a > w.left() && *a < w.right()) {

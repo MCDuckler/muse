@@ -159,8 +159,10 @@ pub struct Row {
 #[derive(Clone, Debug, Default)]
 pub struct Lines {
     pub beats: Vec<f32>,
-    /// Bars, but for those that start a four-bar group.
+    /// Bars, but for those that start two bars (below).
     pub bars: Vec<f32>,
+    /// The bars two after a four-bar group's start: its second half.
+    pub twos: Vec<f32>,
     /// The bars that start a four-bar group (the house's markers, else every fourth from
     /// the one): x and the bar's number, from 1 at the grid's one.
     pub fours: Vec<(f32, i64)>,
@@ -193,6 +195,56 @@ pub struct LaneWave {
 pub struct Form {
     pub sections: Vec<(String, f64, f64)>,
     pub drops: Vec<f64>,
+}
+
+/// What a bar's line is on the lanes and overviews.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BarKind {
+    /// It starts a four-bar group.
+    Four,
+    /// Two bars into one: the group's second half.
+    Two,
+    Bar,
+}
+
+/// Beat `i` of `grid`: None where it is not a bar's one; else the bar's number (from 1 at
+/// the grid's one) and its kind. Four-bar groups start on the house's markers (`markers`,
+/// seconds) where it has them — counted on from the last one before, so the halves split
+/// each group evenly — else every fourth bar from the one.
+pub(crate) fn bar_kind(grid: &Grid, markers: &[f64], i: usize) -> Option<(i64, BarKind)> {
+    if !grid.is_bar(i) {
+        return None;
+    }
+    let b = *grid.beats.get(i)?;
+    let bar = (i as i64 - grid.bar_one as i64).div_euclid(4) + 1;
+    let since = if markers.is_empty() {
+        (bar - 1).rem_euclid(4)
+    } else {
+        // bars since the last marker at or before it (a marker is within 80 ms of its bar)
+        let last = markers.partition_point(|&m| m <= b + 0.08);
+        match last.checked_sub(1).map(|k| markers[k]) {
+            Some(m) => {
+                let im = grid.beats.partition_point(|&x| x < m - 0.08);
+                (i as i64 - im as i64).div_euclid(4).max(0)
+            }
+            // before the first marker: counted back from it
+            None => match markers.first() {
+                Some(&m) => {
+                    let im = grid.beats.partition_point(|&x| x < m - 0.08) as i64;
+                    (i as i64 - im).div_euclid(4).rem_euclid(4)
+                }
+                None => 0,
+            },
+        }
+    };
+    // (a group of the house's may run past four bars — a phrase of six: every second bar
+    // of it is still a two)
+    let kind = match since {
+        0 => BarKind::Four,
+        n if n % 2 == 0 => BarKind::Two,
+        _ => BarKind::Bar,
+    };
+    Some((bar, kind))
 }
 
 struct Slot {
@@ -1043,13 +1095,12 @@ impl Desk {
                 break;
             }
             let x = x_of(b);
-            if !grid.is_bar(i) {
-                lines.beats.push(x);
-                continue;
+            match bar_kind(grid, markers, i) {
+                None => lines.beats.push(x),
+                Some((bar, BarKind::Four)) => lines.fours.push((x, bar)),
+                Some((_, BarKind::Two)) => lines.twos.push(x),
+                Some((_, BarKind::Bar)) => lines.bars.push(x),
             }
-            let bar = (i as i64 - grid.bar_one as i64).div_euclid(4) + 1;
-            let four = if markers.is_empty() { (bar - 1).rem_euclid(4) == 0 } else { markers.iter().any(|&m| (m - b).abs() < 0.08) };
-            if four { lines.fours.push((x, bar)) } else { lines.bars.push(x) }
         }
         for (i, p) in s.hands.pads.iter().enumerate() {
             let Some(p) = p else { continue };
@@ -1058,6 +1109,20 @@ impl Desk {
             }
         }
         LaneWave { bins, x0, bin_w, px_per_s, heard, lines, start: x_of(0.0), end: x_of(length), arriving }
+    }
+
+    /// Every second bar of a deck's record, for its overview: when, and whether it starts
+    /// a four-bar group (else it starts the group's second half).
+    pub fn two_bars(&self, deck: usize) -> Vec<(f64, bool)> {
+        let s = &self.slots[deck];
+        let grid = &s.hands.grid;
+        (0..grid.beats.len())
+            .filter_map(|i| match bar_kind(grid, &s.timing.markers, i)? {
+                (_, BarKind::Four) => Some((grid.beats[i], true)),
+                (_, BarKind::Two) => Some((grid.beats[i], false)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The whole record in `n` bins, against its own ceiling (None where it has not come in).
@@ -1932,5 +1997,44 @@ impl Transport for EngineDeck<'_> {
     }
     fn brake(&mut self, seconds: f64) {
         self.0.brake(seconds);
+    }
+}
+
+#[cfg(test)]
+mod bar_kind_tests {
+    use super::{BarKind, bar_kind};
+    use wo_booth::Grid;
+
+    fn kinds(grid: &Grid, markers: &[f64]) -> String {
+        (0..grid.beats.len())
+            .filter_map(|i| bar_kind(grid, markers, i))
+            .map(|(_, k)| match k {
+                BarKind::Four => 'F',
+                BarKind::Two => 'T',
+                BarKind::Bar => '.',
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_second_bar_is_marked_and_every_fourth_starts_a_group() {
+        let grid = Grid::new((0..64).map(|i| i as f64 * 0.5).collect(), 0);
+        assert_eq!(kinds(&grid, &[]), "F.T.F.T.F.T.F.T.");
+        // the grid's one on its third beat: the beats before it are not a bar
+        let late = Grid::new((0..66).map(|i| i as f64 * 0.5).collect(), 2);
+        assert_eq!(bar_kind(&late, &[], 0), None);
+        assert_eq!(bar_kind(&late, &[], 2), Some((1, BarKind::Four)));
+        assert_eq!(bar_kind(&late, &[], 10), Some((3, BarKind::Two)));
+    }
+
+    #[test]
+    fn the_houses_markers_lead_and_the_twos_split_their_groups() {
+        // bars every 2 s; the house's groups start at bar 2 (2 s), then six bars on (14 s),
+        // then four (22 s), each marker a little off its bar
+        let grid = Grid::new((0..64).map(|i| i as f64 * 0.5).collect(), 0);
+        let markers = [2.03, 13.96, 22.0];
+        // bar 1 is before the first marker: counted back from it (three bars short of a group);
+        // past the last one only the house's markers start groups, so every second bar is a two
+        assert_eq!(kinds(&grid, &markers), ".F.T.T.F.T.F.T.T");
     }
 }
