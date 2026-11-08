@@ -168,7 +168,7 @@ impl Desk {
 
     /// The records the crate shows: the house's shelf, or the records on this computer.
     fn shelf_rows(&self) -> &[Record] {
-        if self.house.is_some() { &self.library.rows } else { &self.rows }
+        if self.house.is_some() || matches!(self.library.shelf, Shelf::Usb { .. }) { &self.library.rows } else { &self.rows }
     }
 
     /// The playlist open, mixed by the Auto DJ from now in its order (the records on the
@@ -184,7 +184,8 @@ impl Desk {
         }
         self.hand_queue = q;
         let name = match &self.library.shelf {
-            Shelf::Playlist { name, .. } => name.clone(),
+            Shelf::Playlist { name, .. } | Shelf::Usb { playlist: Some((_, name)), .. } => name.clone(),
+            Shelf::Usb { stick, .. } => stick.clone(),
             _ => "the shelf".to_owned(),
         };
         self.note(LogKind::Hand, format!("Mixing {name}: {n} records queued"));

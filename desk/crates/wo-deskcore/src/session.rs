@@ -121,9 +121,16 @@ impl crate::Desk {
     /// Auto DJ and the queue. Whether there was one to take up.
     pub(crate) fn resume_session(&mut self) -> bool {
         let Some(s) = load() else { return false };
-        // a record of the house's needs the house
+        // a record of the house's needs the house; a stick's, its stick
         let house = self.house.is_some();
-        let can = move |r: &Record| r.playable() && (!matches!(r.audio, crate::records::Audio::House { .. }) || house);
+        let can = move |r: &Record| {
+            r.playable()
+                && match &r.audio {
+                    crate::records::Audio::House { .. } => house,
+                    crate::records::Audio::Usb { path, .. } => path.is_file(),
+                    _ => true,
+                }
+        };
         if !s.decks.iter().any(|d| can(&d.record)) {
             return false;
         }

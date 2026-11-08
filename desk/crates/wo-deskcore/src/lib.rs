@@ -35,7 +35,7 @@ pub mod theme;
 pub use backdrop::Backdrop;
 pub use covers::Cover;
 pub use prefs::Prefs;
-pub use library::{GRID_VERDICTS, Library, Shelf, verdict_word};
+pub use library::{GRID_VERDICTS, Library, Shelf, StickView, verdict_word};
 pub use records::{Audio, Loudness, Record};
 pub use show::{MilkFilter, FaveEdit, FaveRow, FavesView, SetEdit, SetRow, SetsView, FinishView, LooksGrid, MilkHand, MilkRow, MilkView, MoveRow, MovesView, OwnRows, RotationRow, RotationView, ScenePage, ShowBoard, ShowEdit, ShowHands, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, value_name};
 pub use wo_show::plan::{LEVEL_MOST, LEVEL_STEPS, level_word};
@@ -285,6 +285,8 @@ pub struct Desk {
     changes: u64,
     /// Records' covers for the sleeves.
     covers: covers::Covers,
+    /// The rekordbox sticks plugged in, read.
+    sticks: Vec<Arc<wo_usb::Stick>>,
     /// The crossfader's law: equal power, or "full" (both whole at the middle) while a
     /// move that shares one record's worth of sound between the decks runs.
     full_law: bool,
@@ -415,6 +417,7 @@ impl Desk {
             stage: stage::Stage::default(),
             changes: 0,
             covers: Default::default(),
+            sticks: vec![],
             full_law: false,
             fx: Default::default(),
             recent: vec![],
@@ -435,6 +438,7 @@ impl Desk {
         // WO_HOUSE=off: never the house (tests: no account is read or told anything)
         let borrowed = (std::env::var("WO_APP_SIGN_IN").as_deref() == Ok("1")).then(wo_house::Session::from_wetowl_app).flatten();
         let house_ok = std::env::var("WO_HOUSE").as_deref() != Ok("off");
+        library::watch_sticks(&desk.done_tx);
         if let Some(session) = wo_house::Session::saved().or(borrowed).filter(|_| house_ok) {
             desk.signed_in(wo_house::House::new(session));
         }
@@ -504,7 +508,7 @@ impl Desk {
                 let spb = 60.0 / record.bpm;
                 ((0..(synth::seconds(record.bpm) / spb) as usize).map(|b| b as f64 * spb).collect(), 0)
             }
-            Audio::House { .. } | Audio::None => (vec![], 0),
+            Audio::House { .. } | Audio::Usb { .. } | Audio::None => (vec![], 0),
         };
         self.load_gen[slot] += 1;
         let turn = self.load_gen[slot];
@@ -524,7 +528,15 @@ impl Desk {
                 let _ = tx.send(library::Done::Cover { slot, turn, id, cover });
             });
         }
+        if let Audio::Usb { artwork: Some(art), .. } = &record.audio {
+            let (art, id, tx) = (art.clone(), record.id, self.done_tx.clone());
+            thread::spawn(move || {
+                let cover = library::cover_file(&art).map_err(|e| eprintln!("cover {}: {e}", art.display())).ok();
+                let _ = tx.send(library::Done::Cover { slot, turn, id, cover });
+            });
+        }
         let audio = record.audio.clone();
+        let seconds = record.seconds as f64;
         let bpm = record.bpm;
         let (house, tx) = (self.house.clone(), self.done_tx.clone());
         let loader = thread::spawn(move || {
@@ -555,6 +567,17 @@ impl Desk {
                     let mut tee = Tee { sink: &mut source, analyser: &mut analyser };
                     if let Err(e) = wo_decode::decode(&path, RATE, &mut tee) {
                         eprintln!("{}: {e}", path.display());
+                    }
+                }
+                // rekordbox's grid and cues first (a few KB off the stick), then the audio
+                Audio::Usb { path, anlz, .. } => {
+                    let result = library::analyse_usb(anlz.as_deref(), seconds).map(Box::new);
+                    let _ = tx.send(library::Done::Analysed { slot, turn, result });
+                    let mut tee = Tee { sink: &mut source, analyser: &mut analyser };
+                    // decoded as rekordbox does, so its grid and cues sit on the beats
+                    if let Err(e) = wo_decode::decode_as_rekordbox(&path, RATE, &mut tee) {
+                        let why = if path.exists() { e.to_string() } else { "its stick is not plugged in".to_owned() };
+                        let _ = tx.send(library::Done::LoadFailed { slot, turn, why });
                     }
                 }
                 Audio::Synth { seed } => {
@@ -854,6 +877,7 @@ impl Desk {
     pub fn cover(&mut self, r: &Record) -> Option<Arc<Cover>> {
         match (&r.audio, r.cover) {
             (Audio::House { id }, true) => self.covers.get(*id, self.house.as_ref()),
+            (Audio::Usb { artwork: Some(art), .. }, true) => self.covers.get_file(r.id, art),
             _ => None,
         }
     }
@@ -961,8 +985,14 @@ impl Desk {
     /// the decks' records first, then by fit to the master deck.
     pub fn rows(&self, filter: &str, master_bpm: f64) -> Vec<Row> {
         let key = self.slots[self.master].record.key.clone();
-        // signed in: the house's shelf as it came (its search is the house's own)
-        let (source, f) = if self.house.is_some() { (&self.library.rows, String::new()) } else { (&self.rows, filter.to_lowercase()) };
+        // signed in: the house's shelf as it came (its search is the house's own); a
+        // stick's records are searched here, signed in or not
+        let on_usb = matches!(self.library.shelf, Shelf::Usb { .. });
+        let (source, f) = match (on_usb, self.house.is_some()) {
+            (true, _) => (&self.library.rows, filter.to_lowercase()),
+            (false, true) => (&self.library.rows, String::new()),
+            (false, false) => (&self.rows, filter.to_lowercase()),
+        };
         let mut rows: Vec<Row> = source
             .iter()
             .filter(|r| f.is_empty() || r.title.to_lowercase().contains(&f) || r.artist.to_lowercase().contains(&f))
@@ -973,7 +1003,7 @@ impl Desk {
                 note: self.library.notes.get(&r.id).cloned(),
             })
             .collect();
-        if !matches!(self.library.shelf, Shelf::Fits { .. } | Shelf::Queue | Shelf::Similar { .. } | Shelf::Check) || self.house.is_none() {
+        if !matches!(self.library.shelf, Shelf::Fits { .. } | Shelf::Queue | Shelf::Similar { .. } | Shelf::Check | Shelf::Usb { playlist: Some(_), .. }) || (self.house.is_none() && !on_usb) {
             rows.sort_by_key(|r| (r.on_deck.is_none(), std::cmp::Reverse(r.fits)));
         }
         rows
@@ -1251,6 +1281,18 @@ impl Desk {
             Shelf::Search(q) if q.trim().is_empty() => Shelf::All,
             s => s,
         };
+        if let Shelf::Usb { root, playlist, .. } = &shelf {
+            self.shelf_gen += 1;
+            self.more_asked = None;
+            self.library.rows = self.usb_rows(root, playlist.as_ref().map(|p| p.0));
+            self.library.total = self.library.rows.len() as i64;
+            self.library.shelf = shelf;
+            self.library.loading = false;
+            self.library.error = None;
+            self.library.notes.clear();
+            self.library.checked.clear();
+            return;
+        }
         if shelf == Shelf::Queue {
             self.shelf_gen += 1;
             self.library.shelf = Shelf::Queue;
@@ -1265,6 +1307,62 @@ impl Desk {
         self.library.shelf = shelf.clone();
         self.library.loading = true;
         library::fetch_shelf(&self.done_tx, house, shelf, self.shelf_gen);
+    }
+
+    /// A stick's records, all of them or a playlist's, in rekordbox's order.
+    fn usb_rows(&self, root: &std::path::Path, playlist: Option<u32>) -> Vec<Record> {
+        let Some(stick) = self.sticks.iter().find(|s| s.root == root) else { return vec![] };
+        let ids: Vec<u32> = match playlist {
+            Some(p) => stick.playlists.iter().find(|l| l.id == p).map(|l| l.tracks.clone()).unwrap_or_default(),
+            None => stick.tracks.iter().map(|t| t.id).collect(),
+        };
+        ids.iter().filter_map(|&id| stick.track(id)).map(|t| Record::from_usb(&stick.name, t)).collect()
+    }
+
+    /// The sticks plugged in changed: the crate's list of them, and its shelf where that
+    /// was a stick's (read again, or gone back to all records where it went).
+    fn got_sticks(&mut self, sticks: Vec<Arc<wo_usb::Stick>>) {
+        self.sticks = sticks;
+        self.library.sticks = self.sticks.iter().map(|s| library::StickView::of(s)).collect();
+        if let Shelf::Usb { root, .. } = &self.library.shelf {
+            let shelf = self.library.shelf.clone();
+            if self.sticks.iter().any(|s| &s.root == root) {
+                self.open_shelf(shelf);
+            } else {
+                self.library.rows.clear();
+                self.library.total = 0;
+                self.library.shelf = Shelf::All;
+                self.open_shelf(Shelf::All);
+            }
+        }
+        self.changes += 1;
+    }
+
+    /// The sticks read now rather than at the watcher's next look, the first one's first
+    /// playlist open, its first two records on the decks with `load` — or the records
+    /// rekordbox numbers `ids` (screenshots, trying a stick out). Whether there was a stick.
+    pub fn open_first_stick(&mut self, load: bool, ids: &[u32]) -> bool {
+        let sticks: Vec<Arc<wo_usb::Stick>> = wo_usb::find().iter().filter_map(|r| wo_usb::Stick::open(r).ok()).map(Arc::new).collect();
+        self.got_sticks(sticks);
+        let Some(s) = self.sticks.first().cloned() else { return false };
+        let playlist = s.playlists.first().map(|p| (p.id, p.name.clone()));
+        self.open_shelf(Shelf::Usb { root: s.root.clone(), stick: s.name.clone(), playlist });
+        let records: Vec<Record> = if ids.is_empty() {
+            self.library.rows.iter().take(2).cloned().collect()
+        } else {
+            ids.iter().filter_map(|&id| s.track(id)).map(|t| Record::from_usb(&s.name, t)).collect()
+        };
+        if load {
+            for (d, r) in records.into_iter().take(2).enumerate() {
+                self.load(d, r);
+            }
+        }
+        true
+    }
+
+    /// The rekordbox sticks plugged in (the crate's list of them is [Library::sticks]).
+    pub fn sticks(&self) -> &[Arc<wo_usb::Stick>] {
+        &self.sticks
     }
 
     fn signed_in(&mut self, house: wo_house::House) {
@@ -1325,6 +1423,7 @@ impl Desk {
                         }
                     }
                     hands.place_auto(&a.auto);
+                    hands.cue = a.cue;
                     let s = &mut self.slots[slot];
                     s.hands = hands;
                     s.timing = a.timing;
@@ -1334,6 +1433,17 @@ impl Desk {
                     }
                     if let Some(b) = a.bpm {
                         s.record.bpm = b;
+                    }
+                    if s.timing.camelot.is_none() && !s.record.key.is_empty() {
+                        s.timing.camelot = Some(s.record.key.clone());
+                    }
+                    // a CDJ parks a record it loads on its first memory cue: so does the deck,
+                    // where no hand has moved it yet
+                    if let Some(at) = a.cue {
+                        let deck = self.engine.deck(DeckId::new(slot).unwrap());
+                        if !deck.read().playing && deck.position() < 0.5 {
+                            deck.seek(at);
+                        }
                     }
                 }
                 Err(e) => self.library.error = Some(format!("{}: {e}", self.slots[slot].record.title)),
@@ -1346,6 +1456,7 @@ impl Desk {
             }
             Done::LoadFailed { .. } => {}
             Done::Stems { slot, turn, got } if turn == self.load_gen[slot] => self.got_stems(slot, got),
+            Done::Sticks(sticks) => self.got_sticks(sticks),
             Done::Taste(t) => {
                 if t.count > 0 {
                     let fav = t.favourite().map(|k| format!(" · you like a {}", k.word().to_lowercase())).unwrap_or_default();

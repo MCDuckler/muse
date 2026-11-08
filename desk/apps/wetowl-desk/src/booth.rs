@@ -646,7 +646,7 @@ impl App {
     /// ones this person's, a mix, or new to them; the record on a deck checked by ear.
     fn crate_strip(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, shelf: &Shelf, s: &Snapshot) {
         match shelf {
-            Shelf::Playlist { name, .. } => {
+            Shelf::Playlist { name, .. } | Shelf::Usb { playlist: Some((_, name)), .. } => {
                 let mix = Rect::from_min_size(r.min, vec2(104.0, r.height()));
                 if Btn::new("Mix it").icon(Icon::Play).accent(true).size(11.0).show(ui, p, mix, "mix-it").on_hover_text(format!("The Auto DJ mixes {name} from now, in its order (the queue you had kept after it)")).clicked() {
                     desk.mix_shelf();
@@ -726,7 +726,14 @@ impl App {
 
         // search
         let field = Rect::from_min_size(pos2(main.left() + 14.0, main.top() + 10.0), vec2((main.width() * 0.45).clamp(240.0, 380.0), 32.0));
-        let hint = if desk.house().is_some() { "Search the house" } else { "Search these records" };
+        let on_usb = matches!(desk.library().shelf, Shelf::Usb { .. });
+        let hint = if on_usb {
+            "Search the stick"
+        } else if desk.house().is_some() {
+            "Search the house"
+        } else {
+            "Search these records"
+        };
         let typed = kit::field(ui, p, field, &mut self.search, hint, Some(Icon::Search), false, "search");
         if !self.search.is_empty() {
             let x = Rect::from_center_size(pos2(field.right() - 16.0, field.center().y), vec2(22.0, 22.0));
@@ -741,7 +748,7 @@ impl App {
         }
         let enter = typed.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let paused = self.search_at.is_some_and(|t| t.elapsed().as_millis() > 350);
-        if desk.house().is_some() && (enter || paused) && self.search != self.searched {
+        if desk.house().is_some() && !on_usb && (enter || paused) && self.search != self.searched {
             self.searched = self.search.clone();
             desk.open_shelf(Shelf::Search(self.search.clone()));
             self.search_at = None;
@@ -749,6 +756,14 @@ impl App {
         // what the list is
         let lib = desk.library();
         let words = match desk.house() {
+            _ if on_usb => {
+                let name = match &lib.shelf {
+                    Shelf::Usb { stick, playlist: Some((_, list)), .. } => format!("{stick} · {list}"),
+                    Shelf::Usb { stick, .. } => format!("{stick} · all records"),
+                    _ => String::new(),
+                };
+                format!("{name} · {}", thousands(lib.total))
+            }
             Some(_) => {
                 let name = match &lib.shelf {
                     Shelf::All => "All records".to_owned(),
@@ -758,6 +773,7 @@ impl App {
                     Shelf::Queue => "The queue".to_owned(),
                     Shelf::Similar { .. } => "Like what is on".to_owned(),
                     Shelf::Check => format!("Check by ear · {} done", lib.checked.len()),
+                    Shelf::Usb { stick, .. } => stick.clone(),
                 };
                 let n = if lib.loading { "…".to_owned() } else { thousands(lib.total) };
                 format!("{name} · {n}")
@@ -775,7 +791,7 @@ impl App {
         let cx = cols.x;
         let clip = p.with_clip_rect(main.shrink(1.0));
         let p = &clip;
-        let strip = matches!(lib.shelf, Shelf::Playlist { .. } | Shelf::Similar { .. } | Shelf::Check) && desk.house().is_some();
+        let strip = (matches!(lib.shelf, Shelf::Playlist { .. } | Shelf::Similar { .. } | Shelf::Check) && desk.house().is_some()) || matches!(lib.shelf, Shelf::Usb { playlist: Some(_), .. });
         if strip {
             let shelf = lib.shelf.clone();
             self.crate_strip(desk, ui, p, Rect::from_min_size(pos2(main.left() + 14.0, main.top() + 48.0), vec2(main.width() - 28.0, 26.0)), &shelf, s);
@@ -1133,34 +1149,21 @@ impl App {
         kit::clipped(&p, pos2(sl.right() + 10.0, r.top() + 31.0), &rec.artist, 12.0, "", t::muted(), w - 56.0);
     }
 
-    /// The crate's left column: the house's shelves, or the sign-in.
+    /// The crate's left column: the house's shelves, or the sign-in; the rekordbox sticks
+    /// plugged in either way.
     fn shelves(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, tree: Rect) {
         let Some((server, user)) = desk.house().map(|(s, u)| (s.to_owned(), u.map(str::to_owned))) else {
-            return self.sign_in(desk, ui, p, tree);
+            if desk.library().sticks.is_empty() || self.usb_sign_in {
+                return self.sign_in(desk, ui, p, tree);
+            }
+            return self.stick_shelves(desk, ui, p, tree);
         };
         let lib = desk.library();
-        let (shelf, total, lists) = (lib.shelf.clone(), lib.total, lib.playlists.clone());
+        let (shelf, total, lists, sticks) = (lib.shelf.clone(), lib.total, lib.playlists.clone(), lib.sticks.clone());
         let mut open = None;
         kit::section(p, pos2(tree.left() + 18.0, tree.top() + 16.0), Align2::LEFT_TOP, "Library");
         let ctx = ui.ctx().clone();
-        // painted with the ui's own painter, so rows in the scrolling list are clipped by it
-        let row = |ui: &mut Ui, y: f32, name: &str, n: String, on: bool, id: i64| -> bool {
-            let p = ui.painter().clone();
-            let rr = Rect::from_min_size(pos2(tree.left() + 10.0, y), vec2(tree.width() - 20.0, 27.0));
-            let resp = ui.interact(rr, ui.scope_id().with(("shelf", id)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-            let h = motion::tween_bool(&ctx, resp.id.with("h"), resp.hovered(), motion::QUICK, motion::STANDARD);
-            let o = motion::tween_bool(&ctx, resp.id.with("on"), on, motion::STANDARD, motion::STANDARD);
-            if h + o > 0.0 {
-                p.rect_filled(rr, CornerRadius::same(t::R_CONTROL), white(0.04 * h + 0.07 * o));
-            }
-            if o > 0.0 {
-                p.rect_filled(Rect::from_min_size(pos2(rr.left() + 1.0, rr.top() + 8.0), vec2(2.5, rr.height() - 16.0)), CornerRadius::same(1), alpha_of(t::soft(), o));
-            }
-            let ink = mix(Color32::from_rgb(0xB9, 0xBC, 0xC4), t::text(), o.max(h));
-            kit::clipped(&p, pos2(rr.left() + 12.0, rr.center().y), name, 13.0, "", ink, rr.width() - 60.0);
-            kit::text(&p, pos2(rr.right() - 8.0, rr.center().y), Align2::RIGHT_CENTER, &n, 11.0, "mono", t::faint());
-            resp.clicked()
-        };
+        let row = |ui: &mut Ui, y: f32, name: &str, n: String, on: bool, id: i64| -> bool { shelf_row(ui, &ctx, tree, y, name, n, on, id, 0.0) };
         let all_n = if shelf == Shelf::All { thousands(total) } else { String::new() };
         if row(ui, tree.top() + 38.0, "All records", all_n, shelf == Shelf::All, -1) {
             open = Some(Shelf::All);
@@ -1182,11 +1185,19 @@ impl App {
         }
         kit::section(p, pos2(tree.left() + 18.0, tree.top() + 186.0), Align2::LEFT_TOP, "Playlists");
         let list = Rect::from_min_max(pos2(tree.left(), tree.top() + 204.0), pos2(tree.right(), tree.bottom() - 46.0));
+        // the sticks' shelves first (each stick, then its playlists), then the house's
+        let usb = stick_entries(&sticks);
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
-        egui::ScrollArea::vertical().id_salt("playlists").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0)).show_rows(&mut child, 28.0, lists.len(), |ui, range| {
+        egui::ScrollArea::vertical().id_salt("playlists").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0)).show_rows(&mut child, 28.0, usb.len() + lists.len(), |ui, range| {
             for i in range {
-                let l = &lists[i];
                 let (rr, _) = ui.allocate_exact_size(vec2(list.width(), 28.0), Sense::hover());
+                if let Some(e) = usb.get(i) {
+                    if stick_row(ui, &ctx, tree, rr, e, &shelf) {
+                        open = Some(e.shelf.clone());
+                    }
+                    continue;
+                }
+                let l = &lists[i - usb.len()];
                 let on = matches!(&shelf, Shelf::Playlist { id, .. } if *id == l.id);
                 if row(ui, rr.top(), &l.name, l.items.to_string(), on, l.id) {
                     open = Some(Shelf::Playlist { id: l.id, name: l.name.clone() });
@@ -1215,6 +1226,37 @@ impl App {
             self.search.clear();
             self.searched.clear();
             desk.open_similar(f);
+        }
+        if let Some(s) = open {
+            self.search.clear();
+            self.searched.clear();
+            desk.open_shelf(s);
+        }
+    }
+
+    /// Signed out with a rekordbox stick in: the sticks' shelves, and the way to the
+    /// house's sign-in at the foot.
+    fn stick_shelves(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, tree: Rect) {
+        let lib = desk.library();
+        let (shelf, sticks) = (lib.shelf.clone(), lib.sticks.clone());
+        let ctx = ui.ctx().clone();
+        kit::section(p, pos2(tree.left() + 18.0, tree.top() + 16.0), Align2::LEFT_TOP, "USB");
+        let list = Rect::from_min_max(pos2(tree.left(), tree.top() + 34.0), pos2(tree.right(), tree.bottom() - 46.0));
+        let usb = stick_entries(&sticks);
+        let mut open = None;
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
+        egui::ScrollArea::vertical().id_salt("sticks").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0)).show_rows(&mut child, 28.0, usb.len(), |ui, range| {
+            for e in &usb[range] {
+                let (rr, _) = ui.allocate_exact_size(vec2(list.width(), 28.0), Sense::hover());
+                if stick_row(ui, &ctx, tree, rr, e, &shelf) {
+                    open = Some(e.shelf.clone());
+                }
+            }
+        });
+        p.line_segment([pos2(tree.left() + 14.0, tree.bottom() - 44.0), pos2(tree.right() - 14.0, tree.bottom() - 44.0)], Stroke::new(1.0, white(0.06)));
+        let go = Rect::from_min_size(pos2(tree.left() + 14.0, tree.bottom() - 37.0), vec2(tree.width() - 28.0, 30.0));
+        if Btn::new("Sign in to the house").icon(Icon::House).quiet().size(11.0).show(ui, p, go, "usb-sign-in").on_hover_text("The house's records beside the stick's").clicked() {
+            self.usb_sign_in = true;
         }
         if let Some(s) = open {
             self.search.clear();
@@ -1256,10 +1298,18 @@ impl App {
             desk.sign_in(&server, &user, &pass);
         }
         y += 42.0;
-        if self.app_sign_in && y + 30.0 < tree.bottom() {
+        let sticks = !desk.library().sticks.is_empty();
+        let foot = if sticks { tree.bottom() - 40.0 } else { tree.bottom() };
+        if self.app_sign_in && y + 30.0 < foot {
             let app = Rect::from_min_size(pos2(x, y), vec2(w, 30.0));
             if Btn::new("Use the app's sign-in").quiet().size(11.0).show(ui, p, app, "app-sign-in").clicked() {
                 desk.use_app_sign_in();
+            }
+        }
+        if sticks {
+            let back = Rect::from_min_size(pos2(x, tree.bottom() - 37.0), vec2(w, 30.0));
+            if Btn::new("Back to the stick").icon(Icon::Usb).quiet().size(11.0).show(ui, p, back, "usb-back").clicked() {
+                self.usb_sign_in = false;
             }
         }
     }
@@ -1621,6 +1671,59 @@ impl App {
 
 /// The crate's columns: x from the list's left of #, sleeve, title, artist, BPM, key, time,
 /// fits; and whether the time and the fit have room.
+/// One row of the crate's left column, `indent` px in; painted with the ui's own painter
+/// so rows in a scrolling list are clipped by it. Whether it was clicked.
+#[allow(clippy::too_many_arguments)]
+fn shelf_row(ui: &mut Ui, ctx: &egui::Context, tree: Rect, y: f32, name: &str, n: String, on: bool, id: i64, indent: f32) -> bool {
+    let p = ui.painter().clone();
+    let rr = Rect::from_min_size(pos2(tree.left() + 10.0, y), vec2(tree.width() - 20.0, 27.0));
+    let resp = ui.interact(rr, ui.scope_id().with(("shelf", id)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let h = motion::tween_bool(ctx, resp.id.with("h"), resp.hovered(), motion::QUICK, motion::STANDARD);
+    let o = motion::tween_bool(ctx, resp.id.with("on"), on, motion::STANDARD, motion::STANDARD);
+    if h + o > 0.0 {
+        p.rect_filled(rr, CornerRadius::same(t::R_CONTROL), white(0.04 * h + 0.07 * o));
+    }
+    if o > 0.0 {
+        p.rect_filled(Rect::from_min_size(pos2(rr.left() + 1.0, rr.top() + 8.0), vec2(2.5, rr.height() - 16.0)), CornerRadius::same(1), alpha_of(t::soft(), o));
+    }
+    let ink = mix(Color32::from_rgb(0xB9, 0xBC, 0xC4), t::text(), o.max(h));
+    kit::clipped(&p, pos2(rr.left() + 12.0 + indent, rr.center().y), name, 13.0, "", ink, rr.width() - 60.0 - indent);
+    kit::text(&p, pos2(rr.right() - 8.0, rr.center().y), Align2::RIGHT_CENTER, &n, 11.0, "mono", t::faint());
+    resp.clicked()
+}
+
+/// A row of a stick's in the crate's left column: the stick (all its records), or one of
+/// its playlists.
+struct StickEntry {
+    shelf: Shelf,
+    name: String,
+    n: usize,
+    id: i64,
+    playlist: bool,
+}
+
+fn stick_entries(sticks: &[wo_deskcore::StickView]) -> Vec<StickEntry> {
+    let mut v = vec![];
+    for (i, s) in sticks.iter().enumerate() {
+        let base = -1000 - 100_000 * i as i64;
+        v.push(StickEntry { shelf: Shelf::Usb { root: s.root.clone(), stick: s.name.clone(), playlist: None }, name: s.name.clone(), n: s.records, id: base, playlist: false });
+        for (j, (id, name, n)) in s.playlists.iter().enumerate() {
+            v.push(StickEntry { shelf: Shelf::Usb { root: s.root.clone(), stick: s.name.clone(), playlist: Some((*id, name.clone())) }, name: name.clone(), n: *n, id: base - 1 - j as i64, playlist: true });
+        }
+    }
+    v
+}
+
+/// A stick's row in the scrolling list at `rr`; whether it was clicked.
+fn stick_row(ui: &mut Ui, ctx: &egui::Context, tree: Rect, rr: Rect, e: &StickEntry, shelf: &Shelf) -> bool {
+    let on = *shelf == e.shelf;
+    let clicked = shelf_row(ui, ctx, tree, rr.top(), &e.name, e.n.to_string(), on, e.id, if e.playlist { 14.0 } else { 0.0 });
+    if !e.playlist {
+        crate::ui::icons::paint(ui.painter(), Rect::from_center_size(pos2(rr.left() + 14.0, rr.center().y), vec2(11.0, 11.0)), Icon::Usb, t::muted());
+    }
+    clicked
+}
+
 struct Cols {
     x: [f32; 8],
     time: bool,
