@@ -16,7 +16,7 @@ pub fn home() -> Option<PathBuf> {
         return Some(PathBuf::from(h));
     }
     let v1 = crate::records::fetched_dir().and_then(|f| f.parent().map(|p| p.join("milk"))).filter(|d| d.is_dir());
-    v1.or_else(|| dirs::data_dir().map(|d| d.join("wetowl-desk").join("milk")))
+    v1.or_else(|| wo_house::folders::data().map(|d| d.join("wetowl-desk").join("milk")))
 }
 
 /// The shipped presets into `home/shipped`, unless they are there already (the count as the

@@ -90,7 +90,7 @@ struct Kept {
 
 impl Kept {
     fn file() -> Option<PathBuf> {
-        dirs::config_dir().map(|d| d.join("wetowl-desk").join("stage.json"))
+        wo_house::folders::config().map(|d| d.join("wetowl-desk").join("stage.json"))
     }
 
     fn read() -> Kept {

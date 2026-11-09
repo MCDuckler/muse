@@ -49,7 +49,7 @@ pub fn now_secs() -> u64 {
 
 /// Where it is kept: beside the Desk's other files (its config folder — a test's own).
 pub fn file() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("wetowl-desk").join("booth-session.json"))
+    wo_house::folders::config().map(|d| d.join("wetowl-desk").join("booth-session.json"))
 }
 
 /// Kept (written whole, then moved into place).

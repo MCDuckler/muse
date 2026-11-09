@@ -324,6 +324,31 @@ struct CuesRow {
     pads: std::collections::BTreeMap<String, Option<i64>>,
 }
 
+/// The Desk's own folders: as `dirs` gives them, except that XDG_CONFIG_HOME, XDG_CACHE_HOME
+/// and XDG_DATA_HOME (absolute) win on every system. On Linux `dirs` reads them itself; on a
+/// Mac or Windows it would not, and tests and headless runs that point them at a scratch
+/// folder would read and write the computer's real ones (a CI runner's session kept by one
+/// test, found by the next).
+pub mod folders {
+    use std::path::PathBuf;
+
+    fn xdg(var: &str) -> Option<PathBuf> {
+        std::env::var_os(var).map(PathBuf::from).filter(|p| p.is_absolute())
+    }
+
+    pub fn config() -> Option<PathBuf> {
+        xdg("XDG_CONFIG_HOME").or_else(dirs::config_dir)
+    }
+
+    pub fn cache() -> Option<PathBuf> {
+        xdg("XDG_CACHE_HOME").or_else(dirs::cache_dir)
+    }
+
+    pub fn data() -> Option<PathBuf> {
+        xdg("XDG_DATA_HOME").or_else(dirs::data_dir)
+    }
+}
+
 /// Where a sign-in is kept between runs.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Session {
@@ -335,7 +360,7 @@ pub struct Session {
 
 impl Session {
     fn file() -> Option<PathBuf> {
-        dirs::config_dir().map(|d| d.join("wetowl-desk").join("session.json"))
+        folders::config().map(|d| d.join("wetowl-desk").join("session.json"))
     }
 
     /// The Desk's own saved sign-in.
@@ -717,7 +742,7 @@ impl House {
         if let Some(local) = app_folder().map(|a| a.join("fetched").join(format!("{id}.m4a"))).filter(|p| p.exists()) {
             return Ok(local);
         }
-        let cache = dirs::cache_dir().ok_or_else(|| Error::Net("no cache folder".into()))?.join("wetowl-desk").join("records");
+        let cache = folders::cache().ok_or_else(|| Error::Net("no cache folder".into()))?.join("wetowl-desk").join("records");
         let file = cache.join(format!("{id}.m4a"));
         if file.exists() {
             return Ok(file);
@@ -766,7 +791,7 @@ impl House {
         if let Some(local) = app_folder().map(|a| a.join("stems").join(&name)).filter(|p| p.exists()) {
             return Ok(Stems::Ready(local));
         }
-        let cache = dirs::cache_dir().ok_or_else(|| Error::Net("no cache folder".into()))?.join("wetowl-desk").join("stems");
+        let cache = folders::cache().ok_or_else(|| Error::Net("no cache folder".into()))?.join("wetowl-desk").join("stems");
         let file = cache.join(&name);
         if file.exists() {
             return Ok(Stems::Ready(file));

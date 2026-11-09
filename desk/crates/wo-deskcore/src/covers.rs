@@ -49,7 +49,7 @@ pub(crate) struct Covers {
 /// Where a house's covers are kept on disk.
 fn folder(house: &House) -> Option<PathBuf> {
     let host: String = house.session.server.trim_start_matches("https://").trim_start_matches("http://").chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect();
-    dirs::cache_dir().map(|d| d.join("wetowl-desk").join("covers").join(host))
+    wo_house::folders::cache().map(|d| d.join("wetowl-desk").join("covers").join(host))
 }
 
 /// The bytes made a square sleeve: the middle of the picture, [SIDE] px.

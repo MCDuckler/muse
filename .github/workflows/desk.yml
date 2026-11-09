@@ -54,7 +54,7 @@ jobs:
           cp "$(find "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin" -name 'glew32*.dll' | head -1)" milk-out/
           ls -l milk-out
       - name: Engine and decoder tests
-        run: cargo test --release --workspace
+        run: cargo test --release --workspace --no-fail-fast
       - name: Smoke — the egui booth starts and draws (WARP, no GPU here)
         continue-on-error: true
         timeout-minutes: 3
@@ -306,7 +306,7 @@ jobs:
             smoke/
       - name: Engine and decoder tests
         working-directory: desk
-        run: cargo test --release --workspace
+        run: cargo test --release --workspace --no-fail-fast
       - name: Published for the installer (rolling release wetowl-desk-macos)
         if: github.event_name == 'push' && github.ref == 'refs/heads/desk'
         env:

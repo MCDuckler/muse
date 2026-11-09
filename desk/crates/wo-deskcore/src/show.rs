@@ -36,7 +36,7 @@ fn v1_doc() -> ShowDoc {
 /// favourites, the sets, LAND ON, who dances — kept between runs. The first run starts from
 /// the WetOwl app's.
 pub(crate) fn doc_file() -> Option<std::path::PathBuf> {
-    dirs::config_dir().map(|d| d.join("wetowl-desk").join("show.json"))
+    wo_house::folders::config().map(|d| d.join("wetowl-desk").join("show.json"))
 }
 
 fn read_doc(file: Option<&std::path::Path>) -> ShowDoc {
