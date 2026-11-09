@@ -98,16 +98,24 @@ impl Info {
 /// Decodes `path` into `sink` at `rate` frames a second, as stereo (stems summed back
 /// into the record).
 pub fn decode(path: &Path, rate: u32, sink: &mut impl Sink) -> Result<Info, Error> {
-    decode_as(path, rate, sink, 2)
+    decode_as(path, rate, sink, 2, true)
+}
+
+/// Decodes `path` as rekordbox and the CDJs do: an MP3's start-up (the encoder's delay
+/// and the decoder's, 1105 frames for LAME) kept rather than cut, so rekordbox's beat
+/// grid and cues — times from that start — land on the beats. (Measured on a stick's 69
+/// MP3s: cut, the kicks came ~25 ms before rekordbox's beats; its WAVs were on them.)
+pub fn decode_as_rekordbox(path: &Path, rate: u32, sink: &mut impl Sink) -> Result<Info, Error> {
+    decode_as(path, rate, sink, 2, false)
 }
 
 /// Decodes a stems file (six channels: drums, bass and the rest, voice) into `sink` as
 /// six channels. Anything else is an error: a deck must not take a record for stems.
 pub fn decode_stems(path: &Path, rate: u32, sink: &mut impl Sink) -> Result<Info, Error> {
-    decode_as(path, rate, sink, 6)
+    decode_as(path, rate, sink, 6, true)
 }
 
-fn decode_as(path: &Path, rate: u32, sink: &mut impl Sink, out_ch: usize) -> Result<Info, Error> {
+fn decode_as(path: &Path, rate: u32, sink: &mut impl Sink, out_ch: usize, gapless: bool) -> Result<Info, Error> {
     let mut first = [0u8; 512];
     let n = {
         use std::io::Read;
@@ -139,7 +147,7 @@ fn decode_as(path: &Path, rate: u32, sink: &mut impl Sink, out_ch: usize) -> Res
     let mut skip = edit.skip;
     let mut keep = edit.keep.unwrap_or(u64::MAX);
     let mut decoder = symphonia::default::get_codecs()
-        .make_audio_decoder(&params, &AudioDecoderOptions::default())
+        .make_audio_decoder(&params, &AudioDecoderOptions::default().gapless(gapless))
         .map_err(|e| Error::Format(e.to_string()))?;
 
     let mut stream = Stream::new(sink, rate_in, rate, 2)?;

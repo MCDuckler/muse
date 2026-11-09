@@ -25,6 +25,8 @@ fn every_page_and_overlay_draws_at_every_size() {
         }
         std::env::set_var("WO_AUDIO", "off");
         std::env::set_var("WO_CONTROLLERS", "off");
+        // (a stick plugged into this computer is not the test's)
+        std::env::set_var("WO_USB", "off");
     }
     let ctx = egui::Context::default();
     let mut desk = Desk::open(true);

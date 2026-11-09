@@ -36,7 +36,7 @@ pub mod theme;
 pub use backdrop::Backdrop;
 pub use covers::Cover;
 pub use prefs::Prefs;
-pub use library::{GRID_VERDICTS, Library, Shelf, verdict_word};
+pub use library::{GRID_VERDICTS, Library, Shelf, StickView, verdict_word};
 pub use records::{Audio, Loudness, Record};
 pub use show::{MilkFilter, FaveEdit, FaveRow, FavesView, SetEdit, SetRow, SetsView, FinishView, LooksGrid, MilkHand, MilkRow, MilkView, MoveRow, MovesView, OwnRows, RotationRow, RotationView, ScenePage, ShowBoard, ShowEdit, ShowHands, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, value_name};
 pub use wo_show::plan::{LEVEL_MOST, LEVEL_STEPS, level_word};
@@ -165,8 +165,10 @@ pub struct Row {
 #[derive(Clone, Debug, Default)]
 pub struct Lines {
     pub beats: Vec<f32>,
-    /// Bars, but for those that start a four-bar group.
+    /// Bars, but for those that start two bars (below).
     pub bars: Vec<f32>,
+    /// The bars two after a four-bar group's start: its second half.
+    pub twos: Vec<f32>,
     /// The bars that start a four-bar group (the house's markers, else every fourth from
     /// the one): x and the bar's number, from 1 at the grid's one.
     pub fours: Vec<(f32, i64)>,
@@ -199,6 +201,56 @@ pub struct LaneWave {
 pub struct Form {
     pub sections: Vec<(String, f64, f64)>,
     pub drops: Vec<f64>,
+}
+
+/// What a bar's line is on the lanes and overviews.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BarKind {
+    /// It starts a four-bar group.
+    Four,
+    /// Two bars into one: the group's second half.
+    Two,
+    Bar,
+}
+
+/// Beat `i` of `grid`: None where it is not a bar's one; else the bar's number (from 1 at
+/// the grid's one) and its kind. Four-bar groups start on the house's markers (`markers`,
+/// seconds) where it has them — counted on from the last one before, so the halves split
+/// each group evenly — else every fourth bar from the one.
+pub(crate) fn bar_kind(grid: &Grid, markers: &[f64], i: usize) -> Option<(i64, BarKind)> {
+    if !grid.is_bar(i) {
+        return None;
+    }
+    let b = *grid.beats.get(i)?;
+    let bar = (i as i64 - grid.bar_one as i64).div_euclid(4) + 1;
+    let since = if markers.is_empty() {
+        (bar - 1).rem_euclid(4)
+    } else {
+        // bars since the last marker at or before it (a marker is within 80 ms of its bar)
+        let last = markers.partition_point(|&m| m <= b + 0.08);
+        match last.checked_sub(1).map(|k| markers[k]) {
+            Some(m) => {
+                let im = grid.beats.partition_point(|&x| x < m - 0.08);
+                (i as i64 - im as i64).div_euclid(4).max(0)
+            }
+            // before the first marker: counted back from it
+            None => match markers.first() {
+                Some(&m) => {
+                    let im = grid.beats.partition_point(|&x| x < m - 0.08) as i64;
+                    (i as i64 - im).div_euclid(4).rem_euclid(4)
+                }
+                None => 0,
+            },
+        }
+    };
+    // (a group of the house's may run past four bars — a phrase of six: every second bar
+    // of it is still a two)
+    let kind = match since {
+        0 => BarKind::Four,
+        n if n % 2 == 0 => BarKind::Two,
+        _ => BarKind::Bar,
+    };
+    Some((bar, kind))
 }
 
 struct Slot {
@@ -299,6 +351,8 @@ pub struct Desk {
     changes: u64,
     /// Records' covers for the sleeves.
     covers: covers::Covers,
+    /// The rekordbox sticks plugged in, read.
+    sticks: Vec<Arc<wo_usb::Stick>>,
     /// The crossfader's law: equal power, or "full" (both whole at the middle) while a
     /// move that shares one record's worth of sound between the decks runs.
     full_law: bool,
@@ -437,6 +491,7 @@ impl Desk {
             stage: stage::Stage::default(),
             changes: 0,
             covers: Default::default(),
+            sticks: vec![],
             full_law: false,
             fx: Default::default(),
             recent: vec![],
@@ -457,6 +512,7 @@ impl Desk {
         // WO_HOUSE=off: never the house (tests: no account is read or told anything)
         let borrowed = (std::env::var("WO_APP_SIGN_IN").as_deref() == Ok("1")).then(wo_house::Session::from_wetowl_app).flatten();
         let house_ok = std::env::var("WO_HOUSE").as_deref() != Ok("off");
+        library::watch_sticks(&desk.done_tx);
         if let Some(session) = wo_house::Session::saved().or(borrowed).filter(|_| house_ok) {
             desk.signed_in(wo_house::House::new(session));
         }
@@ -526,7 +582,7 @@ impl Desk {
                 let spb = 60.0 / record.bpm;
                 ((0..(synth::seconds(record.bpm) / spb) as usize).map(|b| b as f64 * spb).collect(), 0)
             }
-            Audio::House { .. } | Audio::None => (vec![], 0),
+            Audio::House { .. } | Audio::Usb { .. } | Audio::None => (vec![], 0),
         };
         self.load_gen[slot] += 1;
         let turn = self.load_gen[slot];
@@ -546,7 +602,15 @@ impl Desk {
                 let _ = tx.send(library::Done::Cover { slot, turn, id, cover });
             });
         }
+        if let Audio::Usb { artwork: Some(art), .. } = &record.audio {
+            let (art, id, tx) = (art.clone(), record.id, self.done_tx.clone());
+            thread::spawn(move || {
+                let cover = library::cover_file(&art).map_err(|e| eprintln!("cover {}: {e}", art.display())).ok();
+                let _ = tx.send(library::Done::Cover { slot, turn, id, cover });
+            });
+        }
         let audio = record.audio.clone();
+        let seconds = record.seconds as f64;
         let bpm = record.bpm;
         let (house, tx) = (self.house.clone(), self.done_tx.clone());
         let loader = thread::spawn(move || {
@@ -577,6 +641,17 @@ impl Desk {
                     let mut tee = Tee { sink: &mut source, analyser: &mut analyser };
                     if let Err(e) = wo_decode::decode(&path, RATE, &mut tee) {
                         eprintln!("{}: {e}", path.display());
+                    }
+                }
+                // rekordbox's grid and cues first (a few KB off the stick), then the audio
+                Audio::Usb { path, anlz, .. } => {
+                    let result = library::analyse_usb(anlz.as_deref(), seconds).map(Box::new);
+                    let _ = tx.send(library::Done::Analysed { slot, turn, result });
+                    let mut tee = Tee { sink: &mut source, analyser: &mut analyser };
+                    // decoded as rekordbox does, so its grid and cues sit on the beats
+                    if let Err(e) = wo_decode::decode_as_rekordbox(&path, RATE, &mut tee) {
+                        let why = if path.exists() { e.to_string() } else { "its stick is not plugged in".to_owned() };
+                        let _ = tx.send(library::Done::LoadFailed { slot, turn, why });
                     }
                 }
                 Audio::Synth { seed } => {
@@ -876,6 +951,7 @@ impl Desk {
     pub fn cover(&mut self, r: &Record) -> Option<Arc<Cover>> {
         match (&r.audio, r.cover) {
             (Audio::House { id }, true) => self.covers.get(*id, self.house.as_ref()),
+            (Audio::Usb { artwork: Some(art), .. }, true) => self.covers.get_file(r.id, art),
             _ => None,
         }
     }
@@ -988,8 +1064,14 @@ impl Desk {
     /// the decks' records first, then by fit to the master deck.
     pub fn rows(&self, filter: &str, master_bpm: f64) -> Vec<Row> {
         let key = self.slots[self.master].record.key.clone();
-        // signed in: the house's shelf as it came (its search is the house's own)
-        let (source, f) = if self.house.is_some() { (&self.library.rows, String::new()) } else { (&self.rows, filter.to_lowercase()) };
+        // signed in: the house's shelf as it came (its search is the house's own); a
+        // stick's records are searched here, signed in or not
+        let on_usb = matches!(self.library.shelf, Shelf::Usb { .. });
+        let (source, f) = match (on_usb, self.house.is_some()) {
+            (true, _) => (&self.library.rows, filter.to_lowercase()),
+            (false, true) => (&self.library.rows, String::new()),
+            (false, false) => (&self.rows, filter.to_lowercase()),
+        };
         let mut rows: Vec<Row> = source
             .iter()
             .filter(|r| f.is_empty() || r.title.to_lowercase().contains(&f) || r.artist.to_lowercase().contains(&f))
@@ -1000,7 +1082,7 @@ impl Desk {
                 note: self.library.notes.get(&r.id).cloned(),
             })
             .collect();
-        if !matches!(self.library.shelf, Shelf::Fits { .. } | Shelf::Queue | Shelf::Similar { .. } | Shelf::Check) || self.house.is_none() {
+        if !matches!(self.library.shelf, Shelf::Fits { .. } | Shelf::Queue | Shelf::Similar { .. } | Shelf::Check | Shelf::Usb { playlist: Some(_), .. }) || (self.house.is_none() && !on_usb) {
             rows.sort_by_key(|r| (r.on_deck.is_none(), std::cmp::Reverse(r.fits)));
         }
         rows
@@ -1040,13 +1122,12 @@ impl Desk {
                 break;
             }
             let x = x_of(b);
-            if !grid.is_bar(i) {
-                lines.beats.push(x);
-                continue;
+            match bar_kind(grid, markers, i) {
+                None => lines.beats.push(x),
+                Some((bar, BarKind::Four)) => lines.fours.push((x, bar)),
+                Some((_, BarKind::Two)) => lines.twos.push(x),
+                Some((_, BarKind::Bar)) => lines.bars.push(x),
             }
-            let bar = (i as i64 - grid.bar_one as i64).div_euclid(4) + 1;
-            let four = if markers.is_empty() { (bar - 1).rem_euclid(4) == 0 } else { markers.iter().any(|&m| (m - b).abs() < 0.08) };
-            if four { lines.fours.push((x, bar)) } else { lines.bars.push(x) }
         }
         for (i, p) in s.hands.pads.iter().enumerate() {
             let Some(p) = p else { continue };
@@ -1055,6 +1136,20 @@ impl Desk {
             }
         }
         LaneWave { bins, x0, bin_w, px_per_s, heard, lines, start: x_of(0.0), end: x_of(length), arriving }
+    }
+
+    /// Every second bar of a deck's record, for its overview: when, and whether it starts
+    /// a four-bar group (else it starts the group's second half).
+    pub fn two_bars(&self, deck: usize) -> Vec<(f64, bool)> {
+        let s = &self.slots[deck];
+        let grid = &s.hands.grid;
+        (0..grid.beats.len())
+            .filter_map(|i| match bar_kind(grid, &s.timing.markers, i)? {
+                (_, BarKind::Four) => Some((grid.beats[i], true)),
+                (_, BarKind::Two) => Some((grid.beats[i], false)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The whole record in `n` bins, against its own ceiling (None where it has not come in).
@@ -1278,6 +1373,18 @@ impl Desk {
             Shelf::Search(q) if q.trim().is_empty() => Shelf::All,
             s => s,
         };
+        if let Shelf::Usb { root, playlist, .. } = &shelf {
+            self.shelf_gen += 1;
+            self.more_asked = None;
+            self.library.rows = self.usb_rows(root, playlist.as_ref().map(|p| p.0));
+            self.library.total = self.library.rows.len() as i64;
+            self.library.shelf = shelf;
+            self.library.loading = false;
+            self.library.error = None;
+            self.library.notes.clear();
+            self.library.checked.clear();
+            return;
+        }
         if shelf == Shelf::Queue {
             self.shelf_gen += 1;
             self.library.shelf = Shelf::Queue;
@@ -1292,6 +1399,62 @@ impl Desk {
         self.library.shelf = shelf.clone();
         self.library.loading = true;
         library::fetch_shelf(&self.done_tx, house, shelf, self.shelf_gen);
+    }
+
+    /// A stick's records, all of them or a playlist's, in rekordbox's order.
+    fn usb_rows(&self, root: &std::path::Path, playlist: Option<u32>) -> Vec<Record> {
+        let Some(stick) = self.sticks.iter().find(|s| s.root == root) else { return vec![] };
+        let ids: Vec<u32> = match playlist {
+            Some(p) => stick.playlists.iter().find(|l| l.id == p).map(|l| l.tracks.clone()).unwrap_or_default(),
+            None => stick.tracks.iter().map(|t| t.id).collect(),
+        };
+        ids.iter().filter_map(|&id| stick.track(id)).map(|t| Record::from_usb(&stick.name, t)).collect()
+    }
+
+    /// The sticks plugged in changed: the crate's list of them, and its shelf where that
+    /// was a stick's (read again, or gone back to all records where it went).
+    fn got_sticks(&mut self, sticks: Vec<Arc<wo_usb::Stick>>) {
+        self.sticks = sticks;
+        self.library.sticks = self.sticks.iter().map(|s| library::StickView::of(s)).collect();
+        if let Shelf::Usb { root, .. } = &self.library.shelf {
+            let shelf = self.library.shelf.clone();
+            if self.sticks.iter().any(|s| &s.root == root) {
+                self.open_shelf(shelf);
+            } else {
+                self.library.rows.clear();
+                self.library.total = 0;
+                self.library.shelf = Shelf::All;
+                self.open_shelf(Shelf::All);
+            }
+        }
+        self.changes += 1;
+    }
+
+    /// The sticks read now rather than at the watcher's next look, the first one's first
+    /// playlist open, its first two records on the decks with `load` — or the records
+    /// rekordbox numbers `ids` (screenshots, trying a stick out). Whether there was a stick.
+    pub fn open_first_stick(&mut self, load: bool, ids: &[u32]) -> bool {
+        let sticks: Vec<Arc<wo_usb::Stick>> = wo_usb::find().iter().filter_map(|r| wo_usb::Stick::open(r).ok()).map(Arc::new).collect();
+        self.got_sticks(sticks);
+        let Some(s) = self.sticks.first().cloned() else { return false };
+        let playlist = s.playlists.first().map(|p| (p.id, p.name.clone()));
+        self.open_shelf(Shelf::Usb { root: s.root.clone(), stick: s.name.clone(), playlist });
+        let records: Vec<Record> = if ids.is_empty() {
+            self.library.rows.iter().take(2).cloned().collect()
+        } else {
+            ids.iter().filter_map(|&id| s.track(id)).map(|t| Record::from_usb(&s.name, t)).collect()
+        };
+        if load {
+            for (d, r) in records.into_iter().take(2).enumerate() {
+                self.load(d, r);
+            }
+        }
+        true
+    }
+
+    /// The rekordbox sticks plugged in (the crate's list of them is [Library::sticks]).
+    pub fn sticks(&self) -> &[Arc<wo_usb::Stick>] {
+        &self.sticks
     }
 
     fn signed_in(&mut self, house: wo_house::House) {
@@ -1352,6 +1515,7 @@ impl Desk {
                         }
                     }
                     hands.place_auto(&a.auto);
+                    hands.cue = a.cue;
                     let s = &mut self.slots[slot];
                     s.hands = hands;
                     s.timing = a.timing;
@@ -1361,6 +1525,17 @@ impl Desk {
                     }
                     if let Some(b) = a.bpm {
                         s.record.bpm = b;
+                    }
+                    if s.timing.camelot.is_none() && !s.record.key.is_empty() {
+                        s.timing.camelot = Some(s.record.key.clone());
+                    }
+                    // a CDJ parks a record it loads on its first memory cue: so does the deck,
+                    // where no hand has moved it yet
+                    if let Some(at) = a.cue {
+                        let deck = self.engine.deck(DeckId::new(slot).unwrap());
+                        if !deck.read().playing && deck.position() < 0.5 {
+                            deck.seek(at);
+                        }
                     }
                 }
                 Err(e) => self.library.error = Some(format!("{}: {e}", self.slots[slot].record.title)),
@@ -1373,6 +1548,7 @@ impl Desk {
             }
             Done::LoadFailed { .. } => {}
             Done::Stems { slot, turn, got } if turn == self.load_gen[slot] => self.got_stems(slot, got),
+            Done::Sticks(sticks) => self.got_sticks(sticks),
             Done::Taste(t) => {
                 if t.count > 0 {
                     let fav = t.favourite().map(|k| format!(" · you like a {}", k.word().to_lowercase())).unwrap_or_default();
@@ -1921,5 +2097,44 @@ impl Transport for EngineDeck<'_> {
     }
     fn brake(&mut self, seconds: f64) {
         self.0.brake(seconds);
+    }
+}
+
+#[cfg(test)]
+mod bar_kind_tests {
+    use super::{BarKind, bar_kind};
+    use wo_booth::Grid;
+
+    fn kinds(grid: &Grid, markers: &[f64]) -> String {
+        (0..grid.beats.len())
+            .filter_map(|i| bar_kind(grid, markers, i))
+            .map(|(_, k)| match k {
+                BarKind::Four => 'F',
+                BarKind::Two => 'T',
+                BarKind::Bar => '.',
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_second_bar_is_marked_and_every_fourth_starts_a_group() {
+        let grid = Grid::new((0..64).map(|i| i as f64 * 0.5).collect(), 0);
+        assert_eq!(kinds(&grid, &[]), "F.T.F.T.F.T.F.T.");
+        // the grid's one on its third beat: the beats before it are not a bar
+        let late = Grid::new((0..66).map(|i| i as f64 * 0.5).collect(), 2);
+        assert_eq!(bar_kind(&late, &[], 0), None);
+        assert_eq!(bar_kind(&late, &[], 2), Some((1, BarKind::Four)));
+        assert_eq!(bar_kind(&late, &[], 10), Some((3, BarKind::Two)));
+    }
+
+    #[test]
+    fn the_houses_markers_lead_and_the_twos_split_their_groups() {
+        // bars every 2 s; the house's groups start at bar 2 (2 s), then six bars on (14 s),
+        // then four (22 s), each marker a little off its bar
+        let grid = Grid::new((0..64).map(|i| i as f64 * 0.5).collect(), 0);
+        let markers = [2.03, 13.96, 22.0];
+        // bar 1 is before the first marker: counted back from it (three bars short of a group);
+        // past the last one only the house's markers start groups, so every second bar is a two
+        assert_eq!(kinds(&grid, &markers), ".F.T.T.F.T.F.T.T");
     }
 }

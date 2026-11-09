@@ -18,6 +18,7 @@ wo-booth = { path = "crates/wo-booth" }
 wo-house = { path = "crates/wo-house" }
 wo-control = { path = "crates/wo-control" }
 wo-wire = { path = "crates/wo-wire" }
+wo-usb = { path = "crates/wo-usb" }
 
 # Decoding and resampling are far too slow unoptimised; a debug build of the app
 # still plays records in real time.

@@ -62,6 +62,7 @@ pub enum Icon {
     Info,
     CheckCircle,
     Live,
+    Usb,
 }
 
 /// Points of the 24 grid into `r`.
@@ -404,6 +405,13 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, color: Color32) {
         Icon::CheckCircle => {
             circle(12.0, 12.0, 9.0);
             line(&[(8.0, 12.2), (11.0, 15.0), (16.5, 9.3)]);
+        }
+        Icon::Usb => {
+            // a stick: its plug up top, two contacts in it
+            rrect(7.0, 10.0, 17.0, 21.0, 2.0);
+            rrect(9.0, 3.5, 15.0, 10.0, 0.8);
+            dot(10.9, 6.6, 0.9);
+            dot(13.1, 6.6, 0.9);
         }
         Icon::Live => {
             dot(12.0, 12.0, 2.2);

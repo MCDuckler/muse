@@ -25,6 +25,30 @@ pub enum Shelf {
     Similar { fresh: u8, seeds: Vec<i64>, exclude: Vec<i64> },
     /// Records to check by ear: the grid said of, the pads where a DJ leaves them.
     Check,
+    /// A rekordbox USB stick's records: all of them, or one playlist's (rekordbox's id
+    /// and name), in its order.
+    Usb { root: std::path::PathBuf, stick: String, playlist: Option<(u32, String)> },
+}
+
+/// A rekordbox stick plugged in, as the crate lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StickView {
+    pub root: std::path::PathBuf,
+    pub name: String,
+    pub records: usize,
+    /// rekordbox's id, the name (with its folders, " / " between), how many records.
+    pub playlists: Vec<(u32, String, usize)>,
+}
+
+impl StickView {
+    pub(crate) fn of(s: &wo_usb::Stick) -> StickView {
+        StickView {
+            root: s.root.clone(),
+            name: s.name.clone(),
+            records: s.tracks.len(),
+            playlists: s.playlists.iter().map(|p| (p.id, p.folders.iter().chain([&p.name]).cloned().collect::<Vec<_>>().join(" / "), p.tracks.len())).collect(),
+        }
+    }
 }
 
 /// The library this frame.
@@ -43,11 +67,24 @@ pub struct Library {
     pub notes: std::collections::HashMap<i64, String>,
     /// The cue check's records already checked, by record: what their grid was said to be.
     pub checked: std::collections::HashMap<i64, Option<String>>,
+    /// The rekordbox sticks plugged in.
+    pub sticks: Vec<StickView>,
 }
 
 impl Default for Library {
     fn default() -> Self {
-        Library { shelf: Shelf::All, rows: vec![], total: 0, loading: false, playlists: vec![], signing_in: false, error: None, notes: Default::default(), checked: Default::default() }
+        Library {
+            shelf: Shelf::All,
+            rows: vec![],
+            total: 0,
+            loading: false,
+            playlists: vec![],
+            signing_in: false,
+            error: None,
+            notes: Default::default(),
+            checked: Default::default(),
+            sticks: vec![],
+        }
     }
 }
 
@@ -76,6 +113,8 @@ pub(crate) struct Analysed {
     pub bpm: Option<f64>,
     /// Where it sings (none where the house has not mapped it).
     pub vocals: Option<wo_booth::planner::VocalMap>,
+    /// Where CUE goes back to (a stick's first memory cue).
+    pub cue: Option<f64>,
 }
 
 /// What a worker thread hands back.
@@ -97,6 +136,8 @@ pub(crate) enum Done {
     Choices { turn: u64, got: Result<Vec<wo_house::SlotChoice>, String> },
     /// A deck's stems: decoded onto a source, or where they are instead (parts.rs).
     Stems { slot: usize, turn: u64, got: crate::parts::Got },
+    /// The rekordbox sticks plugged in now, read (sent when they change).
+    Sticks(Vec<std::sync::Arc<wo_usb::Stick>>),
 }
 
 pub(crate) fn sign_in(tx: &Sender<Done>, server: String, user: String, password: String) {
@@ -143,7 +184,8 @@ pub(crate) fn fetch_shelf(tx: &Sender<Done>, house: &House, shelf: Shelf, turn: 
                 let n = v.len() as i64;
                 Ok((v, n))
             }),
-            Shelf::Queue => Ok((vec![], 0)),
+            // (the Desk lists these itself)
+            Shelf::Queue | Shelf::Usb { .. } => Ok((vec![], 0)),
             Shelf::Similar { fresh, seeds, exclude } => house.recommend(&seeds, &exclude, fresh as f64 / 100.0, 30).map(|picks| {
                 let v: Vec<wo_house::Track> = picks
                     .into_iter()
@@ -220,5 +262,135 @@ pub(crate) fn analyse(house: &House, id: i64) -> Result<Analysed, String> {
     let a = house.analysis(id).map_err(|e| e.to_string())?;
     let hand = house.hand_pads(id).unwrap_or_default();
     let vocals = house.vocals(id).ok();
-    Ok(Analysed { grid: a.grid(), timing: a.timing(), auto: a.auto_pads(), hand, camelot: a.camelot.clone(), bpm: a.bpm, vocals })
+    Ok(Analysed { grid: a.grid(), timing: a.timing(), auto: a.auto_pads(), hand, camelot: a.camelot.clone(), bpm: a.bpm, vocals, cue: None })
+}
+
+/// A stick's record's analysis, rekordbox's: its grid; hot cues A–H on pads 1–8 (a hot
+/// loop's pad goes to its start); the first memory cue for CUE; the booth's own pads
+/// (as for a record of this computer's) where rekordbox left a pad empty.
+pub(crate) fn analyse_usb(dat: Option<&std::path::Path>, seconds: f64) -> Result<Analysed, String> {
+    let a = match dat {
+        Some(d) => wo_usb::analysis_of(d).map_err(|e| format!("its rekordbox analysis: {e}"))?,
+        None => wo_usb::Analysis::default(),
+    };
+    Ok(usb_analysed(a, seconds))
+}
+
+fn usb_analysed(a: wo_usb::Analysis, seconds: f64) -> Analysed {
+    let grid = Grid::new(a.beats.clone(), a.bar_one);
+    let mut hand: HandPads = vec![];
+    for c in &a.cues {
+        if let wo_usb::CueKind::Hot(n) = c.kind
+            && (n as usize) < 8
+            && !hand.iter().any(|h| h.0 == n as usize)
+        {
+            hand.push((n as usize, Some(c.ms as f64 / 1000.0)));
+        }
+    }
+    let cue = a.cues.iter().find(|c| c.kind == wo_usb::CueKind::Memory).map(|c| c.ms as f64 / 1000.0);
+    let beats = &a.beats;
+    let bar_at = |frac: f64| -> f64 {
+        let i = (((frac * beats.len() as f64) as usize).saturating_sub(a.bar_one) / 4) * 4 + a.bar_one;
+        beats.get(i).copied().unwrap_or(frac * seconds)
+    };
+    let auto: Vec<(usize, f64, PadKind)> = if beats.is_empty() {
+        vec![]
+    } else {
+        [(0, beats[a.bar_one.min(beats.len() - 1)], PadKind::Intro), (1, bar_at(0.3), PadKind::Drop), (2, bar_at(0.5), PadKind::Break), (3, bar_at(0.86), PadKind::Out)]
+            .into_iter()
+            .filter(|p| !hand.iter().any(|h| h.0 == p.0))
+            .collect()
+    };
+    let timing = wo_booth::Timing::from_grid(grid.clone(), seconds);
+    Analysed { grid, timing, auto, hand, camelot: None, bpm: None, vocals: None, cue }
+}
+
+/// A stick's record's cover, for the stage (as [cover] makes the house's).
+pub(crate) fn cover_file(path: &std::path::Path) -> Result<Picture, String> {
+    let img = image::open(path).map_err(|e| e.to_string())?;
+    let img = if img.width().max(img.height()) > COVER_SIDE { img.resize(COVER_SIDE, COVER_SIDE, image::imageops::FilterType::Triangle) } else { img };
+    let rgba = img.to_rgba8();
+    Ok((rgba.width(), rgba.height(), rgba.into_raw()))
+}
+
+/// Watches for rekordbox sticks: every two seconds a look at where drives are mounted;
+/// a stick that came (or whose database changed) is read, and the whole set is sent
+/// when it differs from the last. Ends with the Desk (its channel closed).
+pub(crate) fn watch_sticks(tx: &Sender<Done>) {
+    if std::env::var("WO_USB").is_ok_and(|v| v == "off") {
+        return;
+    }
+    let tx = tx.clone();
+    let _ = thread::Builder::new().name("usb sticks".into()).spawn(move || {
+        type Seen = (std::path::PathBuf, Option<std::time::SystemTime>, u64);
+        let mut last: Vec<(Seen, std::sync::Arc<wo_usb::Stick>)> = vec![];
+        let mut first = true;
+        loop {
+            let mut now = vec![];
+            for root in wo_usb::find() {
+                let meta = std::fs::metadata(root.join(wo_usb::DATABASE)).ok();
+                let seen: Seen = (root.clone(), meta.as_ref().and_then(|m| m.modified().ok()), meta.map_or(0, |m| m.len()));
+                match last.iter().find(|(s, _)| *s == seen) {
+                    Some((_, stick)) => now.push((seen, stick.clone())),
+                    None => match wo_usb::Stick::open(&root) {
+                        Ok(stick) => now.push((seen, std::sync::Arc::new(stick))),
+                        Err(e) => eprintln!("rekordbox stick at {}: {e}", root.display()),
+                    },
+                }
+            }
+            let same = now.len() == last.len() && now.iter().zip(&last).all(|(a, b)| a.0 == b.0);
+            if (!same || first) && tx.send(Done::Sticks(now.iter().map(|n| n.1.clone()).collect())).is_err() {
+                return;
+            }
+            first = false;
+            last = now;
+            thread::sleep(std::time::Duration::from_secs(2));
+        }
+    });
+}
+
+#[cfg(test)]
+mod usb_tests {
+    use super::*;
+    use wo_usb::{Cue, CueKind};
+
+    fn cue(kind: CueKind, ms: u32) -> Cue {
+        Cue { kind, ms, loop_end_ms: None, rgb: None, comment: String::new() }
+    }
+
+    #[test]
+    fn a_sticks_hot_cues_are_the_pads_and_its_memory_cue_the_cue() {
+        let spb = 60.0 / 128.0;
+        let beats: Vec<f64> = (0..512).map(|i| 0.05 + i as f64 * spb).collect();
+        // hot cue A and C, a memory cue, a hot loop E
+        let a = wo_usb::Analysis {
+            beats,
+            bar_one: 1,
+            cues: vec![cue(CueKind::Memory, 15_050), cue(CueKind::Hot(0), 30_050), cue(CueKind::Hot(2), 60_050), Cue { loop_end_ms: Some(92_000), ..cue(CueKind::Hot(4), 90_050) }],
+        };
+        let got = usb_analysed(a, 240.0);
+        assert_eq!(got.grid.bar_one, 1);
+        assert_eq!(got.cue, Some(15.05));
+        assert_eq!(got.hand, vec![(0, Some(30.05)), (2, Some(60.05)), (4, Some(90.05))]);
+        // the booth's own pads only where rekordbox left them empty: 2 (drop) and 4 (out)
+        let auto: Vec<usize> = got.auto.iter().map(|p| p.0).collect();
+        assert_eq!(auto, vec![1, 3]);
+        assert!(got.auto.iter().all(|p| got.grid.is_bar(got.grid.beats.iter().position(|&b| b == p.1).unwrap())));
+    }
+
+    #[test]
+    fn a_record_rekordbox_never_analysed_still_loads() {
+        let got = usb_analysed(wo_usb::Analysis::default(), 180.0);
+        assert!(got.grid.beats.is_empty() && got.auto.is_empty() && got.hand.is_empty() && got.cue.is_none());
+    }
+
+    #[test]
+    fn a_sticks_records_have_their_own_ids() {
+        let a = crate::records::usb_id("HIHIHI", 1);
+        assert!(a < -(1i64 << 32), "clear of the house's and the synth's");
+        assert_eq!(a, crate::records::usb_id("HIHIHI", 1), "the same each time it is plugged in");
+        assert_ne!(a, crate::records::usb_id("HIHIHI", 2));
+        assert_ne!(a, crate::records::usb_id("OTHER", 1));
+        assert!(crate::records::usb_id("X", u32::MAX) < 0);
+    }
 }

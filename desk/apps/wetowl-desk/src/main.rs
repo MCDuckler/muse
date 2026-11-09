@@ -86,6 +86,8 @@ pub(crate) struct App {
     set_shape: wo_deskcore::set::SetShape,
     /// The crate's "Fits the master" pressed (opened once the frame is drawn).
     fits_asked: bool,
+    /// Signed out with a stick in: the house's sign-in shown instead of the stick's shelves.
+    usb_sign_in: bool,
     /// The crate's "Similar" asked for (at this freshness), and the freshness last chosen.
     similar_asked: Option<u8>,
     similar_fresh: u8,
@@ -244,7 +246,8 @@ impl App {
         if let Some(t) = arg("--show-room") {
             app.show_room = ["stage", "rotation", "favourites"].iter().position(|n| *n == t).unwrap_or(0);
         }
-        // --shelf similar|check|queue|playlist: the crate on that shelf (screenshots, signed in)
+        // --shelf similar|check|queue|playlist: the crate on that shelf (screenshots, signed
+        // in); usb: the first stick's first playlist, its first two records on the decks
         if let Some(sh) = arg("--shelf") {
             let mut d = app.desk.lock().unwrap();
             match sh.as_str() {
@@ -252,6 +255,11 @@ impl App {
                 "similar" => d.open_shelf(wo_deskcore::Shelf::Similar { fresh: 50, seeds: vec![101], exclude: vec![] }),
                 "check" => d.open_check(),
                 "queue" => d.open_shelf(wo_deskcore::Shelf::Queue),
+                // (--usb-load 6,32: those of rekordbox's records instead)
+                "usb" => {
+                    let ids: Vec<u32> = arg("--usb-load").map(|v| v.split(',').filter_map(|n| n.trim().parse().ok()).collect()).unwrap_or_default();
+                    d.open_first_stick(true, &ids);
+                }
                 _ => d.open_shelf(wo_deskcore::Shelf::Playlist { id: 1, name: "Warm up".into() }),
             }
         }
@@ -289,6 +297,7 @@ impl App {
             plan_open: false,
             set_shape: Default::default(),
             fits_asked: false,
+            usb_sign_in: false,
             similar_asked: None,
             similar_fresh: 50,
             search_at: None,

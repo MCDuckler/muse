@@ -63,6 +63,9 @@ pub enum Audio {
     Synth { seed: u32 },
     /// On the house: its analysis and audio fetched when it goes on a deck.
     House { id: i64 },
+    /// On a rekordbox USB stick: the audio, its analysis (`.DAT`, the grid and cues read
+    /// when it goes on a deck) and its cover, each a full path on the stick.
+    Usb { path: PathBuf, anlz: Option<PathBuf>, artwork: Option<PathBuf> },
 }
 
 impl Record {
@@ -82,6 +85,29 @@ impl Record {
         }
     }
 
+    /// A record on a stick. Its id is negative (the house's are positive, the synth's
+    /// −1 and −2) and the same each time this stick is plugged in: the stick's name and
+    /// rekordbox's id for the record.
+    pub fn from_usb(stick: &str, t: &wo_usb::Track) -> Record {
+        Record {
+            id: usb_id(stick, t.id),
+            title: t.title.clone(),
+            artist: t.artist.clone(),
+            bpm: t.bpm,
+            key: t.key.clone(),
+            seconds: t.seconds,
+            audio: Audio::Usb { path: t.path.clone(), anlz: t.anlz.clone(), artwork: t.artwork.clone() },
+            cover: t.artwork.is_some(),
+            cover_rgb: None,
+            loudness: Loudness::default(),
+        }
+    }
+
+    /// The record is on a stick.
+    pub fn on_usb(&self) -> bool {
+        matches!(self.audio, Audio::Usb { .. })
+    }
+
     pub fn playable(&self) -> bool {
         !matches!(self.audio, Audio::None)
     }
@@ -95,6 +121,13 @@ impl Record {
             .flat_map(char::to_uppercase)
             .collect()
     }
+}
+
+/// A stick's record's id: below −2³² (clear of the synth's), 24 bits of the stick's
+/// name (FNV-1a) above rekordbox's 32-bit id.
+pub fn usb_id(stick: &str, track: u32) -> i64 {
+    let tag = stick.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193)) & 0xff_ffff;
+    -(((tag as i64 + 1) << 32) | track as i64)
 }
 
 const FIXTURE: &str = include_str!("../../../bakeoff/records.json");

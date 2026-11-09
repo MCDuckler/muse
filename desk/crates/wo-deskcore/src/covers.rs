@@ -1,6 +1,7 @@
 //! Records' covers for the Desk's sleeves (decks, crate rows, up next): fetched small from
 //! the house on worker threads, kept on disk (the cache folder, per house) and in memory,
-//! square and [SIDE] px — the UI turns each into a texture once.
+//! square and [SIDE] px — the UI turns each into a texture once. A stick's records' covers
+//! are read off the stick the same way.
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,9 +31,15 @@ struct Got {
     order: Vec<i64>,
 }
 
+/// Where a cover comes from.
+enum Job {
+    House(i64, House),
+    File(i64, PathBuf),
+}
+
 #[derive(Default)]
 pub(crate) struct Covers {
-    tx: Option<mpsc::Sender<(i64, House)>>,
+    tx: Option<mpsc::Sender<Job>>,
     got: Arc<Mutex<Got>>,
     asked: HashSet<i64>,
     /// Covers arrived, counted (the window repaints when it moves).
@@ -80,7 +87,19 @@ impl Covers {
         let house = house?;
         if self.asked.insert(id) {
             let tx = self.tx.get_or_insert_with(|| start(self.got.clone(), self.arrived.clone()));
-            let _ = tx.send((id, house.clone()));
+            let _ = tx.send(Job::House(id, house.clone()));
+        }
+        None
+    }
+
+    /// `id`'s cover from a picture file (a stick's), read the first time it is wanted.
+    pub(crate) fn get_file(&mut self, id: i64, path: &std::path::Path) -> Option<Arc<Cover>> {
+        if let Some(c) = self.got.lock().unwrap().covers.get(&id) {
+            return c.clone();
+        }
+        if self.asked.insert(id) {
+            let tx = self.tx.get_or_insert_with(|| start(self.got.clone(), self.arrived.clone()));
+            let _ = tx.send(Job::File(id, path.to_owned()));
         }
         None
     }
@@ -92,15 +111,19 @@ impl Covers {
     }
 }
 
-fn start(got: Arc<Mutex<Got>>, arrived: Arc<AtomicU64>) -> mpsc::Sender<(i64, House)> {
-    let (tx, rx) = mpsc::channel::<(i64, House)>();
+fn start(got: Arc<Mutex<Got>>, arrived: Arc<AtomicU64>) -> mpsc::Sender<Job> {
+    let (tx, rx) = mpsc::channel::<Job>();
     let rx = Arc::new(Mutex::new(rx));
     for n in 0..WORKERS {
         let (rx, got, arrived) = (rx.clone(), got.clone(), arrived.clone());
         let _ = thread::Builder::new().name(format!("covers {n}")).spawn(move || {
             loop {
-                let Ok((id, house)) = rx.lock().unwrap().recv() else { return };
-                let c = fetch(id, &house).map(Arc::new);
+                let Ok(job) = rx.lock().unwrap().recv() else { return };
+                let (id, c) = match job {
+                    Job::House(id, house) => (id, fetch(id, &house)),
+                    Job::File(id, path) => (id, std::fs::read(&path).ok().and_then(|b| square(&b))),
+                };
+                let c = c.map(Arc::new);
                 let mut g = got.lock().unwrap();
                 g.covers.insert(id, c);
                 g.order.push(id);
