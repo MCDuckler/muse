@@ -75,8 +75,41 @@ codesign --force --sign - --identifier io.wetowl.stage "$app/Contents/MacOS/weto
 codesign --force --sign - --identifier io.wetowl.desk "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 
+# The download is portable: a folder "WetOwl Desk" holding the app and how to open it the
+# first time. It runs from wherever it is unpacked (Downloads, the Desktop, a stick): the
+# app finds its stage, MilkDrop and dancers inside itself and writes only to ~/Library.
+port="$out/portable/WetOwl Desk"
+rm -rf "${out:?}/portable"
+mkdir -p "$port"
+ditto "$app" "$port/WetOwl Desk.app"
+cat > "$port/READ ME FIRST.txt" <<README
+WetOwl Desk for Mac — build $(cat "$app/Contents/Resources/build.txt")
+
+Nothing to install. Double-click WetOwl Desk.app here, or move this folder anywhere first
+(the Desktop, Applications, a USB stick). Apple silicon and Intel, macOS 11 or newer.
+
+THE FIRST TIME macOS stops it ("Apple could not verify…"), because the app is not signed
+with a paid Apple developer account. Open it once in either way:
+
+  A) Click Done. Open System Settings › Privacy & Security, scroll to
+     "WetOwl Desk was blocked…" and click Open Anyway (it asks for your Mac's password).
+
+  B) No password: open Terminal, type   xattr -dr com.apple.quarantine   (with a space
+     at the end), drag WetOwl Desk.app into the Terminal window, press Return. Then
+     double-click the app.
+
+After that it opens like any other app.
+
+Sign in with your WetOwl account. The show's stage window opens from the Show page.
+Controllers (Pioneer DDJ-400, Hercules RMX) and rekordbox USB sticks need no driver.
+
+Its log:       ~/Library/Logs/WetOwl Desk.log
+Its settings:  ~/Library/Application Support/wetowl-desk
+Newest build:  https://github.com/MCDuckler/muse/releases/download/wetowl-desk-macos/wetowl-desk-macos.zip
+README
+
 # ditto keeps the frameworks' links and the signatures as they are
 rm -f "$out/wetowl-desk-macos.zip"
-ditto -c -k --sequesterRsrc --keepParent "$app" "$out/wetowl-desk-macos.zip"
+ditto -c -k --sequesterRsrc --keepParent "$port" "$out/wetowl-desk-macos.zip"
 ls -lh "$out/wetowl-desk-macos.zip"
 echo "WetOwl Desk $(cat "$app/Contents/Resources/build.txt") bundled in $app"

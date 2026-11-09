@@ -4,8 +4,10 @@
 #   release wetowl-desk-windows. No music goes in the zip: the booths play the tester's
 #   own fetched records, else synthesised ones.
 # - macos: "WetOwl Desk.app" (Apple silicon + Intel, the stage inside it), smoke-tested
-#   with its stage, and on pushes to desk published as the rolling release
-#   wetowl-desk-macos, which desk/deploy/macos/install.sh fetches (no administrator).
+#   with its stage, then unpacked and opened as a portable (a double-click, from a folder
+#   nothing writes to; the Intel half through Rosetta), and on pushes to desk published as
+#   the rolling release wetowl-desk-macos: a zip that runs wherever it is unpacked, which
+#   desk/deploy/macos/install.sh also fetches (no administrator).
 # Runs on pushes to the desk branch that touch desk/, the engine or the Mac runner (or by hand).
 name: Desk
 
@@ -225,6 +227,76 @@ jobs:
             fi
           done
           exit $bad
+      - name: Portable — the download unpacked anywhere, opened as a double-click opens it
+        timeout-minutes: 6
+        run: |
+          # What a Mac user does without installing: the zip a browser fetched (marked as a
+          # download; unpacking carries the mark onto every file) unpacked into some
+          # folder, the mark cleared as READ ME FIRST.txt says, the app opened through
+          # Launch Services as Finder opens it (no terminal, no environment) from a folder
+          # nothing may write to (like a translocated app or a locked stick).
+          p="$RUNNER_TEMP/Some folder"
+          rm -rf "$p"
+          mkdir -p "$p"
+          cp desk/target/macos/wetowl-desk-macos.zip "$p/"
+          xattr -w com.apple.quarantine "0083;$(printf %x "$(date +%s)");Safari;" "$p/wetowl-desk-macos.zip"
+          ditto -x -k "$p/wetowl-desk-macos.zip" "$p"
+          app="$p/WetOwl Desk/WetOwl Desk.app"
+          [ -d "$app" ] && [ -f "$p/WetOwl Desk/READ ME FIRST.txt" ] || { echo "the zip is not the portable folder"; ls -la "$p" "$p"/*; exit 1; }
+          cat "$p/WetOwl Desk/READ ME FIRST.txt"
+          echo "mark: $(xattr -p com.apple.quarantine "$app/Contents/MacOS/wetowl-desk" 2>&1)"
+          spctl --assess --type execute -vv "$app" 2>&1 || echo "(Gatekeeper refuses it while marked, as READ ME FIRST.txt says)"
+          xattr -dr com.apple.quarantine "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          lipo -archs "$app/Contents/MacOS/wetowl-desk"
+          lipo -archs "$app/Contents/MacOS/wetowl-stage"
+          chmod -R a-w "$p"
+          log="$HOME/Library/Logs/WetOwl Desk.log"
+          mine="Some folder/WetOwl Desk/WetOwl Desk.app/Contents/MacOS/wetowl-desk"
+          # once with the stage it carries (the WetOwl app), once with the Rust stage
+          for run in stage rust; do
+            : > "$log"
+            out="$RUNNER_TEMP/portable-$run"
+            mkdir -p "$out"
+            if [ "$run" = rust ]; then
+              open -n --env WO_STAGE_RUST=1 "$app" --args --bench 16 --stage --out "$out" \
+                || { launchctl setenv WO_STAGE_RUST 1; open -n "$app" --args --bench 16 --stage --out "$out"; }
+            else
+              open -n "$app" --args --bench 16 --stage --out "$out"
+            fi
+            sleep 12
+            screencapture -x "smoke/mac-portable-$run.png" || true
+            pgrep -fl "$mine" || { echo "$run: no Desk runs from the portable folder"; cat "$log"; exit 1; }
+            for _ in $(seq 30); do pgrep -f "$mine" >/dev/null || break; sleep 1; done
+            pkill -f "$mine" || true
+            pkill -f "Some folder/WetOwl Desk" || true
+            echo "---- $run: the Desk's log"
+            grep -vE '^\s*$' "$log" | tail -25
+            grep -q -- '---- WetOwl Desk' "$log" || { echo "$run: the Desk did not start"; exit 1; }
+            grep -q 'STAGE fps=' "$log" || { echo "$run: the stage never drew"; exit 1; }
+            if grep -q "the Desk's show could not start" "$log"; then exit 1; fi
+            [ -s "$out/bench-egui-wgpu.json" ] || { echo "$run: the Desk never finished its bench (no report)"; exit 1; }
+            cp "$out/bench-egui-wgpu.json" "smoke/portable-$run-bench.json"
+          done
+          grep -E 'STAGE fps=' "$log" | grep -q 'cues=[1-9]' || { echo "the portable Rust stage heard no cue from the Desk"; exit 1; }
+      - name: Portable — the Intel half, through Rosetta
+        timeout-minutes: 4
+        run: |
+          # The x86_64 half of each program is built here but never runs on an Apple chip;
+          # Rosetta runs it as an Intel Mac would (the same GPU under it).
+          arch -x86_64 /usr/bin/true 2>/dev/null || sudo softwareupdate --install-rosetta --agree-to-license
+          app="$RUNNER_TEMP/Some folder/WetOwl Desk/WetOwl Desk.app"
+          arch -x86_64 "$app/Contents/MacOS/wetowl-stage" --scene dance-art --seconds 12 --shot "$PWD/smoke/intel-dance.png" > smoke/intel-stage.log 2>&1 || true
+          grep -E 'STAGE|stage:|dance' smoke/intel-stage.log | tail -6
+          grep -q 'STAGE fps=' smoke/intel-stage.log || { echo "the Intel stage never drew"; cat smoke/intel-stage.log; exit 1; }
+          log="$HOME/Library/Logs/WetOwl Desk.log"
+          : > "$log"
+          arch -x86_64 "$app/Contents/MacOS/wetowl-desk" --bench 10 --out "$RUNNER_TEMP/intel" </dev/null >/dev/null 2>&1 || echo "the Desk exited with $?"
+          tail -12 "$log"
+          [ -s "$RUNNER_TEMP/intel/bench-egui-wgpu.json" ] || { echo "the Intel Desk never finished its bench"; exit 1; }
+          cat "$RUNNER_TEMP/intel/bench-egui-wgpu.json"
+          launchctl unsetenv WO_STAGE_RUST || true
+          chmod -R u+w "$RUNNER_TEMP/Some folder"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -244,9 +316,19 @@ jobs:
           # commit that changes workflow files (desk does), and a rolling release is
           # its asset, not its tag.
           tag=wetowl-desk-macos
+          zip_url="https://github.com/${{ github.repository }}/releases/download/$tag/wetowl-desk-macos.zip"
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" \
             --prerelease --latest=false --target "${{ github.event.repository.default_branch }}" \
             --title "WetOwl Desk for Mac (rolling)" \
-            --notes "The newest WetOwl Desk for macOS, from the desk branch. Install without an administrator: curl -fsSL https://raw.githubusercontent.com/MCDuckler/muse/desk/desk/deploy/macos/install.sh | bash"
+            --notes "The newest WetOwl Desk for macOS, from the desk branch."
           gh release upload "$tag" desk/target/macos/wetowl-desk-macos.zip --clobber
-          gh release edit "$tag" --notes "Build $(cat "$APP/Contents/Resources/build.txt"). The newest WetOwl Desk for macOS, from the desk branch. Install without an administrator, in Terminal: curl -fsSL https://raw.githubusercontent.com/MCDuckler/muse/desk/desk/deploy/macos/install.sh | bash"
+          cat > notes.md <<NOTES
+          Build $(cat "$APP/Contents/Resources/build.txt"). The newest WetOwl Desk for macOS (the booth, its stage, MilkDrop), from the desk branch. Apple silicon and Intel, macOS 11 or newer.
+
+          **Portable, nothing to install:** download $zip_url, unzip it anywhere, open the folder *WetOwl Desk* and double-click *WetOwl Desk.app*. The app is not signed with a paid Apple account, so the first time macOS stops it: click Done, then System Settings › Privacy & Security › *Open Anyway* — or, with no password, in Terminal: \`xattr -dr com.apple.quarantine\` + the app dragged in. *READ ME FIRST.txt* in the folder says the same.
+
+          **Portable from Terminal (no Gatekeeper step; lands in your home folder):** \`cd ~ && curl -fL $zip_url -o wetowl-desk.zip && ditto -x -k wetowl-desk.zip . && rm wetowl-desk.zip && open "WetOwl Desk/WetOwl Desk.app"\`
+
+          **Installed into ~/Applications** (no administrator; run again to update): \`curl -fsSL https://raw.githubusercontent.com/MCDuckler/muse/desk/desk/deploy/macos/install.sh | bash\`
+          NOTES
+          gh release edit "$tag" --notes-file notes.md

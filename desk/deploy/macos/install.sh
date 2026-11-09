@@ -5,7 +5,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/MCDuckler/muse/desk/desk/deploy/macos/install.sh | bash
 #
 # Run it again to update. It puts "WetOwl Desk.app" in ~/Applications (your own
-# Applications folder; Launchpad and Spotlight find it there) and opens it.
+# Applications folder; Launchpad and Spotlight find it there) and opens it. Without
+# installing at all: the same zip unpacked anywhere runs as it is (its READ ME FIRST.txt).
 #
 # Why this works without an administrator: macOS refuses an app signed by no one
 # ("unidentified developer") only when the file carries the quarantine mark, which a
@@ -29,7 +30,9 @@ else
   curl -fL --progress-bar "$src" -o "$tmp/desk.zip"
 fi
 ditto -x -k "$tmp/desk.zip" "$tmp/x"
+# the app at the top (builds before 2026-11-09), or in the portable folder "WetOwl Desk"
 new="$tmp/x/$name"
+[ -d "$new" ] || new="$tmp/x/WetOwl Desk/$name"
 [ -d "$new" ] || { echo "That download holds no $name." >&2; exit 1; }
 xattr -dr com.apple.quarantine "$new" 2>/dev/null || true
 codesign --verify --deep --strict "$new" || { echo "The download's signature does not hold; not installing it." >&2; exit 1; }
