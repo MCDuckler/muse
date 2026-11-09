@@ -27,6 +27,7 @@ mod transition;
 pub mod parts;
 pub mod prefs;
 pub mod records;
+pub mod scratch;
 pub mod show;
 pub mod stage;
 pub mod synth;
@@ -62,7 +63,12 @@ pub struct DeckView {
     pub record: Record,
     pub heard: f64,
     pub length: f64,
+    /// The rate the deck plays at (its pitch fader's, sync's): the motor's, under a hand too.
     pub rate: f64,
+    /// How fast the record really goes, backwards negative: under a hand, the hand's.
+    pub speed: f64,
+    /// A hand on the record (scratching).
+    pub held: bool,
     /// The record's tempo as it plays now.
     pub bpm: f64,
     pub playing: bool,
@@ -270,6 +276,9 @@ pub struct Desk {
     load_gen: [u64; 2],
     /// DJ controllers: found and read on their own threads, bound the v1 booth's way.
     controls: Option<wo_control::Manager>,
+    /// Hands on the records (scratch.rs): a controller's, read on its own thread, and the
+    /// on-screen platter's.
+    scratcher: Arc<scratch::Scratcher>,
     binding: wo_control::Binding,
     /// What the controllers asked of the crate (browse, load), for the UI, which has it.
     for_the_crate: Vec<wo_control::Action>,
@@ -278,6 +287,11 @@ pub struct Desk {
     /// The lights as last sent, and to how many controllers.
     lit: std::collections::HashMap<String, bool>,
     lit_for: usize,
+    /// The load each deck's "loaded" light last flashed for.
+    lit_load: [u64; 2],
+    /// The controllers' level meters: as they fall, and as last sent (0..127).
+    meter: [f32; 2],
+    meter_sent: [Option<u8>; 2],
     /// The show's window.
     stage: stage::Stage,
     /// Counts what changed the Desk from outside the window (a controller, an answer from
@@ -361,6 +375,7 @@ impl Desk {
                 (e, Some(Pacer { stop, thread: Some(thread) }))
             }
         };
+        let scratcher = Arc::new(scratch::Scratcher::new(&engine));
         let mut rows = records::crate_rows();
         let mut queue: Vec<Record> = rows.iter().filter(|r| r.playable()).cloned().collect();
         if queue.len() < 2 {
@@ -406,12 +421,19 @@ impl Desk {
             shelf_gen: 0,
             load_gen: [0; 2],
             // WO_CONTROLLERS=off: none (tests)
-            controls: (std::env::var("WO_CONTROLLERS").as_deref() != Ok("off")).then(wo_control::Manager::start),
+            controls: (std::env::var("WO_CONTROLLERS").as_deref() != Ok("off")).then(|| {
+                let s = scratcher.clone();
+                wo_control::Manager::start_with(Arc::new(move |e: &wo_control::Event| s.heard(e)))
+            }),
+            scratcher,
             binding: wo_control::Binding::default(),
             for_the_crate: vec![],
             jog: [(0.0, None); 2],
             lit: Default::default(),
             lit_for: 0,
+            lit_load: [0; 2],
+            meter: [0.0; 2],
+            meter_sent: [None; 2],
             stage: stage::Stage::default(),
             changes: 0,
             covers: Default::default(),
@@ -865,13 +887,18 @@ impl Desk {
             let lr = self.engine.deck(DeckId::new(i).unwrap()).take_peak();
             let wave = s.wave.lock().unwrap();
             let length = if s.record.seconds > 0 { s.record.seconds as f64 } else { wave.seconds() };
+            // a parked deck has no rate in the engine, nor one under a hand (its rate there
+            // is the hand's): the pitch fader's, then
+            let held = self.scratcher.held(i);
+            let rate = if st.rate > 0.0 && !held { st.rate } else { s.hands.rate() };
             DeckView {
                 record: s.record.clone(),
                 heard: self.engine.deck(DeckId::new(i).unwrap()).position(),
                 length,
-                // a parked deck has no rate in the engine: the pitch fader's, then
-                rate: if st.rate > 0.0 { st.rate } else { s.hands.rate() },
-                bpm: self.base_bpm(i) * if st.rate > 0.0 { st.rate } else { s.hands.rate() },
+                rate,
+                speed: st.rate,
+                held,
+                bpm: self.base_bpm(i) * rate,
                 playing: st.playing,
                 synced: st.synced,
                 master: i == self.master,
@@ -1393,22 +1420,38 @@ impl Desk {
     }
 
     fn controllers_tick(&mut self) {
-        let events = self.controls.as_ref().map(|c| c.poll()).unwrap_or_default();
+        let events = self.controls.as_ref().map(|c| c.poll_heard()).unwrap_or_default();
         if !events.is_empty() {
             self.changes += 1;
         }
-        for e in events {
+        for (e, lane) in events {
+            // a hand on a record: done already, on the controller's own thread
+            if let Some(did) = lane {
+                if self.control_lines.len() >= wo_control::MONITOR {
+                    self.control_lines.pop_front();
+                }
+                self.control_lines.push_back(ControlLine { at: Instant::now(), id: e.id.clone(), value: e.value, did: vec![did] });
+                continue;
+            }
             let at = self.positions();
             let actions = self.binding.handle(&e, &at);
             // the controllers page's monitor: what the binding made of it
             if self.control_lines.len() >= wo_control::MONITOR {
                 self.control_lines.pop_front();
             }
-            self.control_lines.push_back(ControlLine { at: Instant::now(), id: e.id.clone(), value: e.value, did: actions.iter().map(|a| format!("{a:?}")).collect() });
+            let mut did: Vec<String> = actions.iter().map(|a| format!("{a:?}")).collect();
+            // a knob or fader far from where the booth is waits for it (soft takeover)
+            if did.is_empty() && e.kind.positional() && self.binding.waits(&e.id) {
+                did.push("waits until it reaches the booth's".to_owned());
+            }
+            self.control_lines.push_back(ControlLine { at: Instant::now(), id: e.id.clone(), value: e.value, did });
             for a in actions {
                 self.act(a);
             }
         }
+        // SCRATCH mode for wheels with no touch; such a wheel stopped lets go
+        self.scratcher.mode.store(self.binding.scratch, std::sync::atomic::Ordering::Release);
+        self.scratcher.tick();
         // the jog wheel settles when it stops turning
         for d in 0..2 {
             if self.jog[d].1.is_some_and(|t| t.elapsed() > Duration::from_millis(90)) {
@@ -1428,6 +1471,7 @@ impl Desk {
             filter: [self.slots[0].filter, self.slots[1].filter],
             eq: [self.slots[0].eq, self.slots[1].eq],
             pitch: [self.slots[0].hands.pitch, self.slots[1].hands.pitch],
+            gain: [self.slots[0].gain, self.slots[1].gain],
         }
     }
 
@@ -1455,6 +1499,7 @@ impl Desk {
             A::Jog { deck, ticks, scratch, shift } => self.jog(deck, ticks, scratch, shift),
             A::Jump(d, beats) => self.jump(d, beats),
             A::Fader(d, v) => self.set_fader(d, v),
+            A::Gain(d, v) => self.set_gain(d, v),
             A::Filter(d, v) => self.set_filter(d, v),
             A::Eq(d, band, v) => self.set_eq(d, band, v),
             A::KillToggle(d, band) => self.kill(d, band),
@@ -1463,7 +1508,10 @@ impl Desk {
             A::LoopIn(d) => self.loop_in(d),
             A::LoopOut(d) => self.loop_out(d),
             A::HalveLoop(d) => self.halve_loop(d),
+            A::DoubleLoop(d) => self.double_loop(d),
+            A::LoopBeats(d, beats) => self.loop_beats(d, beats),
             A::Unloop(d) => self.unloop(d),
+            A::Echo(d, send) => self.set_echo(d, send, 1.0),
             A::Crossfader(x) => {
                 // a hand on the crossfader mid-mix takes the mix over
                 if self.mix.as_ref().is_some_and(|m| m.started) {
@@ -1493,18 +1541,35 @@ impl Desk {
         self.set_eq(d, band, v);
     }
 
-    /// The jog wheel turned `ticks`: a parked record is moved (20 ms a tick, 250 with
-    /// shift); a playing one bends with the speed of the hand (much harder in scratch).
+    /// The jog wheel turned `ticks` (128 a turn): a parked record is moved (20 ms a tick);
+    /// with shift any record is searched (250 ms a tick); a playing one bends with the
+    /// speed of the hand (much harder in scratch) — the speed over the last few tens of
+    /// milliseconds, however often the wheel reports.
     pub fn jog(&mut self, d: usize, ticks: f64, scratch: bool, shift: bool) {
         let deck = self.engine.deck(DeckId::new(d).unwrap());
-        if !deck.read().playing {
+        if shift || !deck.read().playing {
             deck.seek((deck.position() + ticks * if shift { 0.25 } else { 0.02 }).max(0.0));
             return;
         }
-        let v = self.jog[d].0 * 0.6 + ticks;
-        self.jog[d] = (v, Some(Instant::now()));
+        let now = Instant::now();
+        // 0.6 of it kept each 10 ms (the RMX's own pace, which the feel was made on)
+        let kept = self.jog[d].1.map_or(0.0, |t| 0.6f64.powf(now.duration_since(t).as_secs_f64() / 0.010));
+        let v = self.jog[d].0 * kept + ticks;
+        self.jog[d] = (v, Some(now));
         let k = if scratch { 0.06 } else { 0.008 };
         deck.bend((1.0 + k * v).clamp(0.5, 2.0));
+    }
+
+    /// A hand on deck `d`'s record (the on-screen platter held), or let go: under the hand
+    /// it goes where [Desk::scratch_by] takes it — held still it stops, pulled back it plays
+    /// backwards; let go it spins back up (parked: stays where it was left).
+    pub fn scratch(&mut self, d: usize, on: bool) {
+        self.scratcher.hold(d, on);
+    }
+
+    /// The hand moved deck `d`'s record `seconds` (a turn of the platter is 1.8 s).
+    pub fn scratch_by(&mut self, d: usize, seconds: f64) {
+        self.scratcher.by(d, seconds);
     }
 
     /// The record moved by `secs` (a nudge by ear).
@@ -1536,16 +1601,51 @@ impl Desk {
         if n != self.lit_for {
             self.lit.clear();
             self.lit_for = n;
+            self.lit_load = [0; 2];
+            self.meter_sent = [None; 2];
         }
-        let mut want = vec![("mixer.scratch".to_owned(), self.binding.scratch)];
+        let show = self.stage.view();
+        let mut want = vec![
+            ("mixer.scratch".to_owned(), self.binding.scratch),
+            ("fx.on".to_owned(), self.binding.fx_on),
+            ("show.blackout".to_owned(), show.blackout),
+            ("show.freeze".to_owned(), show.freeze),
+        ];
         for d in 0..2 {
-            let st = self.engine.deck(DeckId::new(d).unwrap()).read();
+            let deck = self.engine.deck(DeckId::new(d).unwrap());
+            let st = deck.read();
             let side = ["a", "b"][d];
-            let on_cue = self.slots[d].hands.cue.is_some_and(|c| (c - st.heard).abs() < 0.06);
+            let h = &self.slots[d].hands;
+            let on_cue = h.cue.is_some_and(|c| (c - st.heard).abs() < 0.06);
             want.push((format!("deck.{side}.play"), st.playing));
             want.push((format!("deck.{side}.cue"), on_cue && !st.playing));
             want.push((format!("deck.{side}.sync"), st.synced));
             want.push((format!("deck.{side}.keylock"), self.slots[d].keylock));
+            for (n, p) in h.pads.iter().enumerate() {
+                want.push((format!("deck.{side}.hotcue.{}", n + 1), p.is_some()));
+            }
+            for b in [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0] {
+                want.push((format!("deck.{side}.beatloop.{b}"), h.looped.is_some() && h.loop_beats == Some(b)));
+            }
+            want.push((format!("deck.{side}.loop.in"), h.loop_in.is_some() || h.looped.is_some()));
+            want.push((format!("deck.{side}.loop.out"), h.looped.is_some()));
+            want.push((format!("deck.{side}.loop.exit"), h.looped.is_some()));
+            // a record loaded: the jog's ring goes round once
+            if self.load_gen[d] != self.lit_load[d] {
+                self.lit_load[d] = self.load_gen[d];
+                controls.light(&format!("deck.{side}.loaded"), false);
+                controls.light(&format!("deck.{side}.loaded"), true);
+            }
+            // the level meter: the loudest since the last look, falling back slowly
+            let (l, r) = deck.take_meter();
+            let db = 20.0 * l.max(r).max(1e-6).log10();
+            let level = if st.playing { (1.0 + db / 30.0).clamp(0.0, 1.0) } else { 0.0 };
+            self.meter[d] = level.max(self.meter[d] * 0.85);
+            let step = (self.meter[d] * 127.0).round() as u8;
+            if self.meter_sent[d] != Some(step) {
+                controls.level(&format!("deck.{side}.meter"), self.meter[d]);
+                self.meter_sent[d] = Some(step);
+            }
         }
         for (id, on) in want {
             if self.lit.get(&id) != Some(&on) {

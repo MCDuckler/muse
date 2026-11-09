@@ -1,6 +1,8 @@
-//! A controller's layout (controllers/*.json, the v1 files unchanged): which device it
-//! is, and where each control's bytes are — a MIDI CC or note, or a HID report's byte
-//! and bits — named in the surface's vocabulary (deck.a.play, mixer.crossfader…).
+//! A controller's layout (controllers/*.json; the RMX's are the v1 files unchanged): which
+//! device it is, and where each control's bytes are — a MIDI CC or note (a 14-bit pair: the
+//! MSB's CC and its `lsb`), or a HID report's byte and bits — named in the surface's
+//! vocabulary (deck.a.play, mixer.crossfader…). Optional: `ticksPerTurn` on a jog wheel,
+//! `meter` on an output that takes a level.
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -49,10 +51,18 @@ pub struct Input {
     pub mask: u8,
     pub max: u32,
     pub center: Option<u32>,
-    /// signed7, delta, wrap8, wrap7.
+    /// signed7, offset64, delta, wrap8, wrap7.
     pub encoding: Option<String>,
     pub invert: bool,
+    /// A 14-bit control's low half: its own CC (the MSB is `cc`).
+    pub lsb: Option<u8>,
+    /// A jog wheel's ticks in one turn of it: its turns are given in the booth's ticks
+    /// ([JOG_TICKS] a turn, the RMX's), whatever the wheel's resolution.
+    pub per_turn: Option<f64>,
 }
+
+/// A jog wheel's ticks in a turn as the booth counts them (the RMX's own: 128).
+pub const JOG_TICKS: f64 = 128.0;
 
 impl Input {
     /// A raw position as 0..1, a centred control's centre at 0.5.
@@ -75,11 +85,22 @@ impl Input {
         let wrapped = |d: i32, size: i32| if d > size / 2 { d - size } else if d < -size / 2 { d + size } else { d };
         let v = match self.encoding.as_deref() {
             Some("delta") => if raw >= 0x80 { raw - 0x100 } else { raw },
+            // centred on 0x40: 0x41 one on, 0x3F one back (Pioneer's jogs)
+            Some("offset64") => raw - 0x40,
             Some("wrap8") => last.map(|l| wrapped(raw - l as i32, 256)).unwrap_or(0),
             Some("wrap7") => last.map(|l| wrapped(raw - l as i32, 128)).unwrap_or(0),
             _ => if raw >= 0x40 { raw - 0x80 } else { raw },
         };
         if self.invert { -v } else { v }
+    }
+
+    /// A relative turn in the booth's ticks: the wheel's own scaled to [JOG_TICKS] a turn.
+    pub fn ticks(&self, raw: u32, last: Option<u32>) -> f64 {
+        let d = self.relative(raw, last) as f64;
+        match self.per_turn {
+            Some(n) if n > 0.0 => d * JOG_TICKS / n,
+            _ => d,
+        }
     }
 }
 
@@ -95,6 +116,8 @@ pub struct Output {
     pub length: Option<usize>,
     pub byte: Option<usize>,
     pub mask: u8,
+    /// Takes a level (a VU meter), `off`..`on` for 0..1, not just on or off.
+    pub meter: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -162,7 +185,14 @@ impl Layout {
         let mut inputs = vec![];
         for j in &raw.inputs {
             let Some(kind) = j.get("kind").and_then(|k| k.as_str()).and_then(Kind::parse) else { continue };
-            let max = int(j.get("max")).or(int(d("max"))).unwrap_or(if j.get("byte").is_some() { 255 } else { 127 });
+            let lsb = int(j.get("lsb")).map(|v| v as u8);
+            let max = int(j.get("max")).or(int(d("max"))).unwrap_or(if lsb.is_some() {
+                0x3FFF
+            } else if j.get("byte").is_some() {
+                255
+            } else {
+                127
+            });
             inputs.push(Input {
                 id: j.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_owned(),
                 kind,
@@ -176,6 +206,8 @@ impl Layout {
                 center: int(j.get("center")).or_else(|| (kind.positional() && j.get("centered").and_then(|c| c.as_bool()) == Some(true)).then(|| int(d("center"))).flatten()),
                 encoding: j.get("encoding").and_then(|e| e.as_str()).map(str::to_owned).or_else(|| matches!(kind, Kind::Encoder | Kind::Jog).then(|| d("encoding").and_then(|e| e.as_str()).map(str::to_owned)).flatten()),
                 invert: j.get("invert").and_then(|v| v.as_bool()) == Some(true),
+                lsb,
+                per_turn: j.get("ticksPerTurn").and_then(|v| v.as_f64()),
             });
         }
         let outputs = raw
@@ -192,6 +224,7 @@ impl Layout {
                 length: int(j.get("length")).or(int(d("outputLength"))).map(|v| v as usize),
                 byte: int(j.get("byte")).map(|v| v as usize),
                 mask: int(j.get("mask")).unwrap_or(0xFF) as u8,
+                meter: j.get("meter").and_then(|v| v.as_bool()) == Some(true),
             })
             .collect();
         let usb = raw
@@ -221,6 +254,7 @@ pub fn bundled() -> Vec<Layout> {
     [
         include_str!("../../../controllers/hercules_dj_console_rmx.midi.json"),
         include_str!("../../../controllers/hercules_dj_console_rmx.hid.json"),
+        include_str!("../../../controllers/pioneer_ddj_400.midi.json"),
     ]
     .iter()
     .filter_map(|j| Layout::parse(j).map_err(|e| eprintln!("controller layout: {e}")).ok())
@@ -234,8 +268,8 @@ mod tests {
     #[test]
     fn the_rmx_layouts_read() {
         let all = bundled();
-        assert_eq!(all.len(), 2);
-        let midi = all.iter().find(|l| l.protocol == Protocol::Midi).unwrap();
+        assert_eq!(all.len(), 3);
+        let midi = all.iter().find(|l| l.protocol == Protocol::Midi && l.id.contains("rmx")).unwrap();
         let hid = all.iter().find(|l| l.protocol == Protocol::Hid).unwrap();
         assert_eq!(midi.usb, vec![(0x06f8, 0xb101)]);
         assert!(midi.names_match("Hercules DJ Console RMX MIDI 1") && !midi.names_match("Launchpad"));
@@ -248,7 +282,7 @@ mod tests {
 
     #[test]
     fn positions_centre_and_invert() {
-        let midi = bundled().into_iter().find(|l| l.protocol == Protocol::Midi).unwrap();
+        let midi = bundled().into_iter().find(|l| l.protocol == Protocol::Midi && l.id.contains("rmx")).unwrap();
         let gain = midi.inputs.iter().find(|i| i.id == "deck.a.gain").unwrap();
         assert_eq!(gain.position(63), 0.5, "centred on 0x3F");
         assert_eq!(gain.position(0), 0.0);
@@ -259,10 +293,39 @@ mod tests {
 
     #[test]
     fn turns() {
-        let jog = Input { id: "j".into(), kind: Kind::Jog, channel: None, cc: None, note: None, report: None, byte: None, mask: 0xFF, max: 255, center: None, encoding: Some("wrap8".into()), invert: false };
+        let jog = Input { id: "j".into(), kind: Kind::Jog, channel: None, cc: None, note: None, report: None, byte: None, mask: 0xFF, max: 255, center: None, encoding: Some("wrap8".into()), invert: false, lsb: None, per_turn: None };
         assert_eq!(jog.relative(2, Some(254)), 4, "a counter wrapping past 255");
         assert_eq!(jog.relative(250, Some(4)), -10);
-        let signed = Input { encoding: Some("signed7".into()), ..jog };
+        let signed = Input { encoding: Some("signed7".into()), ..jog.clone() };
         assert_eq!((signed.relative(1, None), signed.relative(0x7F, None)), (1, -1));
+        let pioneer = Input { encoding: Some("offset64".into()), per_turn: Some(720.0), ..jog };
+        assert_eq!((pioneer.relative(0x41, None), pioneer.relative(0x3E, None)), (1, -2));
+        assert!((pioneer.ticks(0x40 + 90, None) - 16.0).abs() < 1e-9, "an eighth of a turn is the RMX's eighth");
+    }
+
+    #[test]
+    fn the_ddj_400_reads() {
+        let ddj = bundled().into_iter().find(|l| l.id == "pioneer_ddj_400_midi").unwrap();
+        assert!(ddj.names_match("DDJ-400:DDJ-400 MIDI 1 24:0") && ddj.names_match("DDJ-400") && !ddj.names_match("DDJ-FLX4"));
+        let pitch = ddj.inputs.iter().find(|i| i.id == "deck.b.pitch").unwrap();
+        assert_eq!((pitch.channel, pitch.cc, pitch.lsb, pitch.max, pitch.invert), (Some(1), Some(0x00), Some(0x20), 0x3FFF, true));
+        assert_eq!(pitch.position(0x2000), 0.5);
+        let jog = ddj.inputs.iter().find(|i| i.id == "deck.a.jog.scratch").unwrap();
+        assert_eq!((jog.encoding.as_deref(), jog.per_turn), (Some("offset64"), Some(720.0)));
+        assert!(ddj.outputs.iter().any(|o| o.id == "deck.a.meter" && o.meter));
+        // every hot cue, plain and with shift, on its pad channel
+        for n in 1..=8 {
+            let pads: Vec<_> = ddj.inputs.iter().filter(|i| i.id == format!("deck.a.hotcue.{n}")).collect();
+            assert_eq!(pads.len(), 2, "hot cue {n}");
+        }
+        // no two inputs on the same bytes
+        let mut seen = std::collections::HashSet::new();
+        for i in &ddj.inputs {
+            let key = (i.channel, i.cc.map(|c| (0xB0, c)).or(i.note.map(|n| (0x90, n))));
+            assert!(seen.insert(key), "{} shares its bytes", i.id);
+            if let Some(l) = i.lsb {
+                assert!(seen.insert((i.channel, Some((0xB0, l)))), "{}'s LSB shares its bytes", i.id);
+            }
+        }
     }
 }

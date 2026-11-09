@@ -50,6 +50,13 @@ constexpr int kBlock = 256;           // the engine's own block, frames
 constexpr int kChunkBits = 16;        // a source's memory comes in chunks of 64k frames
 constexpr int64_t kChunk = 1 << kChunkBits;
 constexpr double kRateMin = 0.25, kRateMax = 4.0;   // a deck's rate, and its bend, each
+// The hand on the record: how closely the record follows it (a critically damped
+// spring, this many Hz — it smooths a jog wheel's steps and a mouse's frames without
+// lagging the hand by much: a steady pull is followed ~16 ms behind), how fast it may
+// go (record seconds per second, either way), and how fast it comes back up to the
+// deck's speed when let go, or runs down on a parked deck (seconds, a time constant).
+constexpr double kHandHz = 20.0, kHandMax = 8.0, kSpinUp = 0.03, kRunDown = 0.02;
+constexpr double kHandDcHz = 8.0;   // below this the hand's path is not heard (a held record)
 
 // ------------------------------------------------------------------ sources
 struct Source {
@@ -147,6 +154,17 @@ struct Deck {
   // the brake
   bool braking = false;
   double brakeLeft = 0, brakeTotal = 0;
+  // A hand on the record: 0 none, 1 on it, 2 let go (spinning back up to the deck's
+  // speed, or running down on a parked deck). Meanwhile the record is read by its own
+  // head (no stretcher: its pitch is its speed), the voices faded out; back up to
+  // speed, a voice takes over from where it is, crossfaded.
+  int hand = 0;
+  bool handLive = false;     // the hand's head is heard (it fades out after the hand-off)
+  double hHead = 0;          // the record frame it reads next
+  double hVel = 0;           // record frames per output frame (backwards negative)
+  double hTarget = 0;        // where the hand has put the record, frames
+  Ramp hWeight;
+  double hX[2] = {0, 0}, hY[2] = {0, 0};   // its DC blocker: a record held still is silent
   // sound
   Ramp level;
   Bands bands;
@@ -163,7 +181,7 @@ struct Deck {
 enum CmdKind {
   kSource, kSourceGain, kPlay, kSeek, kRate, kBend, kKeylock, kShift, kBeats, kSync, kBarOne, kStart,
   kLoop, kLoopBeats, kLevel, kEq, kFilter, kGate, kEcho, kBrake, kMaster, kFreeSource, kSyncOffset, kAlign, kSyncOctave,
-  kPadPlay, kPadStop, kPadGain, kPadsLevel
+  kPadPlay, kPadStop, kPadGain, kPadsLevel, kScratch, kScratchBy
 };
 
 // ------------------------------------------------------------------ pads (the board)
@@ -534,6 +552,7 @@ double effRate(const Deck& d) { return d.rate * d.bend * d.trim * (d.braking ? 1
 Voice& activeVoice(Deck& d) { return d.voices[d.active]; }
 
 double heardOf(Deck& d) {
+  if (d.hand) return d.hHead;
   Voice& v = activeVoice(d);
   if (!d.playing || !v.used) return d.head;
   return voiceHeard(v);
@@ -543,6 +562,8 @@ double heardOf(Deck& d) {
 // faded out over 4 ms.
 void jump(Deck& d, double at, int fadeFrames = -1) {
   d.moves++;
+  // under the hand: the record is where it is put (a cue, a seek), the hand there too
+  if (d.hand) { d.hHead = d.hTarget = at; return; }
   if (!d.playing) { d.head = at; return; }
   if (fadeFrames < 0) fadeFrames = (int)(E->rate * 0.004);
   Voice& old = activeVoice(d);
@@ -555,6 +576,8 @@ void jump(Deck& d, double at, int fadeFrames = -1) {
 
 void play(Deck& d, bool on, int fromFrame = 0) {
   if (on == d.playing) return;
+  // the motor under the hand: what it does is heard once the hand lets go
+  if (d.hand) { d.playing = on; return; }
   if (on) {
     d.playing = true;
     Voice& v = activeVoice(d);
@@ -617,6 +640,12 @@ void syncBlock(Deck& f) {
   // The tempo, always: a master's fader carries the follower in the same block.
   f.rate = std::clamp(rateFor, kRateMin, kRateMax);
   if (!f.playing || !m.playing) { f.trim = 1; return; }
+  if (f.hand) {
+    // A hand on the record: the place it leaves the deck in is kept (as the jog's).
+    f.offset -= err;
+    f.trim = 1;
+    return;
+  }
   if (f.snapPending) {
     f.snapPending = false;
     if (std::fabs(err) > 0.0002) jump(f, f.heardNow + secToFrame(err));
@@ -659,6 +688,97 @@ double inStepAt(Deck& f, Deck& m, double masterSec, double near) {
   const double at = beatIndexAt(f, frameToSec(near));
   const double k = std::round((at - want) / mod);
   return secToFrame(beatTime(f, want + k * mod));
+}
+
+// ------------------------------------------------------------------ the hand on the record
+// The decoded length of what the deck plays, frames.
+double deckLength(const Deck& d) {
+  int64_t len = 0;
+  for (auto& sl : d.slots) if (sl.src) len = std::max(len, sl.src->frames.load(std::memory_order_acquire));
+  return (double)len;
+}
+
+// A hand on the record, or let go.
+void handOn(Deck& d, bool on) {
+  const int fade = (int)(E->rate * 0.003);
+  if (!on) {
+    if (d.hand == 1) d.hand = 2;
+    return;
+  }
+  if (d.hand == 1) return;
+  if (d.hand == 0) {
+    // from where it is heard (or the hand's head, still fading from the last time), at
+    // the speed it goes: the hand slows it from there
+    if (!d.handLive) {
+      d.hHead = heardOf(d);
+      d.hVel = d.playing ? effRate(d) : 0.0;
+      d.hWeight.now = 0;
+      d.hX[0] = d.hX[1] = d.hY[0] = d.hY[1] = 0;
+    }
+    // a brake under way was going to stop it: the hand stops it instead
+    if (d.braking) { d.braking = false; d.bend = 1; d.playing = false; }
+    for (auto& v : d.voices) if (v.used) { v.dying = true; v.weight.set(0, fade); }
+    d.hWeight.set(1, fade);
+    d.moves++;
+  }
+  // (grabbed again while spinning back up: the same head, from the speed it has)
+  d.hTarget = d.hHead;
+  d.hand = 1;
+  d.handLive = true;
+}
+
+// Up to speed after the hand let go: a voice goes on from where the record is, the
+// hand's head faded out under it.
+void handOff(Deck& d) {
+  const int fade = (int)(E->rate * 0.004);
+  d.hand = 0;
+  Voice* v = &activeVoice(d);
+  if (v->used) { d.active ^= 1; v = &activeVoice(d); }
+  voiceStart(d, *v, d.hHead, d.keylock, effRate(d));
+  v->weight.now = 0; v->weight.set(1, fade);
+  d.hWeight.set(0, fade);
+  d.moves++;
+}
+
+// n frames of the hand's head into the deck's buffer (added, at its weight): under the
+// hand the record follows it on a critically damped spring; let go, it comes up to the
+// deck's speed (or runs down, parked); handed off, it keeps in step with the voice.
+void renderHand(Deck& d, int n) {
+  const double w = 2 * kPi * kHandHz / E->rate;
+  const double up = 1.0 - std::exp(-1.0 / (kSpinUp * E->rate));
+  const double down = 1.0 - std::exp(-1.0 / (kRunDown * E->rate));
+  const double len = deckLength(d);
+  const bool alone = !d.voices[0].used && !d.voices[1].used;
+  const double dc = 1.0 - 2 * kPi * kHandDcHz / E->rate;
+  for (int k = 0; k < n; k++) {
+    if (d.hand == 1) d.hVel += w * w * (d.hTarget - d.hHead) - 2 * w * d.hVel;
+    else if (d.playing) d.hVel += (effRate(d) - d.hVel) * (d.hand == 2 ? up : 1.0);
+    else d.hVel -= d.hVel * down;
+    d.hVel = std::clamp(d.hVel, -kHandMax, kHandMax);
+    float l, r;
+    readAt(d, d.hHead, l, r);
+    if (alone) stepGains(d);
+    // the stylus still: no sound, however far from nothing the groove is there
+    const double yl = l - d.hX[0] + dc * d.hY[0], yr = r - d.hX[1] + dc * d.hY[1];
+    d.hX[0] = l; d.hX[1] = r; d.hY[0] = yl; d.hY[1] = yr;
+    l = (float)yl; r = (float)yr;
+    const float g = d.hWeight.next();
+    d.buf[k * 2] += l * g; d.buf[k * 2 + 1] += r * g;
+    d.hHead += d.hVel;
+    if (d.hHead < 0) { d.hHead = 0; d.hVel = std::max(0.0, d.hVel); }
+    else if (len > 0 && d.hHead > len) { d.hHead = len; d.hVel = std::min(0.0, d.hVel); }
+  }
+  // let go: up to speed, a voice takes over; parked, at rest where it was left
+  if (d.hand == 2) {
+    const double want = d.playing ? effRate(d) : 0.0;
+    // (within 2 %: the crossfade to the voice hides the rest)
+    if (d.playing && std::fabs(d.hVel - want) < 0.02 * want) handOff(d);
+    else if (!d.playing && std::fabs(d.hVel) < 2e-3) {
+      d.hand = 0; d.head = d.hHead;
+      d.hWeight.set(0, (int)(E->rate * 0.004));
+    }
+  }
+  if (d.hand == 0 && !d.hWeight.moving() && d.hWeight.now <= 0) d.handLive = false;
 }
 
 // ------------------------------------------------------------------ commands
@@ -878,8 +998,12 @@ void apply(const Cmd& c) {
     case kFilter: d.filter.set(c.f0); break;
     case kGate: d.gateDepth = c.f0; d.gatePeriod = c.d1; d.gateOrigin = c.d2; break;
     case kEcho: d.echo.set(c.f0, c.f1, c.d1, (int)(E->rate * 0.03)); break;
+    case kScratch: handOn(d, c.i0 != 0); break;
+    case kScratchBy:
+      if (d.hand == 1) d.hTarget = std::clamp(d.hTarget + secToFrame(c.d0), 0.0, std::max(0.0, deckLength(d)));
+      break;
     case kBrake:
-      if (!d.playing) break;
+      if (!d.playing || d.hand) break;
       d.braking = true; d.brakeTotal = d.brakeLeft = std::max(0.05, c.d0);
       jump(d, heardOf(d), (int)(E->rate * 0.005));  // onto a resampler: the pitch must fall
       break;
@@ -915,7 +1039,7 @@ void renderDeck(Deck& d, int n) {
     d.bend = 0.02 + 0.98 * k * k;
     if (d.brakeLeft <= 0) { play(d, false); d.braking = false; d.bend = 1; }
   }
-  if (!d.playing && !d.voices[0].used && !d.voices[1].used) return;
+  if (!d.playing && !d.handLive && !d.voices[0].used && !d.voices[1].used) return;
   const double r = effRate(d);
   for (auto& v : d.voices) {
     if (!v.used) continue;
@@ -923,9 +1047,10 @@ void renderDeck(Deck& d, int n) {
     voiceRender(d, v, d.buf, &v == &activeVoice(d) ? from : 0, n);
     if (v.dying && !v.weight.moving() && v.weight.now <= 0) v.used = false;
   }
-  if (d.playing && !activeVoice(d).used) d.playing = false;
+  if (d.handLive) renderHand(d, n);
+  if (d.playing && !d.hand && !activeVoice(d).used) d.playing = false;
   // Off the end of the record (all of it decoded): stopped there.
-  if (d.playing && !d.looping) {
+  if (d.playing && !d.looping && !d.hand) {
     int64_t len = 0; bool done = true;
     for (auto& sl : d.slots) if (sl.src && sl.gain.target > 0) { len = std::max(len, sl.src->frames.load()); done = done && sl.src->done.load(); }
     if (done && len > 0 && d.heardNow >= (double)len) {
@@ -959,7 +1084,8 @@ void publish(Deck& d, double at) {
   auto& s = st.s;
   s.heard = frameToSec(d.heardNow);
   s.at = at;
-  s.rate = d.playing ? effRate(d) : 0;
+  // under the hand: the record's own speed, backwards negative
+  s.rate = d.handLive ? d.hVel : d.playing ? effRate(d) : 0;
   int64_t len = 0;
   for (auto& sl : d.slots) if (sl.src) len = std::max(len, sl.src->frames.load());
   s.length = frameToSec((double)len);
@@ -1358,6 +1484,8 @@ WE_API void we_deck_seek(int deck, double t) { Cmd c{kSeek}; c.deck = deck; c.d0
 WE_API void we_deck_rate(int deck, double rate) { Cmd c{kRate}; c.deck = deck; c.d0 = rate; push(c); }
 WE_API void we_deck_bend(int deck, double f) { Cmd c{kBend}; c.deck = deck; c.d0 = f; push(c); }
 WE_API void we_deck_keylock(int deck, int on) { Cmd c{kKeylock}; c.deck = deck; c.i0 = on; push(c); }
+WE_API void we_deck_scratch(int deck, int on) { Cmd c{kScratch}; c.deck = deck; c.i0 = on; push(c); }
+WE_API void we_deck_scratch_by(int deck, double seconds) { Cmd c{kScratchBy}; c.deck = deck; c.d0 = seconds; push(c); }
 WE_API void we_deck_shift(int deck, double semis) { Cmd c{kShift}; c.deck = deck; c.d0 = semis; push(c); }
 WE_API void we_deck_beats(int deck, const double* times, int count) {
   Cmd c{kBeats}; c.deck = deck;
@@ -1489,8 +1617,8 @@ WE_API int we_scope(int bus, double at, float* out, int n) {
 WE_API double we_deck_position(int deck) {
   we_deck_state s{};
   we_deck_read(deck, &s);
-  if (!s.playing || s.rate <= 0) return s.heard;
-  return s.heard + (now() - s.at) * s.rate;
+  if (s.rate == 0) return s.heard;
+  return std::max(0.0, s.heard + (now() - s.at) * s.rate);
 }
 
 }  // extern "C"

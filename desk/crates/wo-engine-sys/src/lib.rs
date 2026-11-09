@@ -86,6 +86,8 @@ unsafe extern "C" {
     pub fn we_deck_rate(deck: i32, rate: f64);
     pub fn we_deck_bend(deck: i32, factor: f64);
     pub fn we_deck_keylock(deck: i32, on: i32);
+    pub fn we_deck_scratch(deck: i32, on: i32);
+    pub fn we_deck_scratch_by(deck: i32, seconds: f64);
     pub fn we_deck_shift(deck: i32, semitones: f64);
     pub fn we_deck_beats(deck: i32, times: *const f64, count: i32);
     pub fn we_deck_sync(deck: i32, master: i32, every: i32, offset: f64);

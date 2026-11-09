@@ -1,0 +1,1746 @@
+{
+ "id": "pioneer_ddj_400_midi",
+ "name": "Pioneer DDJ-400",
+ "protocol": "midi",
+ "about": "The DDJ-400 as it comes, USB MIDI class (no driver). Each deck on its own channel (1, 2), its pads on 8 and 10 (9 and 11 with SHIFT), the mixer and the browser on 7, Beat FX on 5. SHIFT is the controller's own: held, its buttons send other notes, which this layout names as the same controls. Knobs and faders are 14-bit (MSB, then LSB), the jogs count from 0x40, 720 ticks a turn; the platter touched sends on one CC, its side on another. Lights: the button's own note, 0x7F/0x00; the level meters CC 0x02 on the deck's channel; a deck's jog ring flashes on note n of channel 16 when a record is loaded. From Mixxx's mapping by Warker, nschloe, dj3730, jusko and tiesjan.",
+ "match": {
+  "names": [
+   "DDJ-400"
+  ]
+ },
+ "midi": {
+  "on": 127,
+  "off": 0
+ },
+ "inputs": [
+  {
+   "id": "deck.a.shift",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x3F"
+  },
+  {
+   "id": "deck.a.play",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x0B"
+  },
+  {
+   "id": "deck.a.play",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x47"
+  },
+  {
+   "id": "deck.a.cue",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x0C"
+  },
+  {
+   "id": "deck.a.cue",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x48"
+  },
+  {
+   "id": "deck.a.sync",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x58"
+  },
+  {
+   "id": "deck.a.tempoRange",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x60"
+  },
+  {
+   "id": "deck.a.loop.in",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x10"
+  },
+  {
+   "id": "deck.a.beatloop.4",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x4C"
+  },
+  {
+   "id": "deck.a.loop.out",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x11"
+  },
+  {
+   "id": "deck.a.loop.out",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x4E"
+  },
+  {
+   "id": "deck.a.loop.exit",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x4D"
+  },
+  {
+   "id": "deck.a.loop.exit",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x50"
+  },
+  {
+   "id": "deck.a.loop.halve",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x51"
+  },
+  {
+   "id": "deck.a.loop.double",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x53"
+  },
+  {
+   "id": "deck.a.beatjump.-32",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x3E"
+  },
+  {
+   "id": "deck.a.beatjump.32",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x3D"
+  },
+  {
+   "id": "deck.a.pfl",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x54"
+  },
+  {
+   "id": "show.freeze",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x68"
+  },
+  {
+   "id": "deck.a.jog.touch",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x36"
+  },
+  {
+   "id": "deck.a.jog.touch",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x67"
+  },
+  {
+   "id": "deck.a.jog.scratch",
+   "kind": "jog",
+   "channel": 0,
+   "cc": "0x22",
+   "encoding": "offset64",
+   "ticksPerTurn": 720
+  },
+  {
+   "id": "deck.a.jog",
+   "kind": "jog",
+   "channel": 0,
+   "cc": "0x23",
+   "encoding": "offset64",
+   "ticksPerTurn": 720
+  },
+  {
+   "id": "deck.a.jog",
+   "kind": "jog",
+   "channel": 0,
+   "cc": "0x21",
+   "encoding": "offset64",
+   "ticksPerTurn": 720
+  },
+  {
+   "id": "deck.a.jog",
+   "kind": "jog",
+   "channel": 0,
+   "cc": "0x29",
+   "encoding": "offset64",
+   "ticksPerTurn": 720
+  },
+  {
+   "id": "deck.a.pitch",
+   "kind": "fader",
+   "channel": 0,
+   "cc": "0x00",
+   "lsb": "0x20",
+   "center": 8192,
+   "invert": true
+  },
+  {
+   "id": "deck.a.volume",
+   "kind": "fader",
+   "channel": 0,
+   "cc": "0x13",
+   "lsb": "0x33"
+  },
+  {
+   "id": "deck.a.trim",
+   "kind": "pot",
+   "channel": 0,
+   "cc": "0x04",
+   "lsb": "0x24",
+   "center": 8192
+  },
+  {
+   "id": "deck.a.eq.high",
+   "kind": "pot",
+   "channel": 0,
+   "cc": "0x07",
+   "lsb": "0x27",
+   "center": 8192
+  },
+  {
+   "id": "deck.a.eq.mid",
+   "kind": "pot",
+   "channel": 0,
+   "cc": "0x0B",
+   "lsb": "0x2B",
+   "center": 8192
+  },
+  {
+   "id": "deck.a.eq.low",
+   "kind": "pot",
+   "channel": 0,
+   "cc": "0x0F",
+   "lsb": "0x2F",
+   "center": 8192
+  },
+  {
+   "id": "deck.a.filter",
+   "kind": "pot",
+   "channel": 6,
+   "cc": "0x17",
+   "lsb": "0x37",
+   "center": 8192
+  },
+  {
+   "id": "deck.a.load",
+   "kind": "button",
+   "channel": 6,
+   "note": "0x46"
+  },
+  {
+   "id": "deck.a.hotcue.1",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x00"
+  },
+  {
+   "id": "deck.a.hotcue.2",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x01"
+  },
+  {
+   "id": "deck.a.hotcue.3",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x02"
+  },
+  {
+   "id": "deck.a.hotcue.4",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x03"
+  },
+  {
+   "id": "deck.a.hotcue.5",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x04"
+  },
+  {
+   "id": "deck.a.hotcue.6",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x05"
+  },
+  {
+   "id": "deck.a.hotcue.7",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x06"
+  },
+  {
+   "id": "deck.a.hotcue.8",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x07"
+  },
+  {
+   "id": "deck.a.beatloop.0.25",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x60"
+  },
+  {
+   "id": "deck.a.beatloop.0.5",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x61"
+  },
+  {
+   "id": "deck.a.beatloop.1",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x62"
+  },
+  {
+   "id": "deck.a.beatloop.2",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x63"
+  },
+  {
+   "id": "deck.a.beatloop.4",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x64"
+  },
+  {
+   "id": "deck.a.beatloop.8",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x65"
+  },
+  {
+   "id": "deck.a.beatloop.16",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x66"
+  },
+  {
+   "id": "deck.a.beatloop.32",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x67"
+  },
+  {
+   "id": "deck.a.beatjump.-1",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x20"
+  },
+  {
+   "id": "deck.a.beatjump.1",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x21"
+  },
+  {
+   "id": "deck.a.beatjump.-2",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x22"
+  },
+  {
+   "id": "deck.a.beatjump.2",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x23"
+  },
+  {
+   "id": "deck.a.beatjump.-4",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x24"
+  },
+  {
+   "id": "deck.a.beatjump.4",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x25"
+  },
+  {
+   "id": "deck.a.beatjump.-8",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x26"
+  },
+  {
+   "id": "deck.a.beatjump.8",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x27"
+  },
+  {
+   "id": "show.scene.prev",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x30"
+  },
+  {
+   "id": "show.scene.next",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x31"
+  },
+  {
+   "id": "show.hit",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x32"
+  },
+  {
+   "id": "show.blackout",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x33"
+  },
+  {
+   "id": "show.freeze",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x34"
+  },
+  {
+   "id": "show.strobe",
+   "kind": "button",
+   "channel": 7,
+   "note": "0x35"
+  },
+  {
+   "id": "deck.a.hotcue.1",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x00"
+  },
+  {
+   "id": "deck.a.hotcue.2",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x01"
+  },
+  {
+   "id": "deck.a.hotcue.3",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x02"
+  },
+  {
+   "id": "deck.a.hotcue.4",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x03"
+  },
+  {
+   "id": "deck.a.hotcue.5",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x04"
+  },
+  {
+   "id": "deck.a.hotcue.6",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x05"
+  },
+  {
+   "id": "deck.a.hotcue.7",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x06"
+  },
+  {
+   "id": "deck.a.hotcue.8",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x07"
+  },
+  {
+   "id": "deck.a.beatloop.0.25",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x60"
+  },
+  {
+   "id": "deck.a.beatloop.0.5",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x61"
+  },
+  {
+   "id": "deck.a.beatloop.1",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x62"
+  },
+  {
+   "id": "deck.a.beatloop.2",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x63"
+  },
+  {
+   "id": "deck.a.beatloop.4",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x64"
+  },
+  {
+   "id": "deck.a.beatloop.8",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x65"
+  },
+  {
+   "id": "deck.a.beatloop.16",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x66"
+  },
+  {
+   "id": "deck.a.beatloop.32",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x67"
+  },
+  {
+   "id": "deck.a.beatjump.-1",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x20"
+  },
+  {
+   "id": "deck.a.beatjump.1",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x21"
+  },
+  {
+   "id": "deck.a.beatjump.-2",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x22"
+  },
+  {
+   "id": "deck.a.beatjump.2",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x23"
+  },
+  {
+   "id": "deck.a.beatjump.-4",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x24"
+  },
+  {
+   "id": "deck.a.beatjump.4",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x25"
+  },
+  {
+   "id": "deck.a.beatjump.-8",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x26"
+  },
+  {
+   "id": "deck.a.beatjump.8",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x27"
+  },
+  {
+   "id": "show.scene.prev",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x30"
+  },
+  {
+   "id": "show.scene.next",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x31"
+  },
+  {
+   "id": "show.hit",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x32"
+  },
+  {
+   "id": "show.blackout",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x33"
+  },
+  {
+   "id": "show.freeze",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x34"
+  },
+  {
+   "id": "show.strobe",
+   "kind": "button",
+   "channel": 8,
+   "note": "0x35"
+  },
+  {
+   "id": "deck.b.shift",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x3F"
+  },
+  {
+   "id": "deck.b.play",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x0B"
+  },
+  {
+   "id": "deck.b.play",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x47"
+  },
+  {
+   "id": "deck.b.cue",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x0C"
+  },
+  {
+   "id": "deck.b.cue",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x48"
+  },
+  {
+   "id": "deck.b.sync",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x58"
+  },
+  {
+   "id": "deck.b.tempoRange",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x60"
+  },
+  {
+   "id": "deck.b.loop.in",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x10"
+  },
+  {
+   "id": "deck.b.beatloop.4",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x4C"
+  },
+  {
+   "id": "deck.b.loop.out",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x11"
+  },
+  {
+   "id": "deck.b.loop.out",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x4E"
+  },
+  {
+   "id": "deck.b.loop.exit",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x4D"
+  },
+  {
+   "id": "deck.b.loop.exit",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x50"
+  },
+  {
+   "id": "deck.b.loop.halve",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x51"
+  },
+  {
+   "id": "deck.b.loop.double",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x53"
+  },
+  {
+   "id": "deck.b.beatjump.-32",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x3E"
+  },
+  {
+   "id": "deck.b.beatjump.32",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x3D"
+  },
+  {
+   "id": "deck.b.pfl",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x54"
+  },
+  {
+   "id": "show.blackout",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x68"
+  },
+  {
+   "id": "deck.b.jog.touch",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x36"
+  },
+  {
+   "id": "deck.b.jog.touch",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x67"
+  },
+  {
+   "id": "deck.b.jog.scratch",
+   "kind": "jog",
+   "channel": 1,
+   "cc": "0x22",
+   "encoding": "offset64",
+   "ticksPerTurn": 720
+  },
+  {
+   "id": "deck.b.jog",
+   "kind": "jog",
+   "channel": 1,
+   "cc": "0x23",
+   "encoding": "offset64",
+   "ticksPerTurn": 720
+  },
+  {
+   "id": "deck.b.jog",
+   "kind": "jog",
+   "channel": 1,
+   "cc": "0x21",
+   "encoding": "offset64",
+   "ticksPerTurn": 720
+  },
+  {
+   "id": "deck.b.jog",
+   "kind": "jog",
+   "channel": 1,
+   "cc": "0x29",
+   "encoding": "offset64",
+   "ticksPerTurn": 720
+  },
+  {
+   "id": "deck.b.pitch",
+   "kind": "fader",
+   "channel": 1,
+   "cc": "0x00",
+   "lsb": "0x20",
+   "center": 8192,
+   "invert": true
+  },
+  {
+   "id": "deck.b.volume",
+   "kind": "fader",
+   "channel": 1,
+   "cc": "0x13",
+   "lsb": "0x33"
+  },
+  {
+   "id": "deck.b.trim",
+   "kind": "pot",
+   "channel": 1,
+   "cc": "0x04",
+   "lsb": "0x24",
+   "center": 8192
+  },
+  {
+   "id": "deck.b.eq.high",
+   "kind": "pot",
+   "channel": 1,
+   "cc": "0x07",
+   "lsb": "0x27",
+   "center": 8192
+  },
+  {
+   "id": "deck.b.eq.mid",
+   "kind": "pot",
+   "channel": 1,
+   "cc": "0x0B",
+   "lsb": "0x2B",
+   "center": 8192
+  },
+  {
+   "id": "deck.b.eq.low",
+   "kind": "pot",
+   "channel": 1,
+   "cc": "0x0F",
+   "lsb": "0x2F",
+   "center": 8192
+  },
+  {
+   "id": "deck.b.filter",
+   "kind": "pot",
+   "channel": 6,
+   "cc": "0x18",
+   "lsb": "0x38",
+   "center": 8192
+  },
+  {
+   "id": "deck.b.load",
+   "kind": "button",
+   "channel": 6,
+   "note": "0x47"
+  },
+  {
+   "id": "deck.b.hotcue.1",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x00"
+  },
+  {
+   "id": "deck.b.hotcue.2",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x01"
+  },
+  {
+   "id": "deck.b.hotcue.3",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x02"
+  },
+  {
+   "id": "deck.b.hotcue.4",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x03"
+  },
+  {
+   "id": "deck.b.hotcue.5",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x04"
+  },
+  {
+   "id": "deck.b.hotcue.6",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x05"
+  },
+  {
+   "id": "deck.b.hotcue.7",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x06"
+  },
+  {
+   "id": "deck.b.hotcue.8",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x07"
+  },
+  {
+   "id": "deck.b.beatloop.0.25",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x60"
+  },
+  {
+   "id": "deck.b.beatloop.0.5",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x61"
+  },
+  {
+   "id": "deck.b.beatloop.1",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x62"
+  },
+  {
+   "id": "deck.b.beatloop.2",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x63"
+  },
+  {
+   "id": "deck.b.beatloop.4",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x64"
+  },
+  {
+   "id": "deck.b.beatloop.8",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x65"
+  },
+  {
+   "id": "deck.b.beatloop.16",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x66"
+  },
+  {
+   "id": "deck.b.beatloop.32",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x67"
+  },
+  {
+   "id": "deck.b.beatjump.-1",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x20"
+  },
+  {
+   "id": "deck.b.beatjump.1",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x21"
+  },
+  {
+   "id": "deck.b.beatjump.-2",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x22"
+  },
+  {
+   "id": "deck.b.beatjump.2",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x23"
+  },
+  {
+   "id": "deck.b.beatjump.-4",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x24"
+  },
+  {
+   "id": "deck.b.beatjump.4",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x25"
+  },
+  {
+   "id": "deck.b.beatjump.-8",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x26"
+  },
+  {
+   "id": "deck.b.beatjump.8",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x27"
+  },
+  {
+   "id": "show.scene.prev",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x30"
+  },
+  {
+   "id": "show.scene.next",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x31"
+  },
+  {
+   "id": "show.hit",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x32"
+  },
+  {
+   "id": "show.blackout",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x33"
+  },
+  {
+   "id": "show.freeze",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x34"
+  },
+  {
+   "id": "show.strobe",
+   "kind": "button",
+   "channel": 9,
+   "note": "0x35"
+  },
+  {
+   "id": "deck.b.hotcue.1",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x00"
+  },
+  {
+   "id": "deck.b.hotcue.2",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x01"
+  },
+  {
+   "id": "deck.b.hotcue.3",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x02"
+  },
+  {
+   "id": "deck.b.hotcue.4",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x03"
+  },
+  {
+   "id": "deck.b.hotcue.5",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x04"
+  },
+  {
+   "id": "deck.b.hotcue.6",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x05"
+  },
+  {
+   "id": "deck.b.hotcue.7",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x06"
+  },
+  {
+   "id": "deck.b.hotcue.8",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x07"
+  },
+  {
+   "id": "deck.b.beatloop.0.25",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x60"
+  },
+  {
+   "id": "deck.b.beatloop.0.5",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x61"
+  },
+  {
+   "id": "deck.b.beatloop.1",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x62"
+  },
+  {
+   "id": "deck.b.beatloop.2",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x63"
+  },
+  {
+   "id": "deck.b.beatloop.4",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x64"
+  },
+  {
+   "id": "deck.b.beatloop.8",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x65"
+  },
+  {
+   "id": "deck.b.beatloop.16",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x66"
+  },
+  {
+   "id": "deck.b.beatloop.32",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x67"
+  },
+  {
+   "id": "deck.b.beatjump.-1",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x20"
+  },
+  {
+   "id": "deck.b.beatjump.1",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x21"
+  },
+  {
+   "id": "deck.b.beatjump.-2",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x22"
+  },
+  {
+   "id": "deck.b.beatjump.2",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x23"
+  },
+  {
+   "id": "deck.b.beatjump.-4",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x24"
+  },
+  {
+   "id": "deck.b.beatjump.4",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x25"
+  },
+  {
+   "id": "deck.b.beatjump.-8",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x26"
+  },
+  {
+   "id": "deck.b.beatjump.8",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x27"
+  },
+  {
+   "id": "show.scene.prev",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x30"
+  },
+  {
+   "id": "show.scene.next",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x31"
+  },
+  {
+   "id": "show.hit",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x32"
+  },
+  {
+   "id": "show.blackout",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x33"
+  },
+  {
+   "id": "show.freeze",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x34"
+  },
+  {
+   "id": "show.strobe",
+   "kind": "button",
+   "channel": 10,
+   "note": "0x35"
+  },
+  {
+   "id": "mixer.crossfader",
+   "kind": "fader",
+   "channel": 6,
+   "cc": "0x1F",
+   "lsb": "0x3F"
+  },
+  {
+   "id": "browse.turn",
+   "kind": "encoder",
+   "channel": 6,
+   "cc": "0x40",
+   "encoding": "signed7"
+  },
+  {
+   "id": "fx.on",
+   "kind": "button",
+   "channel": 4,
+   "note": "0x47"
+  },
+  {
+   "id": "fx.on",
+   "kind": "button",
+   "channel": 4,
+   "note": "0x43"
+  },
+  {
+   "id": "fx.to.a",
+   "kind": "button",
+   "channel": 4,
+   "note": "0x10"
+  },
+  {
+   "id": "fx.to.b",
+   "kind": "button",
+   "channel": 4,
+   "note": "0x11"
+  },
+  {
+   "id": "fx.to.master",
+   "kind": "button",
+   "channel": 4,
+   "note": "0x14"
+  },
+  {
+   "id": "fx.level",
+   "kind": "pot",
+   "channel": 4,
+   "cc": "0x02"
+  }
+ ],
+ "outputs": [
+  {
+   "id": "deck.a.play",
+   "channel": 0,
+   "note": "0x0B"
+  },
+  {
+   "id": "deck.a.play",
+   "channel": 0,
+   "note": "0x47"
+  },
+  {
+   "id": "deck.a.cue",
+   "channel": 0,
+   "note": "0x0C"
+  },
+  {
+   "id": "deck.a.cue",
+   "channel": 0,
+   "note": "0x48"
+  },
+  {
+   "id": "deck.a.sync",
+   "channel": 0,
+   "note": "0x58"
+  },
+  {
+   "id": "deck.a.loop.in",
+   "channel": 0,
+   "note": "0x10"
+  },
+  {
+   "id": "deck.a.loop.in",
+   "channel": 0,
+   "note": "0x4C"
+  },
+  {
+   "id": "deck.a.loop.out",
+   "channel": 0,
+   "note": "0x11"
+  },
+  {
+   "id": "deck.a.loop.out",
+   "channel": 0,
+   "note": "0x4E"
+  },
+  {
+   "id": "deck.a.loop.exit",
+   "channel": 0,
+   "note": "0x4D"
+  },
+  {
+   "id": "deck.a.loop.exit",
+   "channel": 0,
+   "note": "0x50"
+  },
+  {
+   "id": "deck.a.meter",
+   "channel": 0,
+   "cc": "0x02",
+   "meter": true
+  },
+  {
+   "id": "deck.a.loaded",
+   "channel": 15,
+   "note": "0x00"
+  },
+  {
+   "id": "deck.a.hotcue.1",
+   "channel": 7,
+   "note": "0x00"
+  },
+  {
+   "id": "deck.a.hotcue.2",
+   "channel": 7,
+   "note": "0x01"
+  },
+  {
+   "id": "deck.a.hotcue.3",
+   "channel": 7,
+   "note": "0x02"
+  },
+  {
+   "id": "deck.a.hotcue.4",
+   "channel": 7,
+   "note": "0x03"
+  },
+  {
+   "id": "deck.a.hotcue.5",
+   "channel": 7,
+   "note": "0x04"
+  },
+  {
+   "id": "deck.a.hotcue.6",
+   "channel": 7,
+   "note": "0x05"
+  },
+  {
+   "id": "deck.a.hotcue.7",
+   "channel": 7,
+   "note": "0x06"
+  },
+  {
+   "id": "deck.a.hotcue.8",
+   "channel": 7,
+   "note": "0x07"
+  },
+  {
+   "id": "deck.a.beatloop.0.25",
+   "channel": 7,
+   "note": "0x60"
+  },
+  {
+   "id": "deck.a.beatloop.0.5",
+   "channel": 7,
+   "note": "0x61"
+  },
+  {
+   "id": "deck.a.beatloop.1",
+   "channel": 7,
+   "note": "0x62"
+  },
+  {
+   "id": "deck.a.beatloop.2",
+   "channel": 7,
+   "note": "0x63"
+  },
+  {
+   "id": "deck.a.beatloop.4",
+   "channel": 7,
+   "note": "0x64"
+  },
+  {
+   "id": "deck.a.beatloop.8",
+   "channel": 7,
+   "note": "0x65"
+  },
+  {
+   "id": "deck.a.beatloop.16",
+   "channel": 7,
+   "note": "0x66"
+  },
+  {
+   "id": "deck.a.beatloop.32",
+   "channel": 7,
+   "note": "0x67"
+  },
+  {
+   "id": "show.blackout",
+   "channel": 7,
+   "note": "0x33"
+  },
+  {
+   "id": "show.freeze",
+   "channel": 7,
+   "note": "0x34"
+  },
+  {
+   "id": "deck.a.hotcue.1",
+   "channel": 8,
+   "note": "0x00"
+  },
+  {
+   "id": "deck.a.hotcue.2",
+   "channel": 8,
+   "note": "0x01"
+  },
+  {
+   "id": "deck.a.hotcue.3",
+   "channel": 8,
+   "note": "0x02"
+  },
+  {
+   "id": "deck.a.hotcue.4",
+   "channel": 8,
+   "note": "0x03"
+  },
+  {
+   "id": "deck.a.hotcue.5",
+   "channel": 8,
+   "note": "0x04"
+  },
+  {
+   "id": "deck.a.hotcue.6",
+   "channel": 8,
+   "note": "0x05"
+  },
+  {
+   "id": "deck.a.hotcue.7",
+   "channel": 8,
+   "note": "0x06"
+  },
+  {
+   "id": "deck.a.hotcue.8",
+   "channel": 8,
+   "note": "0x07"
+  },
+  {
+   "id": "deck.a.beatloop.0.25",
+   "channel": 8,
+   "note": "0x60"
+  },
+  {
+   "id": "deck.a.beatloop.0.5",
+   "channel": 8,
+   "note": "0x61"
+  },
+  {
+   "id": "deck.a.beatloop.1",
+   "channel": 8,
+   "note": "0x62"
+  },
+  {
+   "id": "deck.a.beatloop.2",
+   "channel": 8,
+   "note": "0x63"
+  },
+  {
+   "id": "deck.a.beatloop.4",
+   "channel": 8,
+   "note": "0x64"
+  },
+  {
+   "id": "deck.a.beatloop.8",
+   "channel": 8,
+   "note": "0x65"
+  },
+  {
+   "id": "deck.a.beatloop.16",
+   "channel": 8,
+   "note": "0x66"
+  },
+  {
+   "id": "deck.a.beatloop.32",
+   "channel": 8,
+   "note": "0x67"
+  },
+  {
+   "id": "show.blackout",
+   "channel": 8,
+   "note": "0x33"
+  },
+  {
+   "id": "show.freeze",
+   "channel": 8,
+   "note": "0x34"
+  },
+  {
+   "id": "deck.b.play",
+   "channel": 1,
+   "note": "0x0B"
+  },
+  {
+   "id": "deck.b.play",
+   "channel": 1,
+   "note": "0x47"
+  },
+  {
+   "id": "deck.b.cue",
+   "channel": 1,
+   "note": "0x0C"
+  },
+  {
+   "id": "deck.b.cue",
+   "channel": 1,
+   "note": "0x48"
+  },
+  {
+   "id": "deck.b.sync",
+   "channel": 1,
+   "note": "0x58"
+  },
+  {
+   "id": "deck.b.loop.in",
+   "channel": 1,
+   "note": "0x10"
+  },
+  {
+   "id": "deck.b.loop.in",
+   "channel": 1,
+   "note": "0x4C"
+  },
+  {
+   "id": "deck.b.loop.out",
+   "channel": 1,
+   "note": "0x11"
+  },
+  {
+   "id": "deck.b.loop.out",
+   "channel": 1,
+   "note": "0x4E"
+  },
+  {
+   "id": "deck.b.loop.exit",
+   "channel": 1,
+   "note": "0x4D"
+  },
+  {
+   "id": "deck.b.loop.exit",
+   "channel": 1,
+   "note": "0x50"
+  },
+  {
+   "id": "deck.b.meter",
+   "channel": 1,
+   "cc": "0x02",
+   "meter": true
+  },
+  {
+   "id": "deck.b.loaded",
+   "channel": 15,
+   "note": "0x01"
+  },
+  {
+   "id": "deck.b.hotcue.1",
+   "channel": 9,
+   "note": "0x00"
+  },
+  {
+   "id": "deck.b.hotcue.2",
+   "channel": 9,
+   "note": "0x01"
+  },
+  {
+   "id": "deck.b.hotcue.3",
+   "channel": 9,
+   "note": "0x02"
+  },
+  {
+   "id": "deck.b.hotcue.4",
+   "channel": 9,
+   "note": "0x03"
+  },
+  {
+   "id": "deck.b.hotcue.5",
+   "channel": 9,
+   "note": "0x04"
+  },
+  {
+   "id": "deck.b.hotcue.6",
+   "channel": 9,
+   "note": "0x05"
+  },
+  {
+   "id": "deck.b.hotcue.7",
+   "channel": 9,
+   "note": "0x06"
+  },
+  {
+   "id": "deck.b.hotcue.8",
+   "channel": 9,
+   "note": "0x07"
+  },
+  {
+   "id": "deck.b.beatloop.0.25",
+   "channel": 9,
+   "note": "0x60"
+  },
+  {
+   "id": "deck.b.beatloop.0.5",
+   "channel": 9,
+   "note": "0x61"
+  },
+  {
+   "id": "deck.b.beatloop.1",
+   "channel": 9,
+   "note": "0x62"
+  },
+  {
+   "id": "deck.b.beatloop.2",
+   "channel": 9,
+   "note": "0x63"
+  },
+  {
+   "id": "deck.b.beatloop.4",
+   "channel": 9,
+   "note": "0x64"
+  },
+  {
+   "id": "deck.b.beatloop.8",
+   "channel": 9,
+   "note": "0x65"
+  },
+  {
+   "id": "deck.b.beatloop.16",
+   "channel": 9,
+   "note": "0x66"
+  },
+  {
+   "id": "deck.b.beatloop.32",
+   "channel": 9,
+   "note": "0x67"
+  },
+  {
+   "id": "show.blackout",
+   "channel": 9,
+   "note": "0x33"
+  },
+  {
+   "id": "show.freeze",
+   "channel": 9,
+   "note": "0x34"
+  },
+  {
+   "id": "deck.b.hotcue.1",
+   "channel": 10,
+   "note": "0x00"
+  },
+  {
+   "id": "deck.b.hotcue.2",
+   "channel": 10,
+   "note": "0x01"
+  },
+  {
+   "id": "deck.b.hotcue.3",
+   "channel": 10,
+   "note": "0x02"
+  },
+  {
+   "id": "deck.b.hotcue.4",
+   "channel": 10,
+   "note": "0x03"
+  },
+  {
+   "id": "deck.b.hotcue.5",
+   "channel": 10,
+   "note": "0x04"
+  },
+  {
+   "id": "deck.b.hotcue.6",
+   "channel": 10,
+   "note": "0x05"
+  },
+  {
+   "id": "deck.b.hotcue.7",
+   "channel": 10,
+   "note": "0x06"
+  },
+  {
+   "id": "deck.b.hotcue.8",
+   "channel": 10,
+   "note": "0x07"
+  },
+  {
+   "id": "deck.b.beatloop.0.25",
+   "channel": 10,
+   "note": "0x60"
+  },
+  {
+   "id": "deck.b.beatloop.0.5",
+   "channel": 10,
+   "note": "0x61"
+  },
+  {
+   "id": "deck.b.beatloop.1",
+   "channel": 10,
+   "note": "0x62"
+  },
+  {
+   "id": "deck.b.beatloop.2",
+   "channel": 10,
+   "note": "0x63"
+  },
+  {
+   "id": "deck.b.beatloop.4",
+   "channel": 10,
+   "note": "0x64"
+  },
+  {
+   "id": "deck.b.beatloop.8",
+   "channel": 10,
+   "note": "0x65"
+  },
+  {
+   "id": "deck.b.beatloop.16",
+   "channel": 10,
+   "note": "0x66"
+  },
+  {
+   "id": "deck.b.beatloop.32",
+   "channel": 10,
+   "note": "0x67"
+  },
+  {
+   "id": "show.blackout",
+   "channel": 10,
+   "note": "0x33"
+  },
+  {
+   "id": "show.freeze",
+   "channel": 10,
+   "note": "0x34"
+  },
+  {
+   "id": "fx.on",
+   "channel": 4,
+   "note": "0x47"
+  },
+  {
+   "id": "fx.on",
+   "channel": 4,
+   "note": "0x43"
+  }
+ ],
+ "notes": {
+  "deck.a.shift": "SHIFT: held, the other controls' second meanings.",
+  "deck.a.jog.scratch": "The platter touched on top: the hard bend (as the RMX in SCRATCH). Its side, or spun untouched: the nudge. SHIFT + the platter: search.",
+  "deck.a.pitch": "TEMPO, down is faster. SHIFT + BEAT SYNC cycles its range \u00b18 \u2192 16 \u2192 50 %.",
+  "deck.a.trim": "TRIM: the deck's gain, \u00b112 dB.",
+  "deck.a.filter": "CFX: the filter, low-pass left, high-pass right.",
+  "deck.a.hotcue.1": "HOT CUE pads 1\u20138: set, then jump; SHIFT clears.",
+  "deck.a.beatloop.1": "BEAT LOOP pads: \u00bc \u2192 32 beats from the bar; the same again lets go.",
+  "deck.a.beatjump.1": "BEAT JUMP pads: 1, 2, 4, 8 beats back (odd) and on (even).",
+  "show.hit": "SAMPLER pads are the show's: 1 the scene before, 2 the next, 3 a hit, 4 blackout, 5 freeze, 6 strobe while held.",
+  "deck.a.loop.in": "LOOP IN / OUT / RELOOP-EXIT; SHIFT + IN a 4-beat loop; CUE/LOOP CALL \u25c0 \u25b6 halve and double it, with SHIFT jump 32 beats.",
+  "deck.a.pfl": "The headphone CUE buttons are the show's (one output): the scene before (A), the next (B). SHIFT: freeze (A), blackout (B).",
+  "fx.on": "Beat FX is the echo: CH SELECT picks the deck (MASTER: both), LEVEL/DEPTH its send, ON/OFF on and off.",
+  "mixer.headMix": "Not bound: the booth has one output."
+ }
+}

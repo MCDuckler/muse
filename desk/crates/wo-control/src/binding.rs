@@ -1,8 +1,11 @@
 //! One binding for every controller (the v1 booth's, binding.dart): a control's event
-//! as what the booth should do. STOP held is shift; SCRATCH flips the jog wheel; the
-//! knob over a Hercules's fader is the filter; pads 1–4 are hot cues, 5 and 6 loop in
-//! and out; shift + pitch reset cycles the pitch range. Knobs and faders take over only
-//! once they reach where the booth is (soft takeover).
+//! as what the booth should do. STOP held is shift (a SHIFT button is too, and only that);
+//! SCRATCH flips the jog wheel (a platter's touched top always scratches); the knob over a
+//! Hercules's fader is the filter; pads 1–4 are hot cues, 5 and 6 loop in and out; shift +
+//! pitch reset cycles the pitch range. Controllers with more say it by name: hot cues 1–8,
+//! beat loops and jumps of so many beats, the loop buttons, a trim, a filter, a browse knob,
+//! an FX section (the echo). Knobs and faders take over only once they reach where the
+//! booth is (soft takeover).
 use std::collections::{HashMap, HashSet};
 
 use crate::decode::Event;
@@ -18,6 +21,8 @@ pub struct Positions {
     pub eq: [[f32; 3]; 2],
     /// the pitch fader, -1..1
     pub pitch: [f64; 2],
+    /// the trim, 0.5 unity
+    pub gain: [f32; 2],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -33,11 +38,14 @@ pub enum Action {
     CyclePitchRange,
     /// The pitch fader, -1..1 of the deck's range.
     Pitch(usize, f64),
+    /// `ticks` as the booth counts them (128 a turn); `shift`: searching.
     Jog { deck: usize, ticks: f64, scratch: bool, shift: bool },
     Load(usize),
     /// Beats on (negative: back).
     Jump(usize, f64),
     Fader(usize, f32),
+    /// The trim, 0..1 (0.5 unity).
+    Gain(usize, f32),
     Filter(usize, f32),
     /// band 0 low, 1 mid, 2 high; knob 0..1
     Eq(usize, usize, f32),
@@ -47,7 +55,12 @@ pub enum Action {
     LoopIn(usize),
     LoopOut(usize),
     HalveLoop(usize),
+    DoubleLoop(usize),
+    /// A loop of so many beats from the bar (the same again lets go).
+    LoopBeats(usize, f64),
     Unloop(usize),
+    /// The deck's echo send, 0 for none (its tail rings out).
+    Echo(usize, f32),
     Crossfader(f32),
     Browse(i32, i32),
     /// The show (the stage's director), as the v1 booth binds it.
@@ -101,14 +114,28 @@ impl SoftTakeover {
         self.last_hw.remove(id);
         self.taken.remove(id);
     }
+
+    /// Whether `id` has been heard and is not (or no longer) taken.
+    pub fn waits(&self, id: &str) -> bool {
+        self.last_hw.contains_key(id) && self.taken.get(id) != Some(&true)
+    }
 }
 
-#[derive(Default)]
 pub struct Binding {
     shift_held: HashSet<usize>,
     shift_used: bool,
     pub scratch: bool,
     takeover: SoftTakeover,
+    /// The FX section: on, how much, on which deck (None: both).
+    pub fx_on: bool,
+    pub fx_level: f32,
+    pub fx_to: Option<usize>,
+}
+
+impl Default for Binding {
+    fn default() -> Self {
+        Binding { shift_held: HashSet::new(), shift_used: false, scratch: false, takeover: SoftTakeover::default(), fx_on: false, fx_level: 0.5, fx_to: None }
+    }
 }
 
 /// "deck.b.eq.low" → (Some(1), "eq.low"); "mixer.crossfader" → (None, "mixer.crossfader").
@@ -131,6 +158,11 @@ impl Binding {
         !self.shift_held.is_empty()
     }
 
+    /// Whether knob or fader `id` was moved but waits to reach the booth's (soft takeover).
+    pub fn waits(&self, id: &str) -> bool {
+        self.takeover.waits(id)
+    }
+
     /// What the booth should do for `e`, the booth's knobs being at `at`.
     pub fn handle(&mut self, e: &Event, at: &Positions) -> Vec<Action> {
         let (deck, name) = split(&e.id);
@@ -146,6 +178,7 @@ impl Binding {
                     self.scratch = !self.scratch;
                     vec![]
                 }
+                "browse.turn" if e.value != 0.0 => vec![Action::Browse(0, e.value.round() as i32)],
                 "browse.up" if pressed => vec![Action::Browse(0, -1)],
                 "browse.down" if pressed => vec![Action::Browse(0, 1)],
                 "browse.left" if pressed => vec![Action::Browse(-1, 0)],
@@ -156,12 +189,33 @@ impl Binding {
                 "show.blackout" if pressed => vec![Action::Show(ShowCue::Blackout)],
                 "show.freeze" if pressed => vec![Action::Show(ShowCue::Freeze)],
                 "show.strobe" if e.kind == Kind::Button => vec![Action::Show(ShowCue::Strobe(pressed))],
+                "fx.on" if pressed => {
+                    self.fx_on = !self.fx_on;
+                    self.echo()
+                }
+                "fx.to.a" | "fx.to.b" | "fx.to.master" if pressed => {
+                    self.fx_to = match name {
+                        "fx.to.a" => Some(0),
+                        "fx.to.b" => Some(1),
+                        _ => None,
+                    };
+                    if self.fx_on { self.echo() } else { vec![] }
+                }
+                "fx.level" => {
+                    self.fx_level = e.value as f32;
+                    if self.fx_on { self.echo() } else { vec![] }
+                }
                 _ => vec![],
             };
         };
         match name {
             "play" if pressed => vec![Action::PlayPause(d)],
             "cue" if e.kind == Kind::Button => vec![if pressed { Action::CueDown(d) } else { Action::CueUp(d) }],
+            // a SHIFT of its own: only ever shift
+            "shift" => {
+                if pressed { self.shift_held.insert(d) } else { self.shift_held.remove(&d) };
+                vec![]
+            }
             "stop" => {
                 if pressed {
                     self.shift_held.insert(d);
@@ -186,6 +240,21 @@ impl Binding {
             }
             "pitch" if self.take(e, (at.pitch[d] + 1.0) / 2.0) => vec![Action::Pitch(d, (e.value - 0.5) * 2.0)],
             "jog" => vec![Action::Jog { deck: d, ticks: e.value, scratch: self.scratch, shift }],
+            "jog.scratch" => vec![Action::Jog { deck: d, ticks: e.value, scratch: true, shift }],
+            "tempoRange" if pressed => {
+                self.takeover.drop("deck.a.pitch");
+                self.takeover.drop("deck.b.pitch");
+                vec![Action::CyclePitchRange]
+            }
+            "trim" if self.take(e, at.gain[d] as f64) => {
+                let v = if (e.value - 0.5).abs() < 0.012 { 0.5 } else { e.value };
+                vec![Action::Gain(d, v as f32)]
+            }
+            "loop.in" if pressed => vec![Action::LoopIn(d)],
+            "loop.out" if pressed => vec![Action::LoopOut(d)],
+            "loop.exit" if pressed => vec![Action::Unloop(d)],
+            "loop.halve" if pressed => vec![Action::HalveLoop(d)],
+            "loop.double" if pressed => vec![Action::DoubleLoop(d)],
             "load" if pressed => vec![Action::Load(d)],
             "prev" | "next" if pressed => {
                 let beats = if shift { 32.0 } else { 4.0 };
@@ -196,7 +265,7 @@ impl Binding {
                 let v = if e.value < 0.02 { 0.0 } else { e.value };
                 if self.take(e, at.fader[d] as f64) { vec![Action::Fader(d, v as f32)] } else { vec![] }
             }
-            "gain" if self.take(e, at.filter[d] as f64) => {
+            "gain" | "filter" if self.take(e, at.filter[d] as f64) => {
                 let v = if (e.value - 0.5).abs() < 0.03 { 0.5 } else { e.value };
                 vec![Action::Filter(d, v as f32)]
             }
@@ -223,18 +292,35 @@ impl Binding {
             "kill.low" if pressed => vec![Action::KillToggle(d, 0)],
             "kill.mid" if pressed => vec![Action::KillToggle(d, 1)],
             "kill.high" if pressed => vec![Action::KillToggle(d, 2)],
-            _ => match name.strip_prefix("pad.").and_then(|n| n.parse::<usize>().ok()) {
-                Some(n) if pressed => vec![match (n, shift) {
-                    (5, false) => Action::LoopIn(d),
-                    (5, true) => Action::HalveLoop(d),
-                    (6, false) => Action::LoopOut(d),
-                    (6, true) => Action::Unloop(d),
-                    (n, false) => Action::Pad(d, n - 1),
-                    (n, true) => Action::ClearPad(d, n - 1),
-                }],
-                _ => vec![],
-            },
+            _ if !pressed => vec![],
+            _ => {
+                let number = |prefix: &str| name.strip_prefix(prefix).and_then(|n| n.parse::<f64>().ok()).filter(|n| n.is_finite());
+                if let Some(n) = number("pad.").filter(|n| *n >= 1.0 && *n <= 8.0) {
+                    vec![match (n as usize, shift) {
+                        (5, false) => Action::LoopIn(d),
+                        (5, true) => Action::HalveLoop(d),
+                        (6, false) => Action::LoopOut(d),
+                        (6, true) => Action::Unloop(d),
+                        (n, false) => Action::Pad(d, n - 1),
+                        (n, true) => Action::ClearPad(d, n - 1),
+                    }]
+                } else if let Some(n) = number("hotcue.").filter(|n| *n >= 1.0 && *n <= 8.0) {
+                    let n = n as usize - 1;
+                    vec![if shift { Action::ClearPad(d, n) } else { Action::Pad(d, n) }]
+                } else if let Some(b) = number("beatloop.").filter(|b| *b > 0.0) {
+                    vec![Action::LoopBeats(d, b)]
+                } else if let Some(b) = number("beatjump.").filter(|b| *b != 0.0) {
+                    vec![Action::Jump(d, b)]
+                } else {
+                    vec![]
+                }
+            }
         }
+    }
+
+    /// The echo as the FX section says: its send on the deck(s) it is on, none elsewhere.
+    fn echo(&self) -> Vec<Action> {
+        (0..2).map(|d| Action::Echo(d, if self.fx_on && self.fx_to.is_none_or(|t| t == d) { self.fx_level } else { 0.0 })).collect()
     }
 
     fn take(&mut self, e: &Event, sw: f64) -> bool {
@@ -289,9 +375,70 @@ mod tests {
         let knob = |v: f64| Event { id: "deck.a.eq.low".into(), kind: Kind::Pot, value: v };
         assert!(b.handle(&knob(0.1), &at).is_empty(), "the knob is far from the booth's");
         assert!(b.handle(&knob(0.3), &at).is_empty());
+        assert!(b.waits("deck.a.eq.low") && !b.waits("deck.a.eq.mid"));
         assert_eq!(b.handle(&knob(0.55), &at), vec![Action::Eq(0, 0, 0.55)], "crossed it: taken");
         at.eq[0][0] = 0.55;
+        assert!(!b.waits("deck.a.eq.low"));
         assert_eq!(b.handle(&knob(0.6), &at), vec![Action::Eq(0, 0, 0.6)]);
+    }
+
+    #[test]
+    fn a_shift_button_is_only_shift() {
+        let (mut b, at) = (Binding::default(), Positions::default());
+        assert!(b.handle(&button("deck.a.shift", true), &at).is_empty());
+        assert!(b.shift());
+        assert_eq!(b.handle(&button("deck.b.hotcue.7", true), &at), vec![Action::ClearPad(1, 6)], "either SHIFT shifts both decks");
+        assert!(b.handle(&button("deck.a.shift", false), &at).is_empty(), "let go: no stop");
+        assert!(!b.shift());
+        assert_eq!(b.handle(&button("deck.b.hotcue.7", true), &at), vec![Action::Pad(1, 6)]);
+    }
+
+    #[test]
+    fn hot_cues_loops_and_jumps_by_name() {
+        let (mut b, at) = (Binding::default(), Positions::default());
+        assert_eq!(b.handle(&button("deck.a.hotcue.5", true), &at), vec![Action::Pad(0, 4)], "5–8 are hot cues too");
+        assert!(b.handle(&button("deck.a.hotcue.5", false), &at).is_empty());
+        assert!(b.handle(&button("deck.a.hotcue.9", true), &at).is_empty(), "the booth has eight");
+        assert_eq!(b.handle(&button("deck.b.beatloop.0.25", true), &at), vec![Action::LoopBeats(1, 0.25)]);
+        assert_eq!(b.handle(&button("deck.b.beatjump.-8", true), &at), vec![Action::Jump(1, -8.0)]);
+        assert_eq!(b.handle(&button("deck.a.loop.exit", true), &at), vec![Action::Unloop(0)]);
+        assert_eq!(b.handle(&button("deck.a.loop.double", true), &at), vec![Action::DoubleLoop(0)]);
+        assert_eq!(b.handle(&button("deck.a.tempoRange", true), &at), vec![Action::CyclePitchRange]);
+        let browse = Event { id: "browse.turn".into(), kind: Kind::Encoder, value: -2.0 };
+        assert_eq!(b.handle(&browse, &at), vec![Action::Browse(0, -2)]);
+    }
+
+    #[test]
+    fn trim_and_filter_take_over() {
+        let mut b = Binding::default();
+        let at = Positions { gain: [0.5, 0.5], filter: [0.5, 0.5], ..Positions::default() };
+        let trim = |v: f64| Event { id: "deck.b.trim".into(), kind: Kind::Pot, value: v };
+        assert!(b.handle(&trim(0.9), &at).is_empty());
+        assert_eq!(b.handle(&trim(0.501), &at), vec![Action::Gain(1, 0.5)], "near the middle is the middle");
+        let filter = Event { id: "deck.a.filter".into(), kind: Kind::Pot, value: 0.5 };
+        assert_eq!(b.handle(&filter, &at), vec![Action::Filter(0, 0.5)]);
+    }
+
+    #[test]
+    fn the_fx_section_is_the_echo() {
+        let (mut b, at) = (Binding::default(), Positions::default());
+        let level = |v: f64| Event { id: "fx.level".into(), kind: Kind::Pot, value: v };
+        assert!(b.handle(&level(0.8), &at).is_empty(), "off: the knob only waits");
+        assert_eq!(b.handle(&button("fx.on", true), &at), vec![Action::Echo(0, 0.8), Action::Echo(1, 0.8)], "MASTER: both");
+        assert_eq!(b.handle(&button("fx.to.b", true), &at), vec![Action::Echo(0, 0.0), Action::Echo(1, 0.8)]);
+        assert_eq!(b.handle(&level(0.4), &at), vec![Action::Echo(0, 0.0), Action::Echo(1, 0.4)]);
+        assert_eq!(b.handle(&button("fx.on", true), &at), vec![Action::Echo(0, 0.0), Action::Echo(1, 0.0)], "off: the tails ring out");
+    }
+
+    #[test]
+    fn a_touched_platter_scratches() {
+        let (mut b, at) = (Binding::default(), Positions::default());
+        let jog = |id: &str| Event { id: id.into(), kind: Kind::Jog, value: 2.0 };
+        assert_eq!(b.handle(&jog("deck.a.jog.scratch"), &at), vec![Action::Jog { deck: 0, ticks: 2.0, scratch: true, shift: false }]);
+        assert_eq!(b.handle(&jog("deck.a.jog"), &at), vec![Action::Jog { deck: 0, ticks: 2.0, scratch: false, shift: false }]);
+        b.handle(&button("deck.b.shift", true), &at);
+        assert_eq!(b.handle(&jog("deck.a.jog"), &at), vec![Action::Jog { deck: 0, ticks: 2.0, scratch: false, shift: true }], "SHIFT: search");
+        assert!(b.handle(&button("deck.a.jog.touch", true), &at).is_empty());
     }
 
     #[test]

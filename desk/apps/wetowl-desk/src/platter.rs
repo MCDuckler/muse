@@ -31,8 +31,10 @@ pub(crate) struct Spin {
     angle: f64,
     speed: f64,
     at: Option<f64>,
-    /// The hand's angle on it while it drags.
+    /// The hand's angle on it while it drags, and whether that hand holds the record
+    /// (scratching; a shift-drag searches instead).
     hand: Option<f32>,
+    held: bool,
     /// The still vinyl and the turning label, with what they were made for.
     vinyl: Option<((i64, usize, u16), TextureHandle)>,
     top: Option<((i64, usize, bool, u16), TextureHandle)>,
@@ -265,16 +267,31 @@ impl crate::App {
         let dt = spin.at.map_or(0.0, |a| (now - a).clamp(0.0, 0.1));
         spin.at = Some(now);
         let target = if v.playing && !empty { v.rate.max(0.0) / TURN } else { 0.0 };
-        let tau = if target > spin.speed { UP } else { DOWN };
-        spin.speed += (target - spin.speed) * (1.0 - (-dt / tau).exp());
-        if (target - spin.speed).abs() < 1e-4 {
-            spin.speed = target;
+        // a hand on it (a controller's, or let go and coming back up to speed): the
+        // record as it really goes, backwards too; the mouse's own turns it below
+        let by_hand = v.held || (v.speed - if v.playing { v.rate } else { 0.0 }).abs() > 0.02;
+        if spin.held {
+            spin.speed = 0.0;
+        } else if by_hand && !empty {
+            spin.speed = v.speed / TURN;
+        } else {
+            let tau = if target > spin.speed { UP } else { DOWN };
+            spin.speed += (target - spin.speed) * (1.0 - (-dt / tau).exp());
+            if (target - spin.speed).abs() < 1e-4 {
+                spin.speed = target;
+            }
         }
         spin.angle = (spin.angle + spin.speed * dt).rem_euclid(1024.0);
         if spin.speed.abs() > 1e-4 {
             ctx.request_repaint();
         }
-        // the hand on it: the jog wheel (parked: the record moves; playing: it bends)
+        // the hand on it: the record held, taken where the hand goes (scratching); with
+        // shift the jog wheel's search
+        let shift = ui.input(|i| i.modifiers.shift);
+        if resp.drag_started() && !empty && !shift {
+            desk.scratch(d, true);
+            spin.held = true;
+        }
         if resp.dragged() && !empty {
             if let Some(pos) = resp.interact_pointer_pos() {
                 let a = (pos.y - c.y).atan2(pos.x - c.x);
@@ -287,13 +304,20 @@ impl crate::App {
                     }
                     let turns = da as f64 / std::f64::consts::TAU;
                     spin.angle += turns;
-                    let shift = ui.input(|i| i.modifiers.shift);
-                    desk.jog(d, turns * TICKS_A_TURN, false, shift);
+                    if spin.held {
+                        desk.scratch_by(d, turns * TURN);
+                    } else {
+                        desk.jog(d, turns * TICKS_A_TURN, false, shift);
+                    }
                 }
                 spin.hand = Some(a);
             }
         } else {
             spin.hand = None;
+            if spin.held {
+                desk.scratch(d, false);
+                spin.held = false;
+            }
         }
         if resp.hovered() && !empty {
             let dy = ui.input(|i| i.smooth_scroll_delta.y);
@@ -410,7 +434,7 @@ impl crate::App {
             p.circle_stroke(c, rr + 0.5, Stroke::new(1.0, Color32::from_white_alpha((40.0 * h) as u8)));
         }
         resp.on_hover_cursor(if self.platters[d].hand.is_some() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab })
-            .on_hover_text("The jog wheel: a drag bends the record while it plays and moves it while it is parked (shift: further); scroll for a little")
+            .on_hover_text("The record under your hand: drag it to scratch — held still it stops, pulled back it plays backwards, let go it spins up again (shift: search); scroll to nudge")
     }
 }
 

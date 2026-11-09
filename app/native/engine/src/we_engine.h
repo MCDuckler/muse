@@ -83,6 +83,14 @@ WE_API void we_deck_rate(int deck, double rate);
 // deck keeps the place a bend leaves it in.
 WE_API void we_deck_bend(int deck, double factor);
 WE_API void we_deck_keylock(int deck, int on);
+// A hand on the record (on 1) or off it (0): scratching. Under the hand the record
+// goes where the hand takes it — held still it stops, pulled back it plays backwards,
+// its pitch with its speed, as vinyl; playing or parked alike. Let go, a playing deck
+// spins back up to its speed and goes on as it was (key lock and all); a parked one
+// stops where it was left. A synced deck keeps the place the hand leaves it in.
+WE_API void we_deck_scratch(int deck, int on);
+// The hand moved the record by `seconds` of it (+ on, - back). Ignored with no hand on.
+WE_API void we_deck_scratch_by(int deck, double seconds);
 WE_API void we_deck_shift(int deck, double semitones);
 // The beat grid: the times of the record's beats, ascending. A deck with none can
 // play, loop by seconds and be a master of nothing.
@@ -185,7 +193,8 @@ WE_API int we_features(int bus, double from, double to, we_features_state* out);
 // The last n mono samples of a bus heard by `at` (we_now() time), at the engine's
 // rate. Returns n, or 0 where they are not (or no longer) there.
 WE_API int we_scope(int bus, double at, float* out, int n);
-// Where the deck is heard right now (heard + time since × rate), source seconds.
+// Where the deck is heard right now (heard + time since × rate), source seconds. Under
+// a hand the rate is the record's own speed, backwards negative.
 WE_API double we_deck_position(int deck);
 
 #ifdef __cplusplus

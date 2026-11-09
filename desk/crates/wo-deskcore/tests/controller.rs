@@ -48,6 +48,24 @@ fn the_rmx_plays_the_booth() {
     rmx.send(&[0xB0, 0x36, 80]).unwrap();
     assert!(until(&mut d, 1.0, |d| d.snapshot().decks[0].eq[0] > 0.6), "crossing the booth's position, the knob takes over");
 
+    // SCRATCH on, A's wheel (no touch on an RMX) turning is a hand on A's parked record:
+    // ten turns of 5 ticks of its 128 a turn, 1.8 s a turn → 0.70 s on; still, let go
+    // (once the record is there: a hand cannot take it past what has decoded)
+    assert!(until(&mut d, 5.0, |d| d.snapshot().decks[0].decoded >= 1.0), "A's record decoded");
+    let at = d.snapshot().decks[0].heard;
+    rmx.send(&[0xB0, 0x29, 0x7F]).unwrap();
+    rmx.send(&[0xB0, 0x29, 0x00]).unwrap();
+    until(&mut d, 0.2, |_| false);
+    for _ in 0..10 {
+        rmx.send(&[0xB0, 0x2F, 0x05]).unwrap();
+        sleep(Duration::from_millis(15));
+    }
+    assert!(d.snapshot().decks[0].held, "a hand on A's record while its wheel turns");
+    assert!(until(&mut d, 1.0, |d| !d.snapshot().decks[0].held), "the wheel still: let go");
+    until(&mut d, 0.2, |_| false);
+    let moved = d.snapshot().decks[0].heard - at;
+    assert!((moved - 50.0 * 1.8 / 128.0).abs() < 0.02 && !d.snapshot().decks[0].playing, "scrubbed on {moved} s, and left parked");
+
     // the controllers page's monitor: each packet as it came and how it was read, and
     // what the Desk did with each control moved
     let (packets, lines) = d.control_monitor();

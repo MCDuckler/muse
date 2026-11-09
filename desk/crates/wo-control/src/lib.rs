@@ -10,4 +10,4 @@ pub mod manager;
 pub use binding::{Action, Binding, Positions, ShowCue};
 pub use decode::{Decoder, Event};
 pub use layout::{Kind, Layout, Protocol};
-pub use manager::{Controller, MONITOR, Manager, Packet};
+pub use manager::{Controller, Heard, Lane, MONITOR, Manager, Packet};

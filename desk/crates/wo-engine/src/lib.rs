@@ -221,6 +221,8 @@ struct Inner {
     /// Each deck's peaks since the meter last took them (a read in between keeps them:
     /// the engine's own reading hands its peak over once).
     peaks: [std::sync::Mutex<(f32, f32)>; DECKS],
+    /// The same for a second meter (a controller's), taken on its own.
+    meters: [std::sync::Mutex<(f32, f32)>; DECKS],
 }
 
 impl Drop for Inner {
@@ -259,7 +261,7 @@ impl Engine {
             RUNNING.store(false, Ordering::Release);
             return Err(Error::Start(if why.is_empty() { format!("error {code}") } else { why }));
         }
-        Ok(Engine { inner: Arc::new(Inner { offline: output == Output::Offline, peaks: Default::default() }) })
+        Ok(Engine { inner: Arc::new(Inner { offline: output == Output::Offline, peaks: Default::default(), meters: Default::default() }) })
     }
 
     pub fn is_offline(&self) -> bool {
@@ -326,6 +328,12 @@ impl Engine {
 
     pub fn deck(&self, d: DeckId) -> Deck<'_> {
         Deck { _engine: self, d: d.raw() }
+    }
+
+    /// A hand for deck `d`'s record that any thread may keep (a controller's own): it does
+    /// not keep the engine running, and does nothing once it has stopped.
+    pub fn hand(&self, d: DeckId) -> Hand {
+        Hand { engine: Arc::downgrade(&self.inner), d: d.raw() }
     }
 
     pub fn set_master_level(&self, gain: f32) {
@@ -451,6 +459,29 @@ impl Drop for Source {
     }
 }
 
+/// A deck's record under a hand, from any thread: [Engine::hand].
+#[derive(Clone, Debug)]
+pub struct Hand {
+    engine: std::sync::Weak<Inner>,
+    d: i32,
+}
+
+impl Hand {
+    /// [Deck::scratch], while the engine runs.
+    pub fn scratch(&self, on: bool) {
+        if let Some(_running) = self.engine.upgrade() {
+            unsafe { sys::we_deck_scratch(self.d, on as i32) }
+        }
+    }
+
+    /// [Deck::scratch_by], while the engine runs.
+    pub fn scratch_by(&self, seconds: f64) {
+        if let Some(_running) = self.engine.upgrade() {
+            unsafe { sys::we_deck_scratch_by(self.d, seconds) }
+        }
+    }
+}
+
 /// One deck's controls.
 pub struct Deck<'e> {
     _engine: &'e Engine,
@@ -495,6 +526,19 @@ impl Deck<'_> {
 
     pub fn set_keylock(&self, on: bool) {
         unsafe { sys::we_deck_keylock(self.d, on as i32) }
+    }
+
+    /// A hand on the record (scratching) or off it. Under the hand the record goes where
+    /// [Deck::scratch_by] takes it — held still it stops, pulled back it plays backwards,
+    /// its pitch with its speed; let go, a playing deck spins back up and goes on as it was,
+    /// a parked one stays where it was left.
+    pub fn scratch(&self, on: bool) {
+        unsafe { sys::we_deck_scratch(self.d, on as i32) }
+    }
+
+    /// The hand moved the record `seconds` of it on (negative: back).
+    pub fn scratch_by(&self, seconds: f64) {
+        unsafe { sys::we_deck_scratch_by(self.d, seconds) }
     }
 
     pub fn set_shift(&self, semitones: f64) {
@@ -593,11 +637,19 @@ impl Deck<'_> {
     pub fn read(&self) -> DeckState {
         let mut s = sys::we_deck_state::default();
         unsafe { sys::we_deck_read(self.d, &mut s) };
-        if let Some(m) = self._engine.inner.peaks.get(self.d as usize) {
-            let mut m = m.lock().unwrap();
-            *m = (m.0.max(s.peak_l), m.1.max(s.peak_r));
+        for meter in [&self._engine.inner.peaks, &self._engine.inner.meters] {
+            if let Some(m) = meter.get(self.d as usize) {
+                let mut m = m.lock().unwrap();
+                *m = (m.0.max(s.peak_l), m.1.max(s.peak_r));
+            }
         }
         s.into()
+    }
+
+    /// [Deck::take_peak] for a second meter, which neither takes from the other.
+    pub fn take_meter(&self) -> (f32, f32) {
+        let _ = self.read();
+        self._engine.inner.meters.get(self.d as usize).map(|m| std::mem::take(&mut *m.lock().unwrap())).unwrap_or_default()
     }
 
     /// The peaks since the last time they were taken, whoever read the deck meanwhile.

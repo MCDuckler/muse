@@ -164,3 +164,26 @@ hercules_dj_console_rmx.hid.json`.
 4. UI: light in the bar, Controllers dialog with monitor, phone menu entry, key sheet row.
 5. Platform plumbing: pubspec, Android manifest + device filter, `deploy/99-wetowl-dj.rules`.
 6. **[hw]** first contact: fix centres/polarity/jog scale, verify LEDs, tune jog feel.
+
+## The Rust Desk (desk/, 2026-11): the DDJ-400 and true scratching
+
+The Desk's controller layer is `desk/crates/wo-control` (the layouts in `desk/controllers/`,
+the RMX's unchanged from v1). The **Pioneer DDJ-400** (`pioneer_ddj_400.midi.json`, numbers
+from Mixxx's mapping) is USB-MIDI class: no driver on Linux, macOS or Windows. What the
+layout format grew for it: 14-bit controls (`lsb`: the MSB kept, the LSB reads the whole),
+`offset64` jogs with `ticksPerTurn` (any wheel given in the booth's 128 a turn), a SHIFT of
+its own (its shifted notes named as the same controls), outputs under several notes, and
+`meter` outputs (the level meters).
+
+**Scratching** is the engine's (`we_deck_scratch`, `we_deck_scratch_by`): a hand on the
+record gives it a read head of its own, pulled toward where the hand has put the record by
+a critically damped spring (20 Hz: a jog's steps and a mouse's frames smoothed, a steady pull
+followed ~16 ms behind), so held still it stops (and is silent: a DC blocker), pulled back it
+plays backwards, its pitch with its speed. Let go, a playing deck spins back up (τ 30 ms) and
+hands back to its voice (key lock and all) with a 4 ms crossfade; a parked one stays where it
+was left. A synced deck keeps the place the hand leaves it in. A turn of a wheel is a turn of
+vinyl at 33⅓: 1.8 s. Hands come from `wo-deskcore/src/scratch.rs`, which reads the
+controllers' events on their own thread (a `Lane`), straight to the engine: the DDJ-400's
+touch (`jog.touch`) is the hand, its top's turns (`jog.scratch`) move the record; a wheel with
+no touch (the RMX, in SCRATCH mode) is a hand while it turns and lets go 100 ms after it
+stops. The on-screen platter's drag is a hand too (shift-drag: search).

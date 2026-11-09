@@ -1,7 +1,9 @@
 //! Finding controllers and listening to them: every couple of seconds the MIDI ports
 //! and the USB HID devices are looked over for one a layout names (a port by its name,
 //! a device by its vendor and product), each one found is opened and read on its own,
-//! and its events come through one channel. Lights go back the same way.
+//! and its events come through one channel. Lights go back the same way. A lane may see
+//! each event first, on the reading thread itself, for what cannot wait for the Desk's
+//! next frame (a hand on a record): what it did comes through with the event.
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -26,14 +28,25 @@ pub struct Packet {
 /// How many packets the monitor keeps.
 pub const MONITOR: usize = 200;
 
+/// Sees every event as it is read, on the reading thread; returns what it did with it
+/// (in words, for the monitor) — None leaves it to the binding.
+pub type Lane = Arc<dyn Fn(&Event) -> Option<String> + Send + Sync>;
+
+/// An event, and what the lane did with it.
+pub type Heard = (Event, Option<String>);
+
 type Monitor = Arc<Mutex<VecDeque<Packet>>>;
 
-fn keep(m: &Monitor, from: &str, bytes: &[u8], events: &[Event]) {
+fn keep(m: &Monitor, from: &str, bytes: &[u8], events: &[Event], half: Option<&str>) {
     let mut m = m.lock().unwrap();
     if m.len() >= MONITOR {
         m.pop_front();
     }
-    m.push_back(Packet { at: std::time::Instant::now(), from: from.to_owned(), bytes: bytes.to_vec(), read: events.iter().map(|e| format!("{} {:.3}", e.id, e.value)).collect() });
+    let mut read: Vec<String> = events.iter().map(|e| format!("{} {:.3}", e.id, e.value)).collect();
+    if let Some(id) = half {
+        read.push(format!("{id} (its high half; the low one says)"));
+    }
+    m.push_back(Packet { at: std::time::Instant::now(), from: from.to_owned(), bytes: bytes.to_vec(), read });
 }
 
 /// A controller as the Desk shows it.
@@ -69,7 +82,7 @@ struct Shared {
 }
 
 pub struct Manager {
-    events: Receiver<Event>,
+    events: Receiver<Heard>,
     shared: Arc<Mutex<Shared>>,
     stop: Arc<AtomicBool>,
     monitor: Monitor,
@@ -85,19 +98,25 @@ impl Drop for Manager {
 impl Manager {
     /// Starts looking for controllers (the bundled layouts) on a thread of its own.
     pub fn start() -> Manager {
-        Self::with_layouts(bundled())
+        Self::with_layouts(bundled(), None)
     }
 
-    pub fn with_layouts(layouts: Vec<Layout>) -> Manager {
+    /// [Manager::start], with a lane that sees each event first.
+    pub fn start_with(lane: Lane) -> Manager {
+        Self::with_layouts(bundled(), Some(lane))
+    }
+
+    pub fn with_layouts(layouts: Vec<Layout>, lane: Option<Lane>) -> Manager {
         let (tx, rx) = mpsc::channel();
         let shared = Arc::new(Mutex::new(Shared::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let monitor: Monitor = Arc::new(Mutex::new(VecDeque::new()));
         let (s, st, m, known) = (shared.clone(), stop.clone(), monitor.clone(), layouts.clone());
+        let lane: Lane = lane.unwrap_or_else(|| Arc::new(|_: &Event| None));
         thread::spawn(move || {
             while !st.load(Ordering::Relaxed) {
-                scan_midi(&known, &s, &tx, &m);
-                scan_hid(&known, &s, &tx, &m);
+                scan_midi(&known, &s, &tx, &m, &lane);
+                scan_hid(&known, &s, &tx, &m, &lane);
                 thread::sleep(Duration::from_secs(2));
             }
         });
@@ -120,6 +139,11 @@ impl Manager {
 
     /// Everything the controllers did since the last call.
     pub fn poll(&self) -> Vec<Event> {
+        self.events.try_iter().map(|(e, _)| e).collect()
+    }
+
+    /// [Manager::poll], each with what the lane did with it.
+    pub fn poll_heard(&self) -> Vec<Heard> {
         self.events.try_iter().collect()
     }
 
@@ -132,17 +156,26 @@ impl Manager {
 
     /// Light `id` on or off on every controller that has it.
     pub fn light(&self, id: &str, on: bool) {
+        self.each(|d| d.light(id, on));
+    }
+
+    /// Meter `id` at `level` (0..1) on every controller that has it.
+    pub fn level(&self, id: &str, level: f32) {
+        self.each(|d| d.level(id, level));
+    }
+
+    fn each(&self, mut bytes: impl FnMut(&mut Decoder) -> Vec<Vec<u8>>) {
         let mut s = self.shared.lock().unwrap();
         for o in s.open.values_mut() {
             match &mut o.link {
                 Some(Link::Midi { output: Some(out), lights, .. }) => {
-                    if let Some(bytes) = lights.light(id, on) {
-                        let _ = out.send(&bytes);
+                    for m in bytes(lights) {
+                        let _ = out.send(&m);
                     }
                 }
                 Some(Link::Hid { lights, send, .. }) => {
-                    if let Some(bytes) = lights.light(id, on) {
-                        let _ = send.send(bytes);
+                    for m in bytes(lights) {
+                        let _ = send.send(m);
                     }
                 }
                 _ => {}
@@ -151,7 +184,7 @@ impl Manager {
     }
 }
 
-fn scan_midi(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Event>, monitor: &Monitor) {
+fn scan_midi(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Heard>, monitor: &Monitor, lane: &Lane) {
     let Ok(probe) = midir::MidiInput::new("WetOwl Desk") else { return };
     let ports: Vec<(midir::MidiInputPort, String)> = probe.ports().into_iter().filter_map(|p| Some((p.clone(), probe.port_name(&p).ok()?))).collect();
     let names: Vec<String> = ports.iter().map(|(_, n)| format!("midi:{n}")).collect();
@@ -169,14 +202,15 @@ fn scan_midi(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Event>
         let Some(layout) = layouts.iter().find(|l| l.protocol == Protocol::Midi && l.names_match(&name)) else { continue };
         let Ok(input) = midir::MidiInput::new("WetOwl Desk") else { continue };
         let mut decoder = Decoder::new(layout.clone());
-        let tx = tx.clone();
+        let (tx, lane) = (tx.clone(), lane.clone());
         let (m, from) = (monitor.clone(), name.clone());
         let controller = Controller { name: name.clone(), layout: layout.name.clone(), trouble: None };
         let link = match input.connect(&port, "WetOwl Desk in", move |_, msg, _| {
             let events = decoder.decode(msg);
-            keep(&m, &from, msg, &events);
+            keep(&m, &from, msg, &events, decoder.half());
             for e in events {
-                let _ = tx.send(e);
+                let did = lane(&e);
+                let _ = tx.send((e, did));
             }
         }, ()) {
             Ok(conn) => Some(Link::Midi { _input: conn, output: midi_output(&name), lights: Decoder::new(layout.clone()) }),
@@ -198,7 +232,7 @@ fn midi_output(name: &str) -> Option<midir::MidiOutputConnection> {
     out.connect(&port, "WetOwl Desk out").ok()
 }
 
-fn scan_hid(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Event>, monitor: &Monitor) {
+fn scan_hid(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Heard>, monitor: &Monitor, lane: &Lane) {
     let hid_layouts: Vec<&Layout> = layouts.iter().filter(|l| l.protocol == Protocol::Hid).collect();
     if hid_layouts.is_empty() {
         return;
@@ -230,7 +264,7 @@ fn scan_hid(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Event>,
         let alive = Arc::new(AtomicBool::new(true));
         let (send, lights_rx) = mpsc::channel::<Vec<u8>>();
         let mut decoder = Decoder::new((*layout).clone());
-        let (tx, a) = (tx.clone(), alive.clone());
+        let (tx, a, lane) = (tx.clone(), alive.clone(), lane.clone());
         let (m, from) = (monitor.clone(), controller.name.clone());
         thread::spawn(move || {
             let mut buf = [0u8; 64];
@@ -244,10 +278,11 @@ fn scan_hid(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Event>,
                         // (a report that moved nothing is not kept: some send theirs all the time)
                         let events = decoder.decode(&buf[..n]);
                         if !events.is_empty() {
-                            keep(&m, &from, &buf[..n], &events);
+                            keep(&m, &from, &buf[..n], &events, None);
                         }
                         for e in events {
-                            let _ = tx.send(e);
+                            let did = lane(&e);
+                            let _ = tx.send((e, did));
                         }
                     }
                     Err(_) => a.store(false, Ordering::Relaxed),

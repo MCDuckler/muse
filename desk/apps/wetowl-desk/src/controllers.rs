@@ -57,7 +57,9 @@ impl App {
             let rows: Vec<(String, String)> = open
                 .iter()
                 .flat_map(|l| {
-                    std::iter::once((l.name.clone(), String::new())).chain(l.inputs.iter().map(|i| (i.id.clone(), format!("{:?}", i.kind).to_lowercase())))
+                    // a control under two messages (a SHIFT's other note) once
+                    let mut seen = std::collections::HashSet::new();
+                    std::iter::once((l.name.clone(), String::new())).chain(l.inputs.iter().filter(move |i| seen.insert(i.id.clone())).map(|i| (i.id.clone(), format!("{:?}", i.kind).to_lowercase())))
                 })
                 .collect();
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
