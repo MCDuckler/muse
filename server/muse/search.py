@@ -13,9 +13,11 @@ the only way to read the results any more.
 from __future__ import annotations
 
 import difflib
+import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
+import urllib.request
 from urllib.parse import quote
 
 from . import catalog, db, sources, spotify, ytm
@@ -390,6 +392,75 @@ def _source_songs(place: str, q: str, limit: int) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- lists elsewhere
+#
+# What other people made public: a SoundCloud set, a YouTube Music playlist, a record on
+# Bandcamp. A row for one opens it (/search/album) and can be taken whole (/search/take),
+# mirrored here as a playlist of this person's.
+def _sc_playlists(q: str, limit: int) -> list[dict]:
+    from . import linked
+
+    data = linked._sc_api("/search/playlists", q=q, limit=limit)
+    out = []
+    for p in data.get("collection") or []:
+        url = p.get("permalink_url") or ""
+        remote = url.split("soundcloud.com/", 1)[-1].strip("/") if "soundcloud.com/" in url else ""
+        if not remote or not p.get("title"):
+            continue
+        art = p.get("artwork_url") or (p.get("user") or {}).get("avatar_url")
+        if isinstance(art, str) and "-large." in art:
+            art = art.replace("-large.", "-t300x300.")
+        out.append({
+            "kind": "album" if p.get("is_album") else "playlist",
+            "place": "soundcloud", "id": remote,
+            "title": p["title"],
+            "subtitle": (p.get("user") or {}).get("username") or "SoundCloud",
+            "cover_url": _art(art), "tracks": p.get("track_count"),
+            "url": url, "known": _mirrored("soundcloud", remote),
+        })
+    return out
+
+
+def _bc_albums(q: str, limit: int) -> list[dict]:
+    body = json.dumps({"search_text": q, "search_filter": "a",
+                       "full_page": False, "fan_id": None}).encode()
+    req = urllib.request.Request(
+        "https://bandcamp.com/api/bcsearch_public_api/1/autocomplete_elastic",
+        data=body, headers={"Content-Type": "application/json", "User-Agent": sources.UA})
+    data = json.loads(urllib.request.urlopen(req, timeout=20).read())
+    out = []
+    for r in (data.get("auto") or {}).get("results", []):
+        url = r.get("item_url_path") or ""
+        if r.get("type") != "a" or not url.startswith("http"):
+            continue
+        out.append({
+            "kind": "album", "place": "bandcamp", "id": url,
+            "title": r.get("name") or "",
+            "subtitle": r.get("band_name") or "Bandcamp",
+            "cover_url": _art(r.get("img")), "url": url,
+            "known": _mirrored("bandcamp", url),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _ytm_playlists(q: str, limit: int) -> list[dict]:
+    return [{
+        "kind": "playlist", "place": "ytmusic", "id": r["playlist_id"],
+        "title": r["title"], "subtitle": r.get("author") or "YouTube Music",
+        "cover_url": _art(r.get("thumbnail")), "tracks": r.get("count"),
+        "url": f"https://music.youtube.com/playlist?list={r['playlist_id']}",
+        "known": _mirrored("youtube", r["playlist_id"]),
+    } for r in ytm.search_playlists(q, limit=limit)]
+
+
+def _mirrored(provider: str, remote_id: str) -> bool:
+    """Somebody here mirrors it already (taking it again reuses that playlist)."""
+    return bool(db.one("select 1 from playlists where kind=%s and remote_id=%s limit 1",
+                       (provider, remote_id)))
+
+
 # ---------------------------------------------------------------- by the words in it
 #
 # YouTube Music's own index covers lyrics — "is this the real life is this just fantasy"
@@ -553,6 +624,16 @@ def everything(cfg, user_id: int, q: str, *, where: str = "all", kind: str = "al
         # Only Bandcamp is asked; "library" alone is the labels followed here.
         jobs["bandcamp:label"] = lambda: _labels(
             user_id, q, each if kind == "label" else 4, ask="bandcamp" in places)
+    # Lists other people made public: SoundCloud sets, YouTube Music playlists, records
+    # on Bandcamp (where an album is the list).
+    lists_each = each if kind in ("playlist", "album") else 4
+    if "playlist" in kinds:
+        if "soundcloud" in places:
+            jobs["soundcloud:playlist"] = lambda: _sc_playlists(q, lists_each)
+        if "ytmusic" in places:
+            jobs["ytmusic:playlist"] = lambda: _ytm_playlists(q, lists_each)
+    if ("album" in kinds or kind == "playlist") and "bandcamp" in places:
+        jobs["bandcamp:album"] = lambda: _bc_albums(q, lists_each)
     for place in ("soundcloud", "bandcamp"):
         if place in places and "song" in kinds:
             jobs[f"{place}:song"] = (

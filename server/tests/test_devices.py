@@ -72,6 +72,19 @@ def test_a_device_that_has_gone_quiet_is_not_offering_to_play_anything(
         'a laptop closed an hour ago is not still playing'
 
 
+def test_a_device_whose_state_is_a_month_old_is_still_listed(client, hdr, desk, song):
+    # Its age in milliseconds passes what a 32-bit integer holds after 24.8 days: the
+    # whole list was a 500 while one device had not said anything for that long.
+    client.post("/devices/state", headers=desk["hdr"],
+                json={"playing": False, "track_id": song["id"]})
+    db.run("update devices set state_at = now() - interval '40 days' where id=%s",
+           (desk["id"],))
+    r = client.get("/devices", headers=hdr)
+    assert r.status_code == 200, r.text
+    listed = {d["name"]: d for d in r.json()["devices"]}
+    assert listed["The desk"]["age_ms"] > 40 * 86_400_000 - 60_000
+
+
 def test_handing_the_music_over_is_addressed_to_one_device(client, hdr, desk, song,
                                                            monkeypatch):
     sent = []

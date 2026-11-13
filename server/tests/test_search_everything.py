@@ -23,6 +23,10 @@ def _song(title: str, artists: list[str], album: str | None = None) -> dict:
 def no_real_videos(monkeypatch):
     """No test here searches the real YouTube for videos by accident."""
     monkeypatch.setattr(ytm, "search_videos", lambda q, limit=10: [])
+    # nor the lists elsewhere (test_search_lists.py has those)
+    monkeypatch.setattr(ytm, "search_playlists", lambda q, limit=6: [])
+    monkeypatch.setattr(search, "_sc_playlists", lambda q, limit: [])
+    monkeypatch.setattr(search, "_bc_albums", lambda q, limit: [])
 
 
 @pytest.fixture()

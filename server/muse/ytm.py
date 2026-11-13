@@ -152,6 +152,33 @@ def search_artists(query: str, limit: int = 4) -> list[dict]:
     return out
 
 
+def search_playlists(query: str, limit: int = 6) -> list[dict]:
+    """Public playlists: what people made (community) and what YouTube Music keeps
+    (featured). Either can be opened and mirrored without signing in to anything."""
+    out, seen = [], set()
+    for flt in ("community_playlists", "featured_playlists"):
+        try:
+            res = _ask(lambda c: c.search(query, filter=flt, limit=limit))
+        except Unavailable:
+            if out:
+                break
+            raise
+        for r in res:
+            pid = playlist_id(r.get("browseId") or r.get("playlistId") or "")
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            count = r.get("itemCount")
+            out.append({
+                "playlist_id": pid,
+                "title": r.get("title") or "",
+                "author": r.get("author") or ("YouTube Music" if flt == "featured_playlists" else None),
+                "count": int(re.sub(r"\D", "", str(count))) if count and re.sub(r"\D", "", str(count)) else None,
+                "thumbnail": thumbnail_url(r),
+            })
+    return out[:limit]
+
+
 def artist(browse_id: str) -> dict:
     """What YouTube Music knows about an act: its blurb and its related acts."""
     a = _ask(lambda c: c.get_artist(browse_id))
@@ -189,6 +216,8 @@ def album_tracks(browse_id: str) -> dict:
         "year": data.get("year"),
         "thumbnail": thumbnail_url(data),
         "tracks": tracks,
+        # The record as a public playlist (OLAK5uy_…): what a mirror of it follows.
+        "playlist_id": data.get("audioPlaylistId"),
     }
 
 

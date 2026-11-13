@@ -31,12 +31,56 @@ def everything(q: str, where: str = "all", kind: str = "all", lyrics: bool = Fal
 
 
 @router.get("/album")
-def album(place: str, id: str, user: dict = Depends(current_user)):
-    """What is on a record somebody found, before any of it is added.
+def album(place: str, id: str, kind: str = "album", user: dict = Depends(current_user)):
+    """What is on a record (or a public playlist) somebody found, before any of it is
+    added.
 
     A row for an album that cannot be opened is a row that does nothing, and adding a
     whole record one song at a time out of a song search is the thing this is for.
+    `kind=playlist` opens a list instead: a YouTube Music playlist, a SoundCloud set;
+    a Bandcamp record is opened by its page's address.
     """
+    if place == "ytmusic" and kind == "playlist":
+        try:
+            items = ytm.playlist_tracks(id, limit=500)
+            name = ytm.playlist_name(id)
+        except (ytm.Unavailable, ytm.NotAllowed) as e:
+            raise HTTPException(502, str(e))
+        have = {t["provider_id"] for t in _known("ytmusic")}
+        return {"title": name, "artist": None, "year": None, "cover_url": None,
+                "tracks": [{
+                    "kind": "song", "place": "ytmusic", "id": t["video_id"],
+                    "title": t["title"], "subtitle": ", ".join(t["artists"]) or "",
+                    "album": t.get("album"), "duration_ms": t.get("duration_ms"),
+                    "known": t["video_id"] in have,
+                } for t in items]}
+    if place == "soundcloud":
+        from . import linked
+        try:
+            items = linked._soundcloud_items(id, limit=500)
+        except linked.LinkError as e:
+            raise HTTPException(502, str(e))
+        return {"title": id.rsplit("/", 1)[-1].replace("-", " "),
+                "artist": id.split("/", 1)[0], "year": None, "cover_url": None,
+                "tracks": [_source_row("soundcloud", t["source"]["provider_id"], t,
+                                       t["source"].get("url")) for t in items]}
+    if place == "bandcamp":
+        from . import sources
+        if sources.provider_for_url(id) != "bandcamp":
+            raise HTTPException(400, "a Bandcamp album's address")
+        try:
+            tracks = sources.bandcamp_tracks(id)
+        except sources.SourceError as e:
+            raise HTTPException(502, str(e))
+        rows = []
+        for t in tracks:
+            row = _source_row("bandcamp", t["provider_id"], t, t["url"])
+            if not t["streamable"]:
+                row["unavailable"] = "only if bought"
+            rows.append(row)
+        return {"title": tracks[0]["album"] if tracks else "",
+                "artist": (tracks[0]["artists"] or [None])[0] if tracks else None,
+                "year": None, "cover_url": None, "tracks": rows}
     if place == "ytmusic":
         try:
             found = ytm.album_tracks(id)
@@ -75,6 +119,56 @@ def album(place: str, id: str, user: dict = Depends(current_user)):
             } for t in ((data.get("tracks") or {}).get("items") or [])],
         }
     raise HTTPException(400, f"{place} albums cannot be opened yet")
+
+
+def _source_row(place: str, provider_id: str, t: dict, url: str | None) -> dict:
+    """One song of a SoundCloud set or a Bandcamp record, as a search row."""
+    found = catalog.find_by_provider(place, provider_id)
+    return {
+        "kind": "song", "place": place, "id": provider_id,
+        "title": t.get("title") or "", "subtitle": ", ".join(t.get("artists") or []),
+        "album": t.get("album"), "duration_ms": t.get("duration_ms"), "url": url,
+        "track": catalog.public(found) if found else None, "known": found is not None,
+    }
+
+
+@router.post("/take")
+def take(body: dict, user: dict = Depends(current_user)):
+    """A whole list somebody found, as a playlist of this person's: mirrored the way a
+    linked service's playlists are (the house's mirror job lists it and queues its
+    songs), so a big set does not hold the request open. Public lists only — none of
+    these needs an account linked.
+    """
+    place, ident = body.get("place"), str(body.get("id") or "")
+    kind = body.get("kind") or "playlist"
+    name = (body.get("title") or "").strip() or None
+    if not place or not ident:
+        raise HTTPException(400, "place and id required")
+    from . import jobs, sources
+
+    if place == "soundcloud":
+        provider, remote = "soundcloud", ident.strip("/")
+    elif place == "bandcamp":
+        if sources.provider_for_url(ident) != "bandcamp":
+            raise HTTPException(400, "a Bandcamp album's address")
+        provider, remote = "bandcamp", ident
+    elif place == "ytmusic" and kind == "playlist":
+        provider, remote = "youtube", ytm.playlist_id(ident)
+    elif place == "ytmusic" and kind == "album":
+        try:
+            found = ytm.album_tracks(ident)
+        except ytm.Unavailable as e:
+            raise HTTPException(502, str(e))
+        if not found.get("playlist_id"):
+            raise HTTPException(404, "YouTube Music has no playlist for that record")
+        provider, remote = "youtube", found["playlist_id"]
+        name = name or found.get("title")
+    else:
+        raise HTTPException(400, f"{place} lists cannot be taken")
+    jobs.enqueue("mirror", {"provider": provider, "user_id": user["id"],
+                            "remote_id": remote, "name": name or remote,
+                            "image": body.get("image")})
+    return {"queued": True, "provider": provider, "remote_id": remote, "name": name or remote}
 
 
 def _known(provider: str) -> list[dict]:

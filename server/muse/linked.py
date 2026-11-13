@@ -459,6 +459,14 @@ def _bandcamp_items(remote_id: str, offset: int = 0) -> tuple[list[dict], int | 
     wishlist of thirteen hundred records is thirteen hundred page fetches, and asking
     for them all at once gets the address blocked.
     """
+    if remote_id.startswith("http"):
+        # One record by its page (a search's "take it whole"): its streamable tracks.
+        return [{
+            "remote_id": t["provider_id"], "title": t["title"], "artists": t["artists"],
+            "album": t["album"], "duration_ms": t["duration_ms"],
+            "source": {"provider": "bandcamp", "provider_id": t["provider_id"],
+                       "url": t["url"]},
+        } for t in sources.bandcamp_tracks(remote_id) if t["streamable"]], None
     handle, _, which = remote_id.partition("/")
     albums = _bandcamp_albums(handle, which)
     run = albums[offset:offset + ALBUMS_PER_RUN]

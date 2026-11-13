@@ -50,7 +50,7 @@ def _rows(user_id: int, me: int) -> list[dict]:
         f"""select d.id as device, d.name as device_name, d.platform, d.kind,
                    d.last_seen, d.playing, d.position_ms, d.state_at, d.queue_id,
                    d.item_id as device_item, d.board_link,
-                   (extract(epoch from now() - d.state_at) * 1000)::int as age_ms,
+                   (extract(epoch from now() - d.state_at) * 1000)::bigint as age_ms,
                    d.track_id as has_track,
                    d.state_at > now() - interval '{LIVE}' as live,
                    q.name as queue,
