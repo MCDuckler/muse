@@ -52,6 +52,45 @@ WE_API void we_stretch(int faster);
 // Offline only: render frames of the stereo master (interleaved floats) into out,
 // and each deck's own output (post fader, stereo) into decks[d] when not null.
 WE_API void we_render(float* out, int frames, float** decks);
+// Offline only: the master as we_render does, and the headphones (the cue bus, stereo)
+// into cue — rendered once we_route asked for headphones.
+WE_API void we_render_cue(float* out, float* cue, int frames);
+
+// ---- the outputs: the master, and the headphones ---------------------------------
+
+// The system's outputs: up to max into out; returns how many there are. channels: the
+// most each takes (0 when not known).
+typedef struct {
+  char name[256];
+  int32_t channels;
+  int32_t is_default;
+} we_device_info;
+WE_API int we_devices(we_device_info* out, int max);
+// Where the sound goes. master: an output's name ("" or null: the system's own), the
+// master on its channels master_ch and master_ch + 1. cue: the headphones' output (null:
+// none; the master's own name: on the same device, a DJ console's channels 3/4 with
+// cue_ch 2; another: a second sound card, kept in step with the first). split: one
+// stereo pair, the headphones in the left ear and the master in the right, each mono.
+// The decks play on through it. Returns 0, else an error number (we_error says what);
+// a main output that would not open falls back on the system's own, stereo.
+typedef struct {
+  const char* master;
+  int32_t master_ch;
+  const char* cue;
+  int32_t cue_ch;
+  int32_t split;
+} we_route_cfg;
+WE_API int we_route(const we_route_cfg* route);
+// How it went: the main output's channels (0: none open); where the headphones are (0
+// nowhere, 1 split, 2 the same device, 3 a second card) and that card's channels; lost /
+// cue_lost: an output stopped by itself (unplugged); gaps: the second card ran dry.
+typedef struct {
+  int32_t channels, cue, cue_channels, lost, cue_lost;
+  int64_t gaps;
+} we_route_state;
+WE_API void we_route_read(we_route_state* out);
+// The headphones' blend: mix 0 the cued decks alone .. 1 the master alone; level a gain.
+WE_API void we_cue_mix(float mix, float level);
 
 // ---- sources: decoded records in memory -------------------------------------------
 
@@ -126,6 +165,9 @@ WE_API void we_deck_loop_beats(int deck, double beats, int bar);
 
 // The channel: gain after the EQ (fader × crossfader × trim), as a plain gain.
 WE_API void we_deck_level(int deck, float gain, double ramp);
+// The deck in the headphones (pre-fader listening): its sound after EQ, filter and
+// effects, before its fader, at gain (0: not in them).
+WE_API void we_deck_cue(int deck, float gain, double ramp);
 // The bands in decibels (kill at -40), and the filter knob -1 (low pass) .. 1 (high).
 WE_API void we_deck_eq(int deck, float low, float mid, float high, double ramp);
 WE_API void we_deck_filter(int deck, float knob);

@@ -8,3 +8,4 @@ description = "The booth engine, safe: one engine, sources owned by whoever fill
 
 [dependencies]
 wo-engine-sys.workspace = true
+serde = { version = "1.0.229", features = ["derive"] }

@@ -32196,6 +32196,10 @@ static ma_result ma_device_init__pulse(ma_device* pDevice, const ma_device_confi
 
         /* Use a default channel map. */
         ((ma_pa_channel_map_init_extend_proc)pDevice->pContext->pulse.pa_channel_map_init_extend)(&cmap, ss.channels, (ma_pa_channel_map_def_t)pConfig->pulse.channelMap);
+        /* WetOwl: wider than stereo and as wide as the sink, the sink's own map, so that channel n is the sink's n (PipeWire links ports by their names). */
+        if (ss.channels > 2 && sinkInfo.channel_map.channels == ss.channels) {
+            cmap = sinkInfo.channel_map;
+        }
 
 
         /* Use the requested sample rate if one was specified. */
@@ -32204,6 +32208,8 @@ static ma_result ma_device_init__pulse(ma_device* pDevice, const ma_device_confi
         }
 
         streamFlags = MA_PA_STREAM_START_CORKED | MA_PA_STREAM_ADJUST_LATENCY;
+        /* WetOwl: wider than stereo (a DJ console's master and headphones), its channels go out by index, never remixed by their names. */
+        if (ss.channels > 2) { streamFlags |= MA_PA_STREAM_NO_REMIX_CHANNELS; }
         if (ma_format_from_pulse(ss.format) == ma_format_unknown) {
             if (ma_is_little_endian()) {
                 ss.format = MA_PA_SAMPLE_FLOAT32LE;

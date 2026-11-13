@@ -21,7 +21,8 @@ const ROW: f32 = 36.0;
 impl App {
     /// The whole booth over the glass, for this frame's snapshot.
     pub(crate) fn draw(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, full: Rect, s: &Snapshot) {
-        let l = crate::ui::layout(full);
+        let wide = self.prefs.wide_crate;
+        let l = crate::ui::layout(full, wide);
         self.top_bar(desk, ui, p, l.top, s);
         self.overviews(desk, ui, p, l.overview, s);
         // the page under them fades in when it changes
@@ -45,8 +46,10 @@ impl App {
         }
         self.mixer(desk, ui, p, l.mixer, s);
         self.crate_(desk, ui, p, l.crate_, s);
-        self.stage_card(desk, ui, p, l.stage);
-        self.auto_dj(desk, ui, p, l.auto, s);
+        if !wide {
+            self.stage_card(desk, ui, p, l.stage);
+            self.auto_dj(desk, ui, p, l.auto, s);
+        }
         ui.set_opacity(1.0);
         self.drag_ghost(desk, ui);
         self.flights(desk, ui);
@@ -128,6 +131,13 @@ impl App {
         let auto = Rect::from_min_size(pos2(left - 14.0 - 118.0, y - 16.0), vec2(118.0, 32.0));
         if Btn::new("Auto DJ").icon(Icon::AutoMix).tone(Tone::Ok).on(s.auto).show(ui, p, auto, "auto").on_hover_text("The Auto DJ mixes the next record in  (A)").clicked() {
             desk.set_auto(!s.auto);
+        }
+        // the booth's side panels (the stage and the Auto DJ's) out, or folded away
+        let panels = Rect::from_min_size(pos2(auto.left() - 10.0 - 32.0, y - 16.0), vec2(32.0, 32.0));
+        let shown = !self.prefs.wide_crate;
+        let hint = if shown { "Fold the stage and the Auto DJ away: the crate wide  (C)" } else { "The stage and the Auto DJ back  (C)" };
+        if self.page == Page::Booth && Btn::new("").icon(Icon::PanelRight).quiet().on(shown).show(ui, p, panels, "panels").on_hover_text(hint).clicked() {
+            self.toggle_wide_crate(ui.ctx());
         }
         // a mix under way: its progress along the button's foot, in the deck it goes to
         if let Some(m) = s.mix.as_ref().filter(|m| m.mixing && s.auto) {
@@ -563,6 +573,7 @@ impl App {
         let step = ((strip_bottom - inner.top() - 4.0) / 5.0).min(54.0);
         let level = |pk: f32| (1.0 + 20.0 * pk.max(1e-6).log10() / 48.0).clamp(0.0, 1.0);
         let db = |v: f32| if v >= 0.5 { (v - 0.5) * 12.0 } else { -40.0 * ((0.5 - v) * 2.0).powf(1.5) };
+        let phones = desk.audio_view();
         for d in 0..2 {
             let v = &s.decks[d];
             let side = if d == 0 { 1.0 } else { -1.0 };
@@ -617,17 +628,49 @@ impl App {
                 desk.set_fader(d, nv);
             }
             let mx = fx + side * 27.0 - 3.0;
-            kit::meter(ui, p, Rect::from_min_max(pos2(mx, top + 8.0), pos2(mx + 6.0, strip_bottom - 2.0)), level(v.peak), 18, (d, "meter"));
+            // the deck in the headphones (pre-fader), where there are some
+            let mut meter_top = top + 8.0;
+            if phones.headphones {
+                let hr = Rect::from_center_size(pos2(mx + 3.0, inner.top() + 14.0), vec2(24.0, 24.0));
+                let hint = if v.headphones { "Out of the headphones" } else { "In the headphones, before the fader (CUE on a console)" };
+                if Btn::new("").icon(Icon::Headphones).tone(Tone::Warm).on(v.headphones).quiet().show(ui, p, hr, (d, "phones")).on_hover_text(hint).clicked() {
+                    desk.toggle_headphones(d);
+                }
+                meter_top = meter_top.max(hr.bottom() + 6.0);
+            }
+            kit::meter(ui, p, Rect::from_min_max(pos2(mx, meter_top), pos2(mx + 6.0, strip_bottom - 2.0)), level(v.peak), 18, (d, "meter"));
         }
         // the master: each side as the decks give it, a scale beside it
         let mc = inner.center().x;
         kit::label(p, pos2(mc, inner.top() + 6.0), Align2::CENTER_CENTER, "Master");
         let top = inner.top() + 34.0;
         let (l, rr) = (s.decks[0].peak_lr.0.max(s.decks[1].peak_lr.0), s.decks[0].peak_lr.1.max(s.decks[1].peak_lr.1));
-        let mr = Rect::from_min_max(pos2(mc - 9.0, top), pos2(mc - 2.0, strip_bottom - 2.0));
+        // the headphones' blend and level under the meters (a console that blends them
+        // itself has its own knobs)
+        let knobs = phones.headphones && !phones.console_mixes;
+        let meters_bottom = if knobs { strip_bottom - 104.0 } else { strip_bottom - 2.0 };
+        let mr = Rect::from_min_max(pos2(mc - 9.0, top), pos2(mc - 2.0, meters_bottom));
         kit::meter(ui, p, mr, level(l), 18, "master-l");
-        kit::meter(ui, p, Rect::from_min_max(pos2(mc + 2.0, top), pos2(mc + 9.0, strip_bottom - 2.0)), level(rr), 18, "master-r");
-        for (dbv, word) in [(0.0f32, "0"), (-6.0, "6"), (-12.0, "12"), (-24.0, "24"), (-36.0, "36")] {
+        kit::meter(ui, p, Rect::from_min_max(pos2(mc + 2.0, top), pos2(mc + 9.0, meters_bottom)), level(rr), 18, "master-r");
+        if knobs {
+            let c1 = pos2(mc, meters_bottom + 26.0);
+            let tag = |x: f32| if x < 0.02 { "cue".to_owned() } else if x > 0.98 { "master".to_owned() } else { format!("cue {:.0} · master {:.0}", (1.0 - x) * 100.0, x * 100.0) };
+            if let Some(nv) = kit::knob_with(ui, p, c1, phones.prefs.head_mix, t::warm(), false, 0.0, "head-mix", tag) {
+                desk.set_head_mix(nv);
+            }
+            label_sized(p, pos2(c1.x, c1.y + 17.0), Align2::CENTER_TOP, "Cue · Mst", 9.5, t::label());
+            let c2 = pos2(mc, meters_bottom + 76.0);
+            let tag = |x: f32| {
+                let g = wo_deskcore::audio::level_gain(x);
+                if g <= 0.0 { "off".to_owned() } else { format!("{:+.1} dB", 20.0 * g.log10()) }
+            };
+            if let Some(nv) = kit::knob_with(ui, p, c2, phones.prefs.head_level, t::warm(), false, 0.75, "head-level", tag) {
+                desk.set_head_level(nv);
+            }
+            label_sized(p, pos2(c2.x, c2.y + 17.0), Align2::CENTER_TOP, "Phones", 9.5, t::label());
+        }
+        for (dbv, word) in if knobs { &[(0.0f32, "0"), (-12.0, "12"), (-36.0, "36")][..] } else { &[(0.0f32, "0"), (-6.0, "6"), (-12.0, "12"), (-24.0, "24"), (-36.0, "36")][..] } {
+            let (dbv, word) = (*dbv, *word);
             let k = 1.0 + dbv / 48.0;
             let y = mr.bottom() - k * mr.height();
             kit::text(p, pos2(mc - 15.0, y), Align2::RIGHT_CENTER, word, 8.5, "mono", t::faint());
@@ -639,6 +682,177 @@ impl App {
         if let Some(x) = kit::crossfader(ui, p, cf.shrink2(vec2(6.0, 0.0)), s.crossfader, "xf") {
             desk.set_auto(false);
             desk.set_crossfader(x);
+        }
+    }
+
+    /// Songs (or lists) from elsewhere: where each is, its state, Get / Open / Take.
+    fn found_list(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, area: Rect, lists: bool, s: &Snapshot) {
+        let lib = desk.library();
+        let items: Vec<wo_house::Found> = lib.found.iter().filter(|f| if lists { f.is_list() } else { f.plays() && f.place != "library" }).cloned().collect();
+        let notes = lib.found_notes.clone();
+        let loading = lib.found_loading;
+        let error = lib.error.clone();
+        // the head
+        let hy = area.top() + 12.0;
+        let (c_title, c_sub, c_time, c_act) = (area.left() + 96.0, area.left() + area.width() * 0.46, area.right() - 300.0, area.right() - 236.0);
+        for (x, h) in [(area.left() + 14.0, "#"), (area.left() + 42.0, "Where"), (c_title, "Title"), (c_sub, if lists { "By" } else { "Artist" }), (c_time, if lists { "Songs" } else { "Time" })] {
+            label_sized(p, pos2(x, hy), Align2::LEFT_CENTER, h, 10.5, t::label());
+        }
+        p.line_segment([pos2(area.left(), hy + 14.0), pos2(area.right(), hy + 14.0)], Stroke::new(1.0, white(0.08)));
+        let mut list = Rect::from_min_max(pos2(area.left(), hy + 15.0), area.max);
+        // what could not be asked, and where YouTube songs are fetched
+        let mut foot: Vec<String> = notes.iter().map(|(w, n)| format!("{}: {n}", place_name(w))).collect();
+        if !lists && items.iter().any(|f| f.place == "ytmusic" || f.place == "youtube") {
+            if let Err(why) = desk.fetch_tools() {
+                foot.push(format!("YouTube songs are fetched by the house's pool, not here. {why}"));
+            }
+        }
+        if !foot.is_empty() {
+            list.max.y -= 22.0;
+            kit::clipped(p, pos2(list.left() + 14.0, list.bottom() + 12.0), &foot.join("   ·   "), 11.0, "", t::faint(), list.width() - 28.0);
+        }
+        if items.is_empty() {
+            let why = if loading {
+                "Asking everywhere…".to_owned()
+            } else if let Some(e) = error {
+                e
+            } else if lists {
+                "No lists found".to_owned()
+            } else {
+                "Nothing found elsewhere".to_owned()
+            };
+            kit::hint(p, list.center(), Align2::CENTER_CENTER, &why);
+            return;
+        }
+        let free = s.decks.iter().position(|d| !d.playing);
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
+        let mut act: Option<(u8, wo_house::Found, Option<usize>)> = None;
+        let ctx = ui.ctx().clone();
+        egui::ScrollArea::vertical().id_salt(("found", lists)).auto_shrink([false, false]).max_height(list.height().max(0.0)).show_rows(&mut child, ROW, items.len(), |ui, range| {
+            for i in range {
+                let f = &items[i];
+                let (rr, resp) = ui.allocate_exact_size(vec2(list.width(), ROW), Sense::click_and_drag());
+                let p = ui.painter().clone();
+                let h = motion::tween_bool(&ctx, resp.id.with("h"), resp.hovered(), motion::QUICK, motion::STANDARD);
+                if h > 0.0 {
+                    p.rect_filled(rr.shrink2(vec2(6.0, 1.0)), CornerRadius::same(t::R_CONTROL), white(0.045 * h));
+                }
+                let y = rr.center().y;
+                let view = if lists { None } else { desk.getting(f) };
+                kit::text(&p, pos2(rr.left() + 14.0, y), Align2::LEFT_CENTER, &(i + 1).to_string(), 11.0, "mono", t::label());
+                place_chip(&p, pos2(rr.left() + 42.0, y), &f.place);
+                let ink = if f.unavailable.is_some() { t::muted() } else { t::text() };
+                let title = if lists && f.kind == "album" { format!("{}  · record", f.title) } else { f.title.clone() };
+                kit::clipped(&p, pos2(c_title, y), &title, 13.0, "", ink, c_sub - c_title - 12.0);
+                kit::clipped(&p, pos2(c_sub, y), &f.subtitle, 13.0, "", t::muted(), c_time - c_sub - 12.0);
+                let time = if lists { f.tracks.map(|n| n.to_string()).unwrap_or_default() } else { f.duration_ms.map(|ms| format!("{}:{:02}", ms / 60000, ms / 1000 % 60)).unwrap_or_default() };
+                kit::text(&p, pos2(c_time, y), Align2::LEFT_CENTER, &time, 12.0, "mono", t::muted());
+                let a = Rect::from_min_max(pos2(c_act, rr.top() + 5.0), pos2(rr.right() - 12.0, rr.bottom() - 5.0));
+                if lists {
+                    let open = Rect::from_min_size(a.min, vec2(80.0, a.height()));
+                    if Btn::new("Open").icon(Icon::ChevronRight).size(10.5).show(ui, &p, open, ("found-open", i)).on_hover_text("Its songs").clicked() {
+                        act = Some((1, f.clone(), None));
+                    }
+                    if f.place != "library" {
+                        let take = Rect::from_min_size(pos2(open.right() + 8.0, a.top()), vec2(a.width() - 88.0, a.height()));
+                        let word = if f.known { "Taken · again" } else { "Take" };
+                        if Btn::new(word).icon(Icon::Plus).size(10.5).show(ui, &p, take, ("found-take", i)).on_hover_text("A playlist of yours that mirrors it; its songs fetched by the house").clicked() {
+                            act = Some((2, f.clone(), None));
+                        }
+                    }
+                } else if let Some(why) = &f.unavailable {
+                    kit::clipped(&p, pos2(a.left(), y), why, 11.5, "", t::faint(), a.width());
+                } else {
+                    match &view {
+                        None => {
+                            if Btn::new("Get").icon(Icon::Plus).size(10.5).show(ui, &p, Rect::from_min_size(a.min, vec2(80.0, a.height())), ("found-get", i)).on_hover_text("The house takes it, and it is fetched").clicked() {
+                                act = Some((0, f.clone(), None));
+                            }
+                        }
+                        Some(v) if v.ready => {
+                            kit::text(&p, pos2(a.left(), y), Align2::LEFT_CENTER, "here", 11.5, "", t::ok());
+                            if let Some(r) = &v.record {
+                                resp.dnd_set_drag_payload(r.clone());
+                            }
+                            for d in 0..2 {
+                                let b = Rect::from_min_size(pos2(a.left() + 56.0 + d as f32 * 40.0, a.top()), vec2(34.0, a.height()));
+                                if Btn::new(["A", "B"][d]).tone(Tone::Deck(d)).enabled(!s.decks[d].playing).size(10.5).show(ui, &p, b, ("found-deck", i, d)).on_hover_text(format!("On deck {}", ["A", "B"][d])).clicked() {
+                                    act = Some((3, f.clone(), Some(d)));
+                                }
+                            }
+                        }
+                        Some(v) if v.error.is_some() => {
+                            let again = Rect::from_min_size(a.min, vec2(64.0, a.height()));
+                            if Btn::new("Again").size(10.5).show(ui, &p, again, ("found-again", i)).on_hover_text(v.error.clone().unwrap_or_default()).clicked() {
+                                act = Some((0, f.clone(), None));
+                            }
+                            kit::clipped(&p, pos2(again.right() + 8.0, y), v.error.as_deref().unwrap_or(""), 11.0, "", t::warm(), a.right() - again.right() - 8.0);
+                        }
+                        Some(v) => {
+                            let bar = Rect::from_min_size(pos2(a.left(), y + 7.0), vec2(a.width(), 3.0));
+                            p.rect_filled(bar, CornerRadius::same(2), col(theme::LINE));
+                            match v.percent {
+                                Some(k) => {
+                                    p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * k, 3.0)), CornerRadius::same(2), if v.here { t::ok() } else { t::soft() });
+                                }
+                                None => {
+                                    // working, how far not known: a light that goes round
+                                    let ph = (ctx.input(|i| i.time) * 0.8).fract() as f32;
+                                    let x = bar.left() + (bar.width() - 30.0) * ph;
+                                    p.rect_filled(Rect::from_min_size(pos2(x, bar.top()), vec2(30.0, 3.0)), CornerRadius::same(2), t::soft());
+                                }
+                            }
+                            kit::clipped(&p, pos2(a.left(), y - 5.0), &v.words, 11.0, "", t::muted(), a.width());
+                            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                        }
+                    }
+                }
+                if resp.double_clicked() {
+                    act = Some(if lists { (1, f.clone(), None) } else { (3, f.clone(), free) });
+                }
+                let fc = f.clone();
+                resp.context_menu(|ui| {
+                    if fc.plays() && fc.unavailable.is_none() {
+                        if ui.button("Get it").clicked() {
+                            act = Some((0, fc.clone(), None));
+                            ui.close();
+                        }
+                        for d in 0..2 {
+                            if ui.add_enabled(!s.decks[d].playing, egui::Button::new(format!("On deck {} (once it is here)", ["A", "B"][d]))).clicked() {
+                                act = Some((3, fc.clone(), Some(d)));
+                                ui.close();
+                            }
+                        }
+                    }
+                    if fc.is_list() {
+                        if ui.button("Open").clicked() {
+                            act = Some((1, fc.clone(), None));
+                            ui.close();
+                        }
+                        if fc.place != "library" && ui.button("Take it as a playlist").clicked() {
+                            act = Some((2, fc.clone(), None));
+                            ui.close();
+                        }
+                    }
+                    if let Some(url) = fc.url.as_ref().filter(|u| u.starts_with("http"))
+                        && ui.button("Copy its link").clicked()
+                    {
+                        ui.ctx().copy_text(url.clone());
+                        ui.close();
+                    }
+                });
+            }
+        });
+        match act {
+            Some((0, f, _)) => desk.get_found(&f),
+            Some((1, f, _)) => desk.open_found(&f),
+            Some((2, f, _)) => desk.take_found_list(&f),
+            Some((3, f, Some(d))) => desk.load_found(d, &f),
+            Some((3, f, None)) => {
+                desk.get_found(&f);
+                self.toasts.say("Both decks are playing: it waits in the crate", Tone::Neutral);
+            }
+            _ => {}
         }
     }
 
@@ -672,6 +886,43 @@ impl App {
                 }
                 let words = if seeds.is_empty() { "Nothing on the decks or in the queue yet".to_owned() } else { "Like the records on the decks and the next in the queue · a right click: not for me".to_owned() };
                 kit::clipped(p, pos2(again.right() + 12.0, r.center().y), &words, 11.5, "", t::faint(), r.right() - again.right() - 12.0);
+            }
+            Shelf::Search(_) => {
+                let lib = desk.library();
+                let songs = lib.found.iter().filter(|f| f.place != "library" && f.plays()).count();
+                let lists = lib.found.iter().filter(|f| f.is_list()).count();
+                let wait = |n: usize| if lib.found_loading { "…".to_owned() } else { n.to_string() };
+                let tabs = [format!("In the house {}", if lib.loading { "…".to_owned() } else { lib.total.to_string() }), format!("Elsewhere {}", wait(songs)), format!("Lists {}", wait(lists))];
+                let names: Vec<&str> = tabs.iter().map(String::as_str).collect();
+                let seg = Rect::from_min_size(r.min, vec2(390.0f32.min(r.width()), r.height()));
+                if let Some(i) = kit::segmented(ui, p, seg, &names, Some(self.found_tab), Tone::Neutral, "found-tab") {
+                    self.found_tab = i;
+                }
+                let words = match self.found_tab {
+                    0 => "The house's records · Elsewhere: songs from YouTube Music, SoundCloud, Bandcamp… got onto the house",
+                    1 => "Get one and it is fetched (YouTube songs on this computer where it can) · double-click: onto a free deck once it is here",
+                    _ => "Public playlists and records · open one for its songs, or take it whole as a playlist of yours",
+                };
+                kit::clipped(p, pos2(seg.right() + 12.0, r.center().y), words, 11.5, "", t::faint(), r.right() - seg.right() - 12.0);
+            }
+            Shelf::Elsewhere(f) => {
+                let f = f.clone();
+                let back = Rect::from_min_size(r.min, vec2(34.0, r.height()));
+                if Btn::new("").icon(Icon::ChevronLeft).size(11.0).show(ui, p, back, "found-back").on_hover_text("Back to the search").clicked() {
+                    let q = self.searched.clone();
+                    self.found_tab = 2;
+                    desk.open_shelf(Shelf::Search(q));
+                }
+                let all = Rect::from_min_size(pos2(back.right() + 8.0, r.top()), vec2(96.0, r.height()));
+                if Btn::new("Get all").icon(Icon::Plus).size(11.0).show(ui, p, all, "found-get-all").on_hover_text("Every song on it not here yet: the house takes them and they are fetched").clicked() {
+                    desk.get_all_found();
+                }
+                let take = Rect::from_min_size(pos2(all.right() + 8.0, r.top()), vec2(168.0, r.height()));
+                if f.place != "library" && Btn::new("Take it as a playlist").icon(Icon::List).accent(true).size(11.0).show(ui, p, take, "found-take").on_hover_text("A playlist of yours that mirrors it: the house lists it and fetches its songs").clicked() {
+                    desk.take_found_list(&f);
+                }
+                let words = format!("{} · {}", f.subtitle, place_name(&f.place));
+                kit::clipped(p, pos2(take.right() + 12.0, r.center().y), &words, 11.5, "", t::faint(), r.right() - take.right() - 12.0);
             }
             Shelf::Check => {
                 // a record of the list on a deck, not checked yet: its pads, and what its grid is like
@@ -719,6 +970,10 @@ impl App {
 
     fn crate_(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot) {
         kit::panel(p, r, true);
+        // what the house says as songs from elsewhere come and go
+        for said in desk.take_elsewhere_said() {
+            self.toasts.say(said, Tone::Neutral);
+        }
         let tree = Rect::from_min_max(r.min, pos2(r.left() + 232.0, r.bottom()));
         p.line_segment([pos2(tree.right(), r.top() + 12.0), pos2(tree.right(), r.bottom() - 12.0)], Stroke::new(1.0, white(0.06)));
         self.shelves(desk, ui, p, tree);
@@ -730,7 +985,7 @@ impl App {
         let hint = if on_usb {
             "Search the stick"
         } else if desk.house().is_some() {
-            "Search the house"
+            "Search the house and everywhere else"
         } else {
             "Search these records"
         };
@@ -749,6 +1004,10 @@ impl App {
         let enter = typed.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let paused = self.search_at.is_some_and(|t| t.elapsed().as_millis() > 350);
         if desk.house().is_some() && !on_usb && (enter || paused) && self.search != self.searched {
+            // a new search starts on the house's records (one asked from the command line on its tab)
+            if !self.searched.is_empty() || std::env::args().all(|a| a != "--found-tab") {
+                self.found_tab = 0;
+            }
             self.searched = self.search.clone();
             desk.open_shelf(Shelf::Search(self.search.clone()));
             self.search_at = None;
@@ -774,6 +1033,7 @@ impl App {
                     Shelf::Similar { .. } => "Like what is on".to_owned(),
                     Shelf::Check => format!("Check by ear · {} done", lib.checked.len()),
                     Shelf::Usb { stick, .. } => stick.clone(),
+                    Shelf::Elsewhere(f) => format!("{} · {}", f.title, place_name(&f.place)),
                 };
                 let n = if lib.loading { "…".to_owned() } else { thousands(lib.total) };
                 format!("{name} · {n}")
@@ -791,12 +1051,23 @@ impl App {
         let cx = cols.x;
         let clip = p.with_clip_rect(main.shrink(1.0));
         let p = &clip;
-        let strip = (matches!(lib.shelf, Shelf::Playlist { .. } | Shelf::Similar { .. } | Shelf::Check) && desk.house().is_some()) || matches!(lib.shelf, Shelf::Usb { playlist: Some(_), .. });
+        let strip = (matches!(lib.shelf, Shelf::Playlist { .. } | Shelf::Similar { .. } | Shelf::Check | Shelf::Search(_) | Shelf::Elsewhere(_)) && desk.house().is_some()) || matches!(lib.shelf, Shelf::Usb { playlist: Some(_), .. });
         if strip {
             let shelf = lib.shelf.clone();
             self.crate_strip(desk, ui, p, Rect::from_min_size(pos2(main.left() + 14.0, main.top() + 48.0), vec2(main.width() - 28.0, 26.0)), &shelf, s);
         }
         let hy = main.top() + if strip { 92.0 } else { 62.0 };
+        let elsewhere = match &desk.library().shelf {
+            Shelf::Search(_) => self.found_tab > 0,
+            Shelf::Elsewhere(_) => true,
+            _ => false,
+        };
+        if elsewhere {
+            let lists = matches!(desk.library().shelf, Shelf::Search(_)) && self.found_tab == 2;
+            let area = Rect::from_min_max(pos2(main.left(), hy - 12.0), pos2(main.right(), main.bottom() - 4.0));
+            self.found_list(desk, ui, p, area, lists, s);
+            return;
+        }
         let heads: [(&str, Option<Sort>, usize, bool); 8] = [
             ("#", None, 0, false),
             ("", None, 1, false),
@@ -899,9 +1170,12 @@ impl App {
         let mut uncheck: Option<i64> = None;
         let free_decks: [bool; 2] = [!s.decks[0].playing, !s.decks[1].playing];
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
+        // a row's pitch: its height and the gap egui leaves under it (show_rows lays the
+        // rows out so) — the cursor's highlight, placed by ROW alone, crept 3 px a row
+        let pitch = ROW + child.spacing().item_spacing.y;
         let mut area = egui::ScrollArea::vertical().id_salt("crate").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0));
         if let Some(i) = scroll_to {
-            area = area.vertical_scroll_offset((i as f32 * ROW - list.height() / 2.0).max(0.0));
+            area = area.vertical_scroll_offset((i as f32 * pitch - list.height() / 2.0).max(0.0));
         }
         let cursor = self.cursor;
         let mut clicked = None;
@@ -913,7 +1187,7 @@ impl App {
             for i in range {
                 let row = &rows[i];
                 let (rr, resp) = ui.allocate_exact_size(vec2(list.width(), ROW), Sense::click_and_drag());
-                origin.get_or_insert(rr.top() - (i - first) as f32 * ROW - first as f32 * ROW);
+                origin.get_or_insert(rr.top() - i as f32 * pitch);
                 let p = ui.painter().clone();
                 let k = row_k(i - first);
                 let mut p = p;
@@ -1021,7 +1295,7 @@ impl App {
             if let Some(o) = origin
                 && !rows.is_empty()
             {
-                let gy = motion::spring(&ctx, ui.scope_id().with("cursor"), cursor as f32 * ROW, 0.14);
+                let gy = motion::spring(&ctx, ui.scope_id().with("cursor"), cursor as f32 * pitch, 0.14);
                 let hr = Rect::from_min_size(pos2(list.left() + 6.0, o + gy + 1.0), vec2(list.width() - 12.0, ROW - 2.0));
                 if hr.intersects(ui.clip_rect()) {
                     let p = ui.painter();
@@ -1044,7 +1318,7 @@ impl App {
             g.add_triangle(0, 2, 3);
             p.add(g);
         };
-        if rows.len() as f32 * ROW > list.height() {
+        if rows.len() as f32 * pitch > list.height() {
             fade(list.bottom() - 18.0, list.bottom(), false);
         }
         if rows.is_empty() && !desk.library().loading {
@@ -1845,4 +2119,34 @@ fn dashed_rect(p: &Painter, r: Rect, c: Color32) {
     edge(r.right_top(), r.right_bottom());
     edge(r.right_bottom(), r.left_bottom());
     edge(r.left_bottom(), r.left_top());
+}
+
+/// A service's name, short.
+fn place_name(place: &str) -> &'static str {
+    match place {
+        "library" => "the house",
+        "ytmusic" => "YouTube Music",
+        "youtube" => "YouTube",
+        "spotify" => "Spotify",
+        "soundcloud" => "SoundCloud",
+        "bandcamp" => "Bandcamp",
+        _ => "elsewhere",
+    }
+}
+
+/// Where a row is from, as a small coloured tag.
+fn place_chip(p: &Painter, left_center: egui::Pos2, place: &str) {
+    let (word, c) = match place {
+        "library" => ("HOUSE", Color32::from_rgb(0x9D, 0xA1, 0xAA)),
+        "ytmusic" => ("YTM", Color32::from_rgb(0xE5, 0x4B, 0x4B)),
+        "youtube" => ("YT", Color32::from_rgb(0xC8, 0x3A, 0x3A)),
+        "spotify" => ("SPOT", Color32::from_rgb(0x3B, 0xC1, 0x6A)),
+        "soundcloud" => ("SC", Color32::from_rgb(0xF2, 0x7A, 0x2E)),
+        "bandcamp" => ("BC", Color32::from_rgb(0x4A, 0x9F, 0xC4)),
+        _ => ("?", Color32::GRAY),
+    };
+    let g = p.layout_no_wrap(word.to_owned(), egui::FontId::new(9.5, crate::paint::family("mono-semi")), c);
+    let r = Rect::from_min_size(pos2(left_center.x, left_center.y - 9.0), vec2(g.size().x + 10.0, 18.0));
+    p.rect(r, CornerRadius::same(4), alpha_of(c, 0.14), Stroke::new(1.0, alpha_of(c, 0.45)), StrokeKind::Inside);
+    p.galley(r.center() - g.size() / 2.0, g, c);
 }

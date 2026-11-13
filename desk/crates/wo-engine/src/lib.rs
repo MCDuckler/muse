@@ -32,6 +32,8 @@ pub enum Error {
     OutOfMemory,
     /// Samples that are not whole frames, or buffers of the wrong length.
     Shape(&'static str),
+    /// The outputs would not go where asked: what the engine said.
+    Route(String),
 }
 
 impl fmt::Display for Error {
@@ -42,6 +44,7 @@ impl fmt::Display for Error {
             Error::NotOffline => write!(f, "only an offline engine renders on demand"),
             Error::OutOfMemory => write!(f, "the engine is out of memory"),
             Error::Shape(why) => write!(f, "{why}"),
+            Error::Route(why) => write!(f, "{why}"),
         }
     }
 }
@@ -55,6 +58,82 @@ pub enum Output {
     Device,
     /// No sound card: [`Engine::render`] renders blocks on demand (tests, offline renders).
     Offline,
+}
+
+/// One of the system's sound outputs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputDevice {
+    pub name: String,
+    /// The most channels it takes (0: not known). A DJ console's: 4, the master on 1/2
+    /// and the headphones on 3/4.
+    pub channels: u32,
+    pub is_default: bool,
+}
+
+/// The system's outputs (an engine running or not).
+pub fn outputs() -> Vec<OutputDevice> {
+    let n = unsafe { sys::we_devices(std::ptr::null_mut(), 0) }.max(0) as usize;
+    if n == 0 {
+        return vec![];
+    }
+    // listed again, now with room (one may have come meanwhile: the room has spare)
+    let mut buf = vec![sys::we_device_info { name: [0; 256], channels: 0, is_default: 0 }; n + 8];
+    let got = unsafe { sys::we_devices(buf.as_mut_ptr(), buf.len() as i32) }.max(0) as usize;
+    buf.truncate(got.min(buf.len()));
+    buf.iter()
+        .map(|d| OutputDevice {
+            name: unsafe { CStr::from_ptr(d.name.as_ptr()) }.to_string_lossy().into_owned(),
+            channels: d.channels.max(0) as u32,
+            is_default: d.is_default != 0,
+        })
+        .collect()
+}
+
+/// Where the sound goes ([Engine::route]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Route {
+    /// The master's output (None: the system's own), on its channels `master_ch` and the next.
+    pub master: Option<String>,
+    pub master_ch: u32,
+    pub cue: Cue,
+}
+
+/// Where the headphones go.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Cue {
+    /// Nowhere: one output.
+    #[default]
+    None,
+    /// An output (None: the system's own), on its channels `ch` and the next. The master's
+    /// own output: the same device (a DJ console's 3/4); another: a second sound card.
+    Device { name: Option<String>, ch: u32 },
+    /// One stereo pair: the headphones in the left ear, the master in the right, each mono.
+    Split,
+}
+
+/// How the outputs are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RouteState {
+    /// The main output's channels (0: none open).
+    pub channels: u32,
+    pub cue: CueAt,
+    /// The second card's channels.
+    pub cue_channels: u32,
+    /// An output stopped by itself (unplugged).
+    pub lost: bool,
+    pub cue_lost: bool,
+    /// Times the second card ran dry.
+    pub gaps: i64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CueAt {
+    #[default]
+    Nowhere,
+    Split,
+    SameDevice,
+    SecondCard,
 }
 
 /// Which of the engine's four decks.
@@ -336,6 +415,67 @@ impl Engine {
         Hand { engine: Arc::downgrade(&self.inner), d: d.raw() }
     }
 
+    /// Sends the sound where `r` says; the decks play on through it. A main output that
+    /// would not open leaves the system's own (stereo) and says why.
+    pub fn route(&self, r: &Route) -> Result<(), Error> {
+        let cs = |s: &Option<String>| std::ffi::CString::new(s.clone().unwrap_or_default()).map_err(|_| Error::Route("a name with a zero in it".into()));
+        let master = cs(&r.master)?;
+        let (cue, cue_ch, split) = match &r.cue {
+            Cue::None => (None, 0, 0),
+            Cue::Device { name, ch } => (Some(cs(name)?), *ch, 0),
+            Cue::Split => (None, 0, 1),
+        };
+        let cfg = sys::we_route_cfg {
+            master: master.as_ptr(),
+            master_ch: r.master_ch as i32,
+            cue: cue.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+            cue_ch: cue_ch as i32,
+            split,
+        };
+        let code = unsafe { sys::we_route(&cfg) };
+        if code == 0 {
+            return Ok(());
+        }
+        let why = unsafe { CStr::from_ptr(sys::we_error()) }.to_string_lossy().into_owned();
+        Err(Error::Route(if why.is_empty() { format!("error {code}") } else { why }))
+    }
+
+    pub fn route_state(&self) -> RouteState {
+        let mut s = sys::we_route_state::default();
+        unsafe { sys::we_route_read(&mut s) };
+        RouteState {
+            channels: s.channels.max(0) as u32,
+            cue: match s.cue {
+                1 => CueAt::Split,
+                2 => CueAt::SameDevice,
+                3 => CueAt::SecondCard,
+                _ => CueAt::Nowhere,
+            },
+            cue_channels: s.cue_channels.max(0) as u32,
+            lost: s.lost != 0,
+            cue_lost: s.cue_lost != 0,
+            gaps: s.gaps,
+        }
+    }
+
+    /// The headphones' blend: `mix` 0 the cued decks alone .. 1 the master alone; `level` a gain.
+    pub fn set_cue_mix(&self, mix: f32, level: f32) {
+        unsafe { sys::we_cue_mix(mix, level) }
+    }
+
+    /// Offline only: the master as [Engine::render], and the headphones into `cue`
+    /// (rendered once [Engine::route] asked for some).
+    pub fn render_cue(&self, out: &mut [f32], cue: &mut [f32]) -> Result<(), Error> {
+        if !self.inner.offline {
+            return Err(Error::NotOffline);
+        }
+        if !out.len().is_multiple_of(2) || cue.len() != out.len() {
+            return Err(Error::Shape("the master and the headphones are stereo, as long as each other"));
+        }
+        unsafe { sys::we_render_cue(out.as_mut_ptr(), cue.as_mut_ptr(), (out.len() / 2) as i32) };
+        Ok(())
+    }
+
     pub fn set_master_level(&self, gain: f32) {
         unsafe { sys::we_master_level(gain) }
     }
@@ -606,6 +746,12 @@ impl Deck<'_> {
     /// The channel: gain after the EQ (fader × crossfader × trim).
     pub fn set_level(&self, gain: f32, ramp: f64) {
         unsafe { sys::we_deck_level(self.d, gain, ramp) }
+    }
+
+    /// In the headphones (pre-fader listening): its sound after EQ, filter and effects,
+    /// before its fader, at `gain` (0: not in them).
+    pub fn set_cue(&self, gain: f32, ramp: f64) {
+        unsafe { sys::we_deck_cue(self.d, gain, ramp) }
     }
 
     pub fn set_eq(&self, eq: Eq, ramp: f64) {

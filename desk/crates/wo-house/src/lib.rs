@@ -16,6 +16,8 @@ pub enum Error {
     Status(u16),
     /// The house could not be reached, or answered nonsense.
     Net(String),
+    /// The house said no, and why (its words).
+    Said(u16, String),
     Io(std::io::Error),
 }
 
@@ -26,6 +28,7 @@ impl std::fmt::Display for Error {
             Error::Status(404) => write!(f, "the house doesn't have that (or it isn't ready)"),
             Error::Status(c) => write!(f, "the house said {c}"),
             Error::Net(e) => write!(f, "can't reach the house: {e}"),
+            Error::Said(_, why) => write!(f, "{why}"),
             Error::Io(e) => write!(f, "{e}"),
         }
     }
@@ -77,6 +80,95 @@ pub struct Track {
     pub gain_db: Option<f64>,
     #[serde(default)]
     pub true_peak_db: Option<f64>,
+    /// While it is being fetched: what is happening ("downloading", "converting"…) and
+    /// how far (0..100 where the house knows).
+    #[serde(default)]
+    pub progress: Option<Progress>,
+    /// Why it failed, in words, when it did.
+    #[serde(default)]
+    pub fail_reason: Option<String>,
+    /// Where its audio comes from ("ytmusic", "soundcloud", "bandcamp"…).
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// A fetch under way, as the house tells it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct Progress {
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub percent: Option<f64>,
+}
+
+/// Something found by a search, wherever it lives (GET /search/everything): a song, a
+/// record, a playlist… `place` is where (`library` here, or `ytmusic`, `youtube`,
+/// `spotify`, `soundcloud`, `bandcamp`), `id` what that place calls it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct Found {
+    pub kind: String,
+    pub place: String,
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub subtitle: String,
+    #[serde(default)]
+    pub cover_url: Option<String>,
+    #[serde(default)]
+    pub duration_ms: Option<i64>,
+    /// The house's own record for it, where it has one.
+    #[serde(default, skip_serializing)]
+    pub track: Option<Track>,
+    /// The house knows it already (it may still be fetching).
+    #[serde(default)]
+    pub known: bool,
+    /// Songs, for a record or a list.
+    #[serde(default)]
+    pub tracks: Option<i64>,
+    #[serde(default)]
+    pub album: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Can't be had (a Bandcamp song only streamed once bought): why.
+    #[serde(default)]
+    pub unavailable: Option<String>,
+}
+
+impl Found {
+    /// A song (or a video kept as its sound): something that plays.
+    pub fn plays(&self) -> bool {
+        self.kind == "song" || self.kind == "video"
+    }
+
+    /// A list of songs: a record or a playlist.
+    pub fn is_list(&self) -> bool {
+        self.kind == "album" || self.kind == "playlist"
+    }
+
+    /// One key for it, whatever it is.
+    pub fn key(&self) -> String {
+        format!("{}:{}:{}", self.place, self.kind, self.id)
+    }
+}
+
+/// What is on a record or a list somebody found (GET /search/album).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct FoundList {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(default)]
+    pub tracks: Vec<Found>,
+}
+
+/// A job the house hands to a computer that fetches (POST /internal/jobs/claim).
+#[derive(Clone, Debug, PartialEq)]
+pub struct IngestJob {
+    pub id: i64,
+    pub track_id: i64,
+    pub video_id: String,
 }
 
 impl Track {
@@ -423,6 +515,11 @@ pub fn app_folder() -> Option<PathBuf> {
     candidates.filter(|p| p.is_dir())
 }
 
+/// A query value, percent-encoded (everything but letters and digits).
+fn enc(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
 /// A signed-in connection to the house.
 #[derive(Clone)]
 pub struct House {
@@ -477,8 +574,7 @@ impl House {
             #[serde(default)]
             local: Vec<Track>,
         }
-        let q: String = q.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
-        let mut found: Found = self.json(&format!("/search?q={q}&limit=60&remote=false"))?;
+        let mut found: Found = self.json(&format!("/search?q={}&limit=60&remote=false", enc(q)))?;
         found.local.sort_by_key(|t| !t.ready());
         Ok(found.local)
     }
@@ -505,6 +601,139 @@ impl House {
 
     pub fn analysis(&self, id: i64) -> Result<Analysis> {
         self.json(&format!("/tracks/{id}/analysis?structure=1"))
+    }
+
+    /// POST `body`; a refusal comes back with the house's own words (its `detail`).
+    fn post_said(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
+        let mut r = self
+            .agent
+            .post(format!("{}{path}", self.session.server))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .header("Authorization", &format!("Bearer {}", self.session.token))
+            .send_json(body)?;
+        let status = r.status().as_u16();
+        let v: serde_json::Value = r.body_mut().read_json().unwrap_or(serde_json::Value::Null);
+        if status >= 300 {
+            let why = v.get("detail").and_then(|d| d.as_str()).map(str::to_owned).unwrap_or_else(|| format!("the house said {status}"));
+            return Err(Error::Said(status, why));
+        }
+        Ok(v)
+    }
+
+    /// The same for a GET.
+    fn get_said<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let mut r = self.get(path).config().http_status_as_error(false).build().call()?;
+        let status = r.status().as_u16();
+        let v: serde_json::Value = r.body_mut().read_json().unwrap_or(serde_json::Value::Null);
+        if status >= 300 {
+            let why = v.get("detail").and_then(|d| d.as_str()).map(str::to_owned).unwrap_or_else(|| format!("the house said {status}"));
+            return Err(Error::Said(status, why));
+        }
+        serde_json::from_value(v).map_err(|e| Error::Net(e.to_string()))
+    }
+
+    /// Everything a search finds, here and elsewhere, ranked together (GET
+    /// /search/everything): `kind` all/song/playlist/…, `place` all or one service. The
+    /// rows, and what each service that could not be asked said.
+    pub fn everything(&self, q: &str, kind: &str, place: &str) -> Result<(Vec<Found>, Vec<(String, String)>)> {
+        #[derive(Deserialize)]
+        struct Answer {
+            #[serde(default)]
+            items: Vec<Found>,
+            #[serde(default)]
+            notes: std::collections::BTreeMap<String, String>,
+        }
+        let a: Answer = self.get_said(&format!("/search/everything?q={}&kind={kind}&where={place}&limit=40", enc(q)))?;
+        Ok((a.items, a.notes.into_iter().collect()))
+    }
+
+    /// What is on a record or a list found elsewhere (GET /search/album).
+    pub fn found_list(&self, f: &Found) -> Result<FoundList> {
+        self.get_said(&format!("/search/album?place={}&id={}&kind={}", enc(&f.place), enc(&f.id), enc(&f.kind)))
+    }
+
+    /// One song found elsewhere, taken (POST /search/add): the house's record for it —
+    /// ready when it had it, else queued to be fetched.
+    pub fn add_found(&self, f: &Found) -> Result<Track> {
+        let v = self.post_said(
+            "/search/add",
+            &serde_json::json!({
+                "place": f.place, "id": f.id, "title": f.title, "subtitle": f.subtitle,
+                "album": f.album, "duration_ms": f.duration_ms, "url": f.url,
+            }),
+        )?;
+        serde_json::from_value(v).map_err(|e| Error::Net(e.to_string()))
+    }
+
+    /// A whole list found elsewhere, mirrored as a playlist of this person's (POST
+    /// /search/take): the house lists it and queues its songs on its own.
+    pub fn take_list(&self, f: &Found) -> Result<String> {
+        let v = self.post_said("/search/take", &serde_json::json!({ "place": f.place, "id": f.id, "kind": f.kind, "title": f.title }))?;
+        Ok(v.get("name").and_then(|n| n.as_str()).unwrap_or(&f.title).to_owned())
+    }
+
+    /// One record as it is now (GET /tracks/{id}): its state and progress.
+    pub fn track(&self, id: i64) -> Result<Track> {
+        self.json(&format!("/tracks/{id}"))
+    }
+
+    /// These to the front of the house's fetching, in this order (POST /downloads/promote).
+    pub fn promote(&self, ids: &[i64]) -> Result<()> {
+        self.post_said("/downloads/promote", &serde_json::json!({ "track_ids": ids })).map(|_| ())
+    }
+
+    /// The job for one song, claimed for this computer to fetch now (none: it is ready,
+    /// or another computer has it).
+    pub fn claim(&self, track_id: i64) -> Result<Option<IngestJob>> {
+        let v = self.post_said("/internal/jobs/claim", &serde_json::json!({ "kind": "ingest", "track_id": track_id }))?;
+        let Some(j) = v.get("job").filter(|j| j.is_object()) else { return Ok(None) };
+        let p = j.get("payload").cloned().unwrap_or_default();
+        Ok(match (j.get("id").and_then(|x| x.as_i64()), p.get("track_id").and_then(|x| x.as_i64()), p.get("video_id").and_then(|x| x.as_str())) {
+            (Some(id), Some(track_id), Some(video)) => Some(IngestJob { id, track_id, video_id: video.to_owned() }),
+            _ => None,
+        })
+    }
+
+    pub fn job_progress(&self, job: &IngestJob, stage: &str, percent: Option<f64>, speed: Option<&str>) -> Result<()> {
+        self.post_said(&format!("/internal/jobs/{}/progress", job.id), &serde_json::json!({ "track_id": job.track_id, "stage": stage, "percent": percent, "speed": speed })).map(|_| ())
+    }
+
+    pub fn job_fail(&self, job: &IngestJob, reason: &str, retryable: bool) -> Result<()> {
+        let reason: String = reason.chars().take(500).collect();
+        self.post_said(&format!("/internal/jobs/{}/fail", job.id), &serde_json::json!({ "reason": reason, "retryable": retryable, "track_id": job.track_id })).map(|_| ())
+    }
+
+    pub fn job_release(&self, job: &IngestJob) -> Result<()> {
+        self.post_said(&format!("/internal/jobs/{}/release", job.id), &serde_json::json!({ "track_id": job.track_id })).map(|_| ())
+    }
+
+    /// The fetched song handed in (multipart: `meta` JSON, `audio` the file).
+    pub fn job_complete(&self, job: &IngestJob, audio: &Path, meta: &serde_json::Value) -> Result<()> {
+        let boundary = format!("wetowl-desk-{}-{}", job.id, std::process::id());
+        let name = audio.file_name().and_then(|n| n.to_str()).unwrap_or("audio.m4a");
+        let mut body: Vec<u8> = vec![];
+        write!(body, "--{boundary}\r\nContent-Disposition: form-data; name=\"meta\"\r\n\r\n{meta}\r\n")?;
+        write!(body, "--{boundary}\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"{name}\"\r\nContent-Type: audio/mp4\r\n\r\n")?;
+        body.extend(std::fs::read(audio)?);
+        write!(body, "\r\n--{boundary}--\r\n")?;
+        let mut r = self
+            .agent
+            .post(format!("{}/internal/jobs/{}/complete", self.session.server, job.id))
+            .config()
+            .http_status_as_error(false)
+            .timeout_global(Some(Duration::from_secs(300)))
+            .build()
+            .header("Authorization", &format!("Bearer {}", self.session.token))
+            .header("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
+            .send(&body[..])?;
+        let status = r.status().as_u16();
+        if status >= 300 {
+            let v: serde_json::Value = r.body_mut().read_json().unwrap_or_default();
+            return Err(Error::Said(status, v.get("detail").and_then(|d| d.as_str()).unwrap_or("the house would not take it").to_owned()));
+        }
+        Ok(())
     }
 
     fn post_json(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
@@ -742,15 +971,19 @@ impl House {
         if let Some(local) = app_folder().map(|a| a.join("fetched").join(format!("{id}.m4a"))).filter(|p| p.exists()) {
             return Ok(local);
         }
-        let cache = folders::cache().ok_or_else(|| Error::Net("no cache folder".into()))?.join("wetowl-desk").join("records");
-        let file = cache.join(format!("{id}.m4a"));
+        let file = cache_file(id).ok_or_else(|| Error::Net("no cache folder".into()))?;
         if file.exists() {
             return Ok(file);
         }
-        std::fs::create_dir_all(&cache)?;
+        std::fs::create_dir_all(file.parent().unwrap())?;
         download(self.get(&format!("/tracks/{id}/stream")).call()?, &file)?;
         Ok(file)
     }
+}
+
+/// Where the Desk keeps a house record's audio (fetched from the house, or here).
+pub fn cache_file(id: i64) -> Option<PathBuf> {
+    folders::cache().map(|c| c.join("wetowl-desk").join("records").join(format!("{id}.m4a")))
 }
 
 /// One record the set builder would put in a slot, and its words.

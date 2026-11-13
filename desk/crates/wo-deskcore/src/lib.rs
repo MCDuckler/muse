@@ -18,6 +18,9 @@ pub mod library;
 pub mod milk;
 pub mod move_player;
 pub mod autodj;
+pub mod audio;
+pub mod elsewhere;
+pub mod fetch;
 mod crate_;
 pub mod plan_view;
 pub mod session;
@@ -100,6 +103,8 @@ pub struct DeckView {
     pub marks: [bool; 4],
     /// The record is being put on (its audio and analysis on their way).
     pub loading: bool,
+    /// In the headphones (pre-fader listening).
+    pub headphones: bool,
     /// The hands' state: CUE, the loop, the pitch fader.
     pub cue: Option<f64>,
     pub looped: Option<(f64, f64)>,
@@ -131,6 +136,7 @@ pub struct MixView {
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub decks: [DeckView; 2],
+    /// The master's steady tempo (the pitch fader's, or sync's): not a hand's on it.
     pub master_bpm: f64,
     pub crossfader: f32,
     pub mix: Option<MixView>,
@@ -344,6 +350,10 @@ pub struct Desk {
     /// The controllers' level meters: as they fall, and as last sent (0..127).
     meter: [f32; 2],
     meter_sent: [Option<u8>; 2],
+    /// Where the sound goes, and the headphones (audio.rs).
+    audio: audio::Audio,
+    /// Songs got from elsewhere, being fetched (elsewhere.rs).
+    elsewhere: elsewhere::State,
     /// The show's window.
     stage: stage::Stage,
     /// Counts what changed the Desk from outside the window (a controller, an answer from
@@ -429,6 +439,7 @@ impl Desk {
                 (e, Some(Pacer { stop, thread: Some(thread) }))
             }
         };
+        let pacer_offline = pacer.is_some();
         let scratcher = Arc::new(scratch::Scratcher::new(&engine));
         let mut rows = records::crate_rows();
         let mut queue: Vec<Record> = rows.iter().filter(|r| r.playable()).cloned().collect();
@@ -488,6 +499,8 @@ impl Desk {
             lit_load: [0; 2],
             meter: [0.0; 2],
             meter_sent: [None; 2],
+            audio: audio::Audio::new(pacer_offline),
+            elsewhere: Default::default(),
             stage: stage::Stage::default(),
             changes: 0,
             covers: Default::default(),
@@ -588,6 +601,10 @@ impl Desk {
         let turn = self.load_gen[slot];
         let mut source = self.engine.new_source(Channels::Stereo, RATE as i64 * record.seconds.max(60) as i64).expect("a source");
         deck.set_source(0, &source);
+        // a new record starts at its start: the deck's head stayed where the last one
+        // was (its progress, the platter's ring, carried over), a resume or the Auto
+        // DJ's park moves it after this
+        deck.seek(0.0);
         deck.set_gains(0, Gains::FULL, 0.0);
         deck.set_beats(&beats);
         deck.set_bar_one(bar_one);
@@ -718,6 +735,8 @@ impl Desk {
             self.changes += 1;
         }
         self.controllers_tick();
+        self.audio_tick();
+        self.elsewhere_tick();
         self.session_tick();
         self.stems_tick();
         self.mind_tick();
@@ -1004,10 +1023,14 @@ impl Desk {
                 stems: s.stems.state.clone(),
                 marks: [s.stems.state.ready(), !s.hands.grid.is_empty(), !s.timing.sections.is_empty(), s.vocals.as_ref().is_some_and(|v| v.bars.is_some())],
                 loading: s.loader.as_ref().is_some_and(|h| !h.is_finished()),
+                headphones: self.audio.cue[i],
             }
         };
         let decks = [view(0), view(1)];
-        let master_bpm = decks[self.master].bpm;
+        // the master's steady tempo (its pitch fader's, or the one it is synced to): not a
+        // hand's on the record, a scratch's spin-up nor a nudge — the crate's fits are sorted
+        // by it, and a tempo swinging with the hand reshuffled the list under the scratch
+        let master_bpm = self.steady_bpm(self.master);
         let key = decks[self.master].record.key.clone();
         // the house's shelf when signed in (the Auto DJ takes from it), else the local queue
         let pool = if self.library.rows.iter().any(Record::playable) { &self.library.rows } else { &self.queue };
@@ -1398,6 +1421,22 @@ impl Desk {
         self.more_asked = None;
         self.library.shelf = shelf.clone();
         self.library.loading = true;
+        self.library.found.clear();
+        self.library.found_notes.clear();
+        self.library.found_loading = false;
+        match &shelf {
+            Shelf::Search(q) => {
+                self.library.found_loading = true;
+                elsewhere::search(&self.done_tx, house, q.clone(), self.shelf_gen);
+            }
+            Shelf::Elsewhere(f) => {
+                self.library.found_loading = true;
+                self.library.rows.clear();
+                elsewhere::open_list(&self.done_tx, house, f.clone(), self.shelf_gen);
+                return;
+            }
+            _ => {}
+        }
         library::fetch_shelf(&self.done_tx, house, shelf, self.shelf_gen);
     }
 
@@ -1491,6 +1530,11 @@ impl Desk {
                 }
             }
             Done::Shelf { .. } => {}
+            Done::Found { turn, got } => self.found_answer(turn, got),
+            Done::FoundList { turn, got } => self.found_list_answer(turn, got),
+            Done::Got { key, got } => self.got(key, got),
+            Done::States(tracks) => self.states(tracks),
+            Done::Took { title, got } => self.took(title, got),
             Done::More { turn, rows } if turn == self.shelf_gen => {
                 if let Ok((rows, total)) = rows {
                     let have: std::collections::HashSet<i64> = self.library.rows.iter().map(|r| r.id).collect();
@@ -1648,6 +1692,8 @@ impl Desk {
             eq: [self.slots[0].eq, self.slots[1].eq],
             pitch: [self.slots[0].hands.pitch, self.slots[1].hands.pitch],
             gain: [self.slots[0].gain, self.slots[1].gain],
+            head_mix: self.audio.prefs.head_mix,
+            head_level: self.audio.prefs.head_level,
         }
     }
 
@@ -1695,6 +1741,9 @@ impl Desk {
                 }
                 self.set_crossfader(x);
             }
+            A::Headphones(d) => self.toggle_headphones(d),
+            A::HeadMix(v) => self.set_head_mix(v),
+            A::HeadLevel(v) => self.set_head_level(v),
             a @ (A::Load(_) | A::Browse(..)) => self.for_the_crate.push(a),
             A::Show(cue) => {
                 use wo_control::ShowCue as C;
@@ -1797,6 +1846,7 @@ impl Desk {
             want.push((format!("deck.{side}.cue"), on_cue && !st.playing));
             want.push((format!("deck.{side}.sync"), st.synced));
             want.push((format!("deck.{side}.keylock"), self.slots[d].keylock));
+            want.push((format!("deck.{side}.pfl"), self.audio.cue[d] && self.binding.headphones));
             for (n, p) in h.pads.iter().enumerate() {
                 want.push((format!("deck.{side}.hotcue.{}", n + 1), p.is_some()));
             }
@@ -2047,12 +2097,28 @@ impl Desk {
             let s = &self.slots[d];
             // the hands' gain (±12 dB) over the record brought to the house's loudness
             let trim = 10f32.powf((s.gain - 0.5) * 24.0 / 20.0) * s.record.loudness.trim();
-            self.engine.deck(DeckId::new(d).unwrap()).set_level(s.fader * s.fader * g * trim, 0.03);
+            let deck = self.engine.deck(DeckId::new(d).unwrap());
+            deck.set_level(s.fader * s.fader * g * trim, 0.03);
+            deck.set_cue(self.cue_gain(d, trim), 0.03);
         }
     }
 
     fn spb(&self, deck: usize) -> f64 {
         self.slots[deck].hands.grid.spb().unwrap_or(60.0 / self.slots[deck].record.bpm.max(1.0))
+    }
+
+    /// Deck `d`'s tempo as its hands set it: the pitch fader's; synced, the other deck's
+    /// (folded to its own octave). Never a hand's speed on the record, nor a bend.
+    fn steady_bpm(&self, d: usize) -> f64 {
+        let own = self.base_bpm(d);
+        let synced = self.engine.deck(DeckId::new(d).unwrap()).read().synced;
+        if !synced {
+            return own * self.slots[d].hands.rate();
+        }
+        let other = self.base_bpm(1 - d) * self.slots[1 - d].hands.rate();
+        let r = other / own.max(1.0);
+        let fold = 2f64.powi(r.max(1e-3).log2().round() as i32);
+        own * r / fold
     }
 
     fn base_bpm(&self, deck: usize) -> f64 {

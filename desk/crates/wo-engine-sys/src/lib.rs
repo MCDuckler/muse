@@ -59,6 +59,35 @@ pub struct we_features_state {
     pub rows: i32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct we_device_info {
+    pub name: [c_char; 256],
+    pub channels: i32,
+    pub is_default: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct we_route_cfg {
+    pub master: *const c_char,
+    pub master_ch: i32,
+    pub cue: *const c_char,
+    pub cue_ch: i32,
+    pub split: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct we_route_state {
+    pub channels: i32,
+    pub cue: i32,
+    pub cue_channels: i32,
+    pub lost: i32,
+    pub cue_lost: i32,
+    pub gaps: i64,
+}
+
 unsafe extern "C" {
     // the engine
     pub fn we_start(rate: i32, device: i32) -> i32;
@@ -70,6 +99,13 @@ unsafe extern "C" {
     pub fn we_load(out: *mut we_load_state);
     pub fn we_stretch(faster: i32);
     pub fn we_render(out: *mut f32, frames: i32, decks: *mut *mut f32);
+    pub fn we_render_cue(out: *mut f32, cue: *mut f32, frames: i32);
+
+    // the outputs
+    pub fn we_devices(out: *mut we_device_info, max: i32) -> i32;
+    pub fn we_route(route: *const we_route_cfg) -> i32;
+    pub fn we_route_read(out: *mut we_route_state);
+    pub fn we_cue_mix(mix: f32, level: f32);
 
     // sources
     pub fn we_source_new(channels: i32, frames_hint: i64) -> i32;
@@ -99,6 +135,7 @@ unsafe extern "C" {
     pub fn we_deck_loop(deck: i32, a: f64, b: f64);
     pub fn we_deck_loop_beats(deck: i32, beats: f64, bar: i32);
     pub fn we_deck_level(deck: i32, gain: f32, ramp: f64);
+    pub fn we_deck_cue(deck: i32, gain: f32, ramp: f64);
     pub fn we_deck_eq(deck: i32, low: f32, mid: f32, high: f32, ramp: f64);
     pub fn we_deck_filter(deck: i32, knob: f32);
     pub fn we_deck_gate(deck: i32, depth: f32, period: f64, origin: f64);
@@ -128,6 +165,9 @@ mod tests {
         assert_eq!(std::mem::size_of::<we_load_state>(), 32);
         assert_eq!(std::mem::size_of::<we_deck_state>(), 96);
         assert_eq!(std::mem::size_of::<we_features_state>(), 8 + 11 * 4 + 32 * 4 + 4);
+        assert_eq!(std::mem::size_of::<we_device_info>(), 264);
+        assert_eq!(std::mem::size_of::<we_route_cfg>(), 32);
+        assert_eq!(std::mem::size_of::<we_route_state>(), 32);
     }
 
     #[test]

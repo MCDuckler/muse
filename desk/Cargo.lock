@@ -5387,6 +5387,7 @@ dependencies = [
 name = "wo-engine"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "wo-engine-sys",
 ]
 

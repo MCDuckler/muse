@@ -34,6 +34,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -176,12 +177,17 @@ struct Deck {
   int64_t moves = 0;
   double heardNow = 0;       // the record frame heard at this block's start
   float buf[kBlock * 2];
+  // The headphones (PFL): the deck's sound before its fader, at this gain (0: not cued),
+  // and whether cueBuf holds this block's.
+  Ramp cue;
+  float cueBuf[kBlock * 2];
+  bool cueHeard = false;
 };
 
 enum CmdKind {
   kSource, kSourceGain, kPlay, kSeek, kRate, kBend, kKeylock, kShift, kBeats, kSync, kBarOne, kStart,
   kLoop, kLoopBeats, kLevel, kEq, kFilter, kGate, kEcho, kBrake, kMaster, kFreeSource, kSyncOffset, kAlign, kSyncOctave,
-  kPadPlay, kPadStop, kPadGain, kPadsLevel, kScratch, kScratchBy
+  kPadPlay, kPadStop, kPadGain, kPadsLevel, kScratch, kScratchBy, kCue, kCueMix
 };
 
 // ------------------------------------------------------------------ pads (the board)
@@ -249,6 +255,48 @@ struct Tap {
   int64_t restartSeen = 0;
 };
 
+// The headphones on a second sound card: the main callback writes, the card's own reads.
+// Two clocks drift apart; the reader reads a hair faster or slower (linear interpolation,
+// ±0.3 % at most) to keep the ring near `target` frames full.
+struct CueRing {
+  static constexpr int64_t kCap = 1 << 15;     // frames
+  std::vector<float> buf = std::vector<float>((size_t)kCap * 2, 0.f);
+  std::atomic<int64_t> w{0};
+  // the reader's own
+  double r = 0, ratio = 1;
+  int64_t target = 2048;
+  bool primed = false;
+  std::atomic<int64_t> gaps{0};
+  void write(const float* lr, int n) {
+    const int64_t at = w.load(std::memory_order_relaxed);
+    for (int k = 0; k < n; k++) {
+      const size_t i = (size_t)((at + k) & (kCap - 1)) * 2;
+      buf[i] = lr[k * 2]; buf[i + 1] = lr[k * 2 + 1];
+    }
+    w.store(at + n, std::memory_order_release);
+  }
+  // n frames into out (stereo pairs `stride` floats apart, the first at `at`).
+  void read(float* out, int n, int stride, int at) {
+    const int64_t wr = w.load(std::memory_order_acquire);
+    double fill = (double)wr - r;
+    if (!primed) {
+      if (fill < (double)target) return;
+      r = (double)(wr - target); ratio = 1; primed = true; fill = (double)target;
+    }
+    if (fill < n * 1.01 + 2 || fill > (double)(kCap - 4096)) { primed = false; gaps.fetch_add(1); return; }
+    const double want = 1 + std::clamp((fill - (double)target) / (double)target * 0.004, -0.003, 0.003);
+    ratio += (want - ratio) * 0.05;
+    for (int k = 0; k < n; k++) {
+      const int64_t i = (int64_t)r;
+      const float f = (float)(r - (double)i);
+      const size_t a = (size_t)(i & (kCap - 1)) * 2, b = (size_t)((i + 1) & (kCap - 1)) * 2;
+      out[k * stride + at] = buf[a] + (buf[b] - buf[a]) * f;
+      out[k * stride + at + 1] = buf[a + 1] + (buf[b + 1] - buf[a + 1]) * f;
+      r += ratio;
+    }
+  }
+};
+
 struct Engine {
   // The sound device's own context: its thread asked for the realtime scheduler
   // (SCHED_FIFO on Linux, where the audio group's rtprio limit allows it; miniaudio
@@ -304,6 +352,27 @@ struct Engine {
   float trimBuf[8192 * 2];
   Tap tap;
   float tapMono[kBuses][kBlock];
+  // ---- the headphones (the cue bus) and where the sound goes
+  // Rendered while some output takes it (or an offline render asks): the cued decks
+  // before their faders, blended with the master by cueMix (0 the cued decks alone, 1 the
+  // master alone), at cueLevel, through a limiter of its own.
+  std::atomic<bool> cueWanted{false};
+  Ramp cueMix, cueLevel;
+  Limiter cueLimiter;
+  // The main device's channels, the master's first, the headphones' first on the same
+  // device (-1: not on it), the two as mono halves of one stereo pair (split).
+  int outCh = 2, masterCh = 0, cueCh = -1;
+  bool splitCue = false;
+  std::vector<float> mixBuf, cueAll;   // a callback's master and headphones, stereo
+  // A second sound card for the headphones: fed through a ring, read at its own pace
+  // (cueCallback), which leans its speed by a hair to keep the ring as full as it wants.
+  ma_device cueDev{};
+  bool hasCueDev = false;
+  int cueDevCh = 2, cueDevAt = 0;
+  CueRing ring;
+  std::atomic<int32_t> lost{0}, cueLost{0};
+  std::atomic<bool> rerouting{false};
+  bool devOpen = false;   // the main device: open (a failed reroute can leave none)
 };
 
 Engine* E = nullptr;
@@ -872,6 +941,7 @@ void renderPads(float* out, int n, double at) {
 
 void apply(const Cmd& c) {
   if (c.kind == kMaster) { E->master.set(c.f0, (int)(E->rate * 0.02)); return; }
+  if (c.kind == kCueMix) { E->cueMix.set(c.f0, (int)(E->rate * 0.02)); E->cueLevel.set(c.f1, (int)(E->rate * 0.02)); return; }
   if (c.kind == kPadPlay || c.kind == kPadStop || c.kind == kPadGain || c.kind == kPadsLevel) { applyPad(c); return; }
   if (c.kind == kFreeSource) {
     E->pendingFree.push_back(c.i0);
@@ -994,6 +1064,7 @@ void apply(const Cmd& c) {
       break;
     }
     case kLevel: d.level.set(c.f0, ramp); break;
+    case kCue: d.cue.set(c.f0, ramp); break;
     case kEq: d.bands.set(c.f0, c.f1, c.f2, ramp); break;
     case kFilter: d.filter.set(c.f0); break;
     case kGate: d.gateDepth = c.f0; d.gatePeriod = c.d1; d.gateOrigin = c.d2; break;
@@ -1014,6 +1085,7 @@ void apply(const Cmd& c) {
 // ------------------------------------------------------------------ a block
 void renderDeck(Deck& d, int n) {
   std::memset(d.buf, 0, sizeof(float) * (size_t)n * 2);
+  d.cueHeard = false;
   int from = 0;
   if (d.startWaiting && d.startMaster >= 0) {
     Deck& m = E->decks[(size_t)d.startMaster];
@@ -1069,6 +1141,14 @@ void renderDeck(Deck& d, int n) {
   d.echo.run(d.buf, n);
   d.bands.run(d.buf, n);
   d.filter.run(d.buf, n);
+  // the headphones' copy: everything the deck does to its sound, but not its fader
+  if (E->cueWanted && (d.cue.target > 0 || d.cue.now > 0 || d.cue.moving())) {
+    for (int k = 0; k < n; k++) {
+      const float g = d.cue.next() * 0.5956621f;
+      d.cueBuf[k * 2] = d.buf[k * 2] * g; d.cueBuf[k * 2 + 1] = d.buf[k * 2 + 1] * g;
+    }
+    d.cueHeard = true;
+  }
   float pl = 0, pr = 0;
   for (int k = 0; k < n; k++) {
     const float g = d.level.next() * 0.5956621f;  // -4.5 dB headroom, as the old chain
@@ -1119,7 +1199,7 @@ void tapWrite(const float* out, int n, double at) {
   t.written.store(w + n, std::memory_order_release);
 }
 
-void block(float* out, int n, float** deckOut, double at) {
+void block(float* out, int n, float** deckOut, double at, float* cue) {
   // commands, if Dart is not adding to them this very moment
   if (E->cmdLock.try_lock()) {
     E->taking.swap(E->cmds);
@@ -1159,8 +1239,23 @@ void block(float* out, int n, float** deckOut, double at) {
     }
   } else {
     for (int k = 0; k < n; k++) { const float g = E->master.next(); out[k * 2] *= g; out[k * 2 + 1] *= g; }
-    E->limiter.run(out, n);
   }
+  // the headphones: the cued decks (before their faders) and the master (after its
+  // level, before its limiter), blended
+  if (cue) std::memset(cue, 0, sizeof(float) * (size_t)n * 2);
+  if (cue && E->cueWanted) {
+    for (auto& d : E->decks) {
+      if (!d.cueHeard) continue;
+      for (int k = 0; k < n * 2; k++) cue[k] += d.cueBuf[k];
+    }
+    for (int k = 0; k < n; k++) {
+      const float m = E->cueMix.next(), lv = E->cueLevel.next();
+      cue[k * 2] = (cue[k * 2] * (1 - m) + out[k * 2] * m) * lv;
+      cue[k * 2 + 1] = (cue[k * 2 + 1] * (1 - m) + out[k * 2 + 1] * m) * lv;
+    }
+    E->cueLimiter.run(cue, n);
+  }
+  if (!E->split) E->limiter.run(out, n);
   for (auto& d : E->decks) publish(d, at);
   tapWrite(out, n, at);
 }
@@ -1168,14 +1263,14 @@ void block(float* out, int n, float** deckOut, double at) {
 // t0: when the sound card asked for these frames. Each block is heard `latency`
 // after that, plus the frames before it in the same call — not after the moment it
 // happens to be rendered, which on a busy machine is later and later through the call.
-void renderAll(float* out, int frames, float** deckOut, double t0 = 0) {
+void renderAll(float* out, int frames, float** deckOut, double t0 = 0, float* cue = nullptr) {
   int done = 0;
   float* dk[WE_DECKS];
   while (done < frames) {
     const int n = std::min(kBlock, frames - done);
     const double at = E->device ? t0 + E->latency + (double)done / E->rate : (double)E->rendered.load() / E->rate;
     for (int i = 0; i < WE_DECKS; i++) dk[i] = deckOut && deckOut[i] ? deckOut[i] + (size_t)done * 2 : nullptr;
-    block(out + (size_t)done * 2, n, deckOut ? dk : nullptr, at);
+    block(out + (size_t)done * 2, n, deckOut ? dk : nullptr, at, cue ? cue + (size_t)done * 2 : nullptr);
     done += n;
     E->rendered.fetch_add(n);
   }
@@ -1257,11 +1352,58 @@ void tapMeasure() {
   }
 }
 
+// The master (and the headphones, where they go) into the device's own channels.
+void renderOut(float* out, int frames, double t0) {
+  const bool cueHere = E->cueCh >= 0 || E->splitCue;
+  if (E->outCh == 2 && !cueHere && !E->hasCueDev && E->masterCh == 0) {
+    renderAll(out, frames, nullptr, t0);
+    return;
+  }
+  const int ch = E->outCh;
+  const int cap = (int)(E->mixBuf.size() / 2);
+  const bool wantCue = cueHere || E->hasCueDev;
+  int done = 0;
+  while (done < frames) {
+    const int n = std::min(cap, frames - done);
+    float* m = E->mixBuf.data();
+    float* c = E->cueAll.data();
+    renderAll(m, n, nullptr, t0 + (double)done / E->rate, wantCue ? c : nullptr);
+    float* o = out + (size_t)done * (size_t)ch;
+    std::memset(o, 0, sizeof(float) * (size_t)n * (size_t)ch);
+    if (E->splitCue) {
+      // one stereo pair: the headphones in the left ear, the master in the right, each mono
+      for (int k = 0; k < n; k++) {
+        o[k * ch + E->masterCh] = 0.5f * (c[k * 2] + c[k * 2 + 1]);
+        o[k * ch + E->masterCh + 1] = 0.5f * (m[k * 2] + m[k * 2 + 1]);
+      }
+    } else {
+      for (int k = 0; k < n; k++) { o[k * ch + E->masterCh] = m[k * 2]; o[k * ch + E->masterCh + 1] = m[k * 2 + 1]; }
+      if (E->cueCh >= 0)
+        for (int k = 0; k < n; k++) { o[k * ch + E->cueCh] = c[k * 2]; o[k * ch + E->cueCh + 1] = c[k * 2 + 1]; }
+    }
+    if (E->hasCueDev) E->ring.write(c, n);
+    done += n;
+  }
+}
+
+void cueCallback(ma_device*, void* out, const void*, ma_uint32 frames) {
+  if (!E) return;
+  float* o = (float*)out;
+  std::memset(o, 0, sizeof(float) * (size_t)frames * (size_t)E->cueDevCh);
+  E->ring.read(o, (int)frames, E->cueDevCh, E->cueDevAt);
+}
+
+// A device stopped that no one stopped: unplugged, most likely.
+void notified(const ma_device_notification* n) {
+  if (!E || n->type != ma_device_notification_type_stopped || E->rerouting.load()) return;
+  if (n->pDevice == &E->cueDev) E->cueLost.store(1); else E->lost.store(1);
+}
+
 void callback(ma_device*, void* out, const void*, ma_uint32 frames) {
   if (!E) return;
   const double t0 = now();
   if (E->revoice) { E->revoice = false; revoiceAll(); }
-  renderAll((float*)out, (int)frames, nullptr, t0);
+  renderOut((float*)out, (int)frames, t0);
   // How long that took against the time there was.
   const double budget = (double)frames / E->rate;
   const float load = (float)((now() - t0) / budget);
@@ -1297,6 +1439,61 @@ void freeRetired() {
   }
 }
 
+// The main device's config: `channels` (0: the device's own), at `rate` (0: its own).
+ma_device_config mainConfig(ma_uint32 channels, ma_uint32 rate) {
+  ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
+  cfg.playback.format = ma_format_f32;
+  cfg.playback.channels = channels;
+  cfg.sampleRate = rate;
+  cfg.dataCallback = callback;
+  cfg.notificationCallback = notified;
+  cfg.noClip = MA_TRUE;
+  if (E && E->period > 0) {
+    cfg.periodSizeInFrames = (ma_uint32)E->period;
+    cfg.performanceProfile = E->period <= 256 ? ma_performance_profile_low_latency : ma_performance_profile_conservative;
+  }
+  return cfg;
+}
+
+// ------------------------------------------------------------------ the outputs
+struct Found {
+  ma_device_id id{};
+  std::string name;
+  int channels = 0;       // the most it takes (0: not known)
+  bool isDefault = false;
+};
+
+// Every output the system has, with what each takes.
+std::vector<Found> outputs(ma_context* ctx) {
+  std::vector<Found> all;
+  ma_device_info* infos = nullptr;
+  ma_uint32 count = 0;
+  if (ma_context_get_devices(ctx, &infos, &count, nullptr, nullptr) != MA_SUCCESS) return all;
+  for (ma_uint32 i = 0; i < count; i++) {
+    Found f;
+    f.id = infos[i].id;
+    f.name = infos[i].name;
+    f.isDefault = infos[i].isDefault != 0;
+    ma_device_info full{};
+    if (ma_context_get_device_info(ctx, ma_device_type_playback, &infos[i].id, &full) == MA_SUCCESS) {
+      for (ma_uint32 k = 0; k < full.nativeDataFormatCount; k++) f.channels = std::max(f.channels, (int)full.nativeDataFormats[k].channels);
+    }
+    all.push_back(f);
+  }
+  return all;
+}
+
+const Found* findOutput(const std::vector<Found>& all, const char* name) {
+  for (auto& f : all) if (f.name == name) return &f;
+  return nullptr;
+}
+
+void sizeBuffers() {
+  const size_t frames = 4096;
+  E->mixBuf.assign(frames * 2, 0.f);
+  E->cueAll.assign(frames * 2, 0.f);
+}
+
 }  // namespace we
 
 using namespace we;
@@ -1310,10 +1507,7 @@ WE_API int we_start(int rate, int device) {
   E->device = device != 0;
   E->rate = rate > 0 ? rate : 48000;
   if (E->device) {
-    ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
-    cfg.playback.format = ma_format_f32;
-    cfg.playback.channels = 2;
-    cfg.sampleRate = (ma_uint32)(rate > 0 ? rate : 0);
+    ma_device_config cfg = mainConfig(2, (ma_uint32)(rate > 0 ? rate : 0));
     // The period: 256 frames where the system's sound server takes them in its stride
     // (PipeWire, measured); on Windows a larger one, so that the stretchers' work —
     // which comes in bursts of a whole FFT frame — has room in each call (WASAPI's own
@@ -1327,8 +1521,6 @@ WE_API int we_start(int rate, int device) {
     E->period = period;
     cfg.periodSizeInFrames = (ma_uint32)period;
     cfg.performanceProfile = period <= 256 ? ma_performance_profile_low_latency : ma_performance_profile_conservative;
-    cfg.dataCallback = callback;
-    cfg.noClip = MA_TRUE;
     {
       const char* rt = std::getenv("WETOWL_ENGINE_RT");
       const bool wantRt = !(rt && rt[0] == '0');
@@ -1342,6 +1534,7 @@ WE_API int we_start(int rate, int device) {
       delete E; E = nullptr;
       return 1;
     }
+    E->devOpen = true;
     E->rate = (int)E->dev.sampleRate;
     E->latency = (double)(E->dev.playback.internalPeriodSizeInFrames * E->dev.playback.internalPeriods) / E->rate;
   }
@@ -1355,15 +1548,21 @@ WE_API int we_start(int rate, int device) {
   E->scratchL.assign(8192, 0.f); E->scratchR.assign(8192, 0.f);
   for (auto& r : E->tap.ring) r.assign((size_t)kTap, 0.f);
   E->limiter.init(E->rate);
+  E->cueLimiter.init(E->rate);
   E->master.now = E->master.target = 1;
+  E->cueMix.now = E->cueMix.target = 0;
+  E->cueLevel.now = E->cueLevel.target = 1;
+  sizeBuffers();
   for (int i = 0; i < WE_DECKS; i++) {
     Deck& d = E->decks[(size_t)i];
     d.index = i;
     d.level.now = d.level.target = 1;
+    d.cue.now = d.cue.target = 0;
     for (auto& s : d.slots) { s.gain.now = s.gain.target = 0; for (auto& p : s.pair) p.now = p.target = 1; }
     d.bands.init(E->rate); d.filter.init(E->rate); d.echo.init(E->rate);
   }
   if (E->device && ma_device_start(&E->dev) != MA_SUCCESS) {
+    E->devOpen = false;
     lastError = "the sound card would not start";
     ma_device_uninit(&E->dev);
     if (E->hasCtx) { ma_context_uninit(&E->ctx); E->hasCtx = false; }
@@ -1385,7 +1584,9 @@ WE_API int we_start(int rate, int device) {
 
 WE_API void we_stop(void) {
   if (!E) return;
-  if (E->device) ma_device_uninit(&E->dev);
+  E->rerouting = true;
+  if (E->device && E->devOpen) ma_device_uninit(&E->dev);
+  if (E->hasCueDev) { ma_device_uninit(&E->cueDev); E->hasCueDev = false; }
   if (E->hasCtx) { ma_context_uninit(&E->ctx); E->hasCtx = false; }
   E->tap.running = false;
   if (E->tap.thread.joinable()) E->tap.thread.join();
@@ -1415,6 +1616,147 @@ WE_API void we_load(we_load_state* out) {
   out->late = E->late.load();
   out->faster = E->faster.load() ? 1 : 0;
   out->period = E->period;
+}
+
+// ---- the outputs
+
+WE_API int we_devices(we_device_info* out, int max) {
+  ma_context own{};
+  ma_context* ctx = nullptr;
+  if (E && E->hasCtx) ctx = &E->ctx;
+  else if (ma_context_init(nullptr, 0, nullptr, &own) == MA_SUCCESS) ctx = &own;
+  if (!ctx) return 0;
+  const auto all = outputs(ctx);
+  for (int i = 0; i < (int)all.size() && i < max && out; i++) {
+    std::snprintf(out[i].name, sizeof out[i].name, "%s", all[(size_t)i].name.c_str());
+    out[i].channels = all[(size_t)i].channels;
+    out[i].is_default = all[(size_t)i].isDefault ? 1 : 0;
+  }
+  if (ctx == &own) ma_context_uninit(&own);
+  return (int)all.size();
+}
+
+namespace we {
+// The main device again: `id` (null: the system's own), `channels` (0: its own).
+bool openMain(const ma_device_id* id, ma_uint32 channels) {
+  ma_device_config cfg = mainConfig(channels, (ma_uint32)E->rate);
+  cfg.playback.pDeviceID = id;
+  if (ma_device_init(E->hasCtx ? &E->ctx : nullptr, &cfg, &E->dev) != MA_SUCCESS) return false;
+  E->devOpen = true;
+  return true;
+}
+}  // namespace we
+
+WE_API int we_route(const we_route_cfg* r) {
+  if (!E) { lastError = "the engine is not running"; return 1; }
+  const char* mName = r && r->master ? r->master : "";
+  const bool split = r && r->split;
+  const bool cue = r && r->cue && !split;
+  const char* cName = cue ? r->cue : "";
+  const bool same = cue && std::strcmp(cName, mName) == 0;
+  const int mCh = r ? std::max(0, (int)r->master_ch) : 0;
+  const int cCh = cue ? std::max(0, (int)r->cue_ch) : 0;
+  if (!E->device) {
+    // offline: what is routed is only whether the headphones are rendered
+    E->cueWanted = cue || split;
+    return 0;
+  }
+  if (!E->hasCtx) { lastError = "the sound system's devices cannot be listed here"; return 1; }
+  const auto all = outputs(&E->ctx);
+  auto pick = [&](const char* name) -> const Found* {
+    if (name[0]) return findOutput(all, name);
+    for (auto& f : all) if (f.isDefault) return &f;
+    return nullptr;
+  };
+  const Found* mf = pick(mName);
+  if (mName[0] && !mf) { lastError = std::string("no output called \"") + mName + "\""; return 2; }
+  const Found* cf = cue && !same ? pick(cName) : nullptr;
+  if (cue && !same && cName[0] && !cf) { lastError = std::string("no output called \"") + cName + "\""; return 2; }
+  const int needMain = std::max(mCh + 2, same ? cCh + 2 : 0);
+  const int needCue = cue && !same ? cCh + 2 : 0;
+  auto narrow = [&](const Found* f, int need) {
+    return need > 2 && f && f->channels > 0 && f->channels < need;
+  };
+  if (narrow(mf, needMain)) { lastError = mf->name + " has " + std::to_string(mf->channels) + " channels, not " + std::to_string(needMain); return 3; }
+  if (narrow(cf, needCue)) { lastError = cf->name + " has " + std::to_string(cf->channels) + " channels, not " + std::to_string(needCue); return 3; }
+
+  E->rerouting = true;
+  if (E->devOpen) { ma_device_uninit(&E->dev); E->devOpen = false; }
+  if (E->hasCueDev) { ma_device_uninit(&E->cueDev); E->hasCueDev = false; }
+  E->outCh = 2; E->masterCh = 0; E->cueCh = -1; E->splitCue = false;
+  int result = 0;
+  bool ok = openMain(mName[0] && mf ? &mf->id : nullptr, needMain > 2 ? 0 : 2);
+  if (ok && (int)E->dev.playback.channels < needMain) {
+    lastError = "the output opened with " + std::to_string(E->dev.playback.channels) + " channels, not " + std::to_string(needMain);
+    ma_device_uninit(&E->dev); E->devOpen = false; ok = false;
+  } else if (!ok) {
+    lastError = "the output would not open";
+  }
+  if (ok) {
+    E->outCh = (int)E->dev.playback.channels;
+    E->masterCh = mCh;
+    E->cueCh = same ? cCh : -1;
+    E->splitCue = split;
+  } else {
+    // back on the system's own, stereo, as at the start
+    result = 4;
+    if (!openMain(nullptr, 2)) { E->rerouting = false; E->lost = 1; return 5; }
+    E->outCh = (int)E->dev.playback.channels;
+  }
+  if (ok && cue && !same) {
+    ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
+    cfg.playback.format = ma_format_f32;
+    cfg.playback.channels = needCue > 2 ? 0 : 2;
+    cfg.playback.pDeviceID = cName[0] && cf ? &cf->id : nullptr;
+    cfg.sampleRate = (ma_uint32)E->rate;
+    cfg.dataCallback = cueCallback;
+    cfg.notificationCallback = notified;
+    cfg.noClip = MA_TRUE;
+    if (E->period > 0) { cfg.periodSizeInFrames = (ma_uint32)E->period; cfg.performanceProfile = ma_performance_profile_low_latency; }
+    if (ma_device_init(&E->ctx, &cfg, &E->cueDev) != MA_SUCCESS) {
+      lastError = "the headphones' output would not open"; result = 6;
+    } else if ((int)E->cueDev.playback.channels < needCue) {
+      lastError = "the headphones' output opened with " + std::to_string(E->cueDev.playback.channels) + " channels"; result = 6;
+      ma_device_uninit(&E->cueDev);
+    } else {
+      E->hasCueDev = true;
+      E->cueDevCh = (int)E->cueDev.playback.channels;
+      E->cueDevAt = cCh;
+      const int64_t mp = (int64_t)E->dev.playback.internalPeriodSizeInFrames, cp = (int64_t)E->cueDev.playback.internalPeriodSizeInFrames;
+      E->ring.target = std::max<int64_t>(mp, cp) * 3 + 512;
+      E->ring.primed = false;
+    }
+  }
+  E->cueWanted = (ok && (same || split)) || E->hasCueDev;
+  E->latency = (double)(E->dev.playback.internalPeriodSizeInFrames * E->dev.playback.internalPeriods) / E->rate;
+  E->lost = 0; E->cueLost = 0;
+  if (ma_device_start(&E->dev) != MA_SUCCESS) { lastError = "the output would not start"; result = result ? result : 7; E->lost = 1; }
+  if (E->hasCueDev && ma_device_start(&E->cueDev) != MA_SUCCESS) { lastError = "the headphones' output would not start"; result = result ? result : 6; E->cueLost = 1; }
+  E->rerouting = false;
+  return result;
+}
+
+WE_API void we_route_read(we_route_state* out) {
+  if (!out) return;
+  *out = we_route_state{};
+  if (!E) return;
+  out->channels = E->devOpen ? E->outCh : 0;
+  out->cue = E->splitCue ? 1 : E->cueCh >= 0 ? 2 : E->hasCueDev ? 3 : 0;
+  out->cue_channels = E->hasCueDev ? E->cueDevCh : 0;
+  out->lost = E->lost.load();
+  out->cue_lost = E->cueLost.load();
+  out->gaps = E->ring.gaps.load();
+}
+
+WE_API void we_deck_cue(int deck, float gain, double ramp) { Cmd c{kCue}; c.deck = deck; c.f0 = gain; c.d0 = ramp; push(c); }
+WE_API void we_cue_mix(float mix, float level) { Cmd c{kCueMix}; c.f0 = std::clamp(mix, 0.f, 1.f); c.f1 = std::max(0.f, level); push(c); }
+
+WE_API void we_render_cue(float* out, float* cue, int frames) {
+  if (!E || E->device) return;
+  if (E->revoice) { E->revoice = false; revoiceAll(); }
+  renderAll(out, frames, nullptr, 0, cue);
+  tapMeasure();
+  freeRetired();
 }
 
 WE_API void we_render(float* out, int frames, float** decks) {

@@ -63,6 +63,9 @@ pub enum Icon {
     CheckCircle,
     Live,
     Usb,
+    Headphones,
+    /// The booth's side panels (the stage and the Auto DJ) folded away, or out.
+    PanelRight,
 }
 
 /// Points of the 24 grid into `r`.
@@ -405,6 +408,17 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, color: Color32) {
         Icon::CheckCircle => {
             circle(12.0, 12.0, 9.0);
             line(&[(8.0, 12.2), (11.0, 15.0), (16.5, 9.3)]);
+        }
+        Icon::Headphones => {
+            // the band over the head, the two cups
+            arc(12.0, 13.0, 8.0, 180.0, 360.0);
+            rrect(3.0, 13.0, 7.5, 20.5, 1.6);
+            rrect(16.5, 13.0, 21.0, 20.5, 1.6);
+        }
+        Icon::PanelRight => {
+            // a window, its right third a panel
+            rrect(3.0, 5.0, 21.0, 19.0, 2.0);
+            line(&[(14.5, 5.0), (14.5, 19.0)]);
         }
         Icon::Usb => {
             // a stick: its plug up top, two contacts in it

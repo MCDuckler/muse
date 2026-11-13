@@ -187,3 +187,34 @@ controllers' events on their own thread (a `Lane`), straight to the engine: the 
 touch (`jog.touch`) is the hand, its top's turns (`jog.scratch`) move the record; a wheel with
 no touch (the RMX, in SCRATCH mode) is a hand while it turns and lets go 100 ms after it
 stops. The on-screen platter's drag is a hand too (shift-drag: search).
+
+## Headphones (Rust Desk, 2026-11-13)
+
+The controllers do not cue by themselves: CUE/PFL and the headphones knobs are MIDI like
+everything else, and a console's sound card has four outputs (1/2 master, 3/4 phones)
+that the software has to fill.
+
+- **Engine** (`app/native/engine`): each deck copies its sound into the cue bus after
+  EQ/filter/FX and before its fader (`we_deck_cue`, gain = its trim when cued). The bus is
+  blended with the master (after its level, before its limiter) by `we_cue_mix(mix, level)`
+  and has a limiter of its own. `we_route` sends the master to an output and pair, and the
+  phones to the same device's other pair, to a second sound card (a ring read at ±0.3 %
+  to follow the other clock), or split (phones left, master right, both mono).
+  `we_devices` lists outputs with their channel counts. `we_render_cue` = offline render.
+- **miniaudio patch** (`vendor/miniaudio.h`, PulseAudio backend, streams wider than
+  stereo only): the sink's own channel map plus `PA_STREAM_NO_REMIX_CHANNELS`. Without
+  it miniaudio says FL/FC/FR/RC and PipeWire links ports by name, so the cue landed on
+  FR and half the channels were dropped (measured on a 4-channel null sink).
+- **Layouts**: `"audio": {"headphones": 2, "mixesHeadphones": bool}`. The DDJ-400 blends
+  its 1/2 and 3/4 into the phones jack itself (its HEADPHONES MIXING/LEVEL are hardware),
+  so the Desk sends the cued decks alone there; the RMX's headMix knob is bound to the
+  Desk's blend.
+- **Desk** (`wo-deskcore/src/audio.rs`): Automatic (default) = a plugged-in console's
+  sound card (its name, or a DJ word in an output's name) with 4 channels takes master +
+  phones; 2 channels says to switch its profile to Surround 4.0 / Pro Audio. Chosen =
+  any outputs and pairs. Kept in `audio.json`. PFL = headphones where there are some
+  (shift + PFL and one-output booths: the show's scenes, as before).
+- **Verified**: offline cue tests (`wo-engine/tests/cue.rs`); routing on PipeWire null
+  sinks with `wo-engine/examples/route_probe.rs` (master on 1/2, phones on 3/4 of a fake
+  4-channel sink; second card gapless; split). **Not verified**: a real DDJ-400/RMX, two
+  real cards' clock drift, Windows/macOS channel layouts.

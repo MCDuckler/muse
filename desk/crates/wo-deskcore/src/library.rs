@@ -28,6 +28,8 @@ pub enum Shelf {
     /// A rekordbox USB stick's records: all of them, or one playlist's (rekordbox's id
     /// and name), in its order.
     Usb { root: std::path::PathBuf, stick: String, playlist: Option<(u32, String)> },
+    /// A record or a list found elsewhere, opened: its songs (elsewhere.rs).
+    Elsewhere(wo_house::Found),
 }
 
 /// A rekordbox stick plugged in, as the crate lists it.
@@ -69,6 +71,11 @@ pub struct Library {
     pub checked: std::collections::HashMap<i64, Option<String>>,
     /// The rekordbox sticks plugged in.
     pub sticks: Vec<StickView>,
+    /// A search's songs and lists from elsewhere (or an opened list's songs), and what
+    /// the services that could not be asked said.
+    pub found: Vec<wo_house::Found>,
+    pub found_notes: Vec<(String, String)>,
+    pub found_loading: bool,
 }
 
 impl Default for Library {
@@ -84,6 +91,9 @@ impl Default for Library {
             notes: Default::default(),
             checked: Default::default(),
             sticks: vec![],
+            found: vec![],
+            found_notes: vec![],
+            found_loading: false,
         }
     }
 }
@@ -138,6 +148,16 @@ pub(crate) enum Done {
     Stems { slot: usize, turn: u64, got: crate::parts::Got },
     /// The rekordbox sticks plugged in now, read (sent when they change).
     Sticks(Vec<std::sync::Arc<wo_usb::Stick>>),
+    /// A search's answer from everywhere (elsewhere.rs), for the shelf's turn.
+    Found { turn: u64, got: Result<(Vec<wo_house::Found>, Vec<(String, String)>), String> },
+    /// An opened list's songs, for the shelf's turn.
+    FoundList { turn: u64, got: Result<wo_house::FoundList, String> },
+    /// A song asked for, taken by the house (or why not).
+    Got { key: String, got: Result<wo_house::Track, String> },
+    /// The songs asked for, as the house has them now.
+    States(Vec<wo_house::Track>),
+    /// A list taken whole (the playlist's name, or why not).
+    Took { title: String, got: Result<String, String> },
 }
 
 pub(crate) fn sign_in(tx: &Sender<Done>, server: String, user: String, password: String) {
@@ -185,7 +205,7 @@ pub(crate) fn fetch_shelf(tx: &Sender<Done>, house: &House, shelf: Shelf, turn: 
                 Ok((v, n))
             }),
             // (the Desk lists these itself)
-            Shelf::Queue | Shelf::Usb { .. } => Ok((vec![], 0)),
+            Shelf::Queue | Shelf::Usb { .. } | Shelf::Elsewhere(_) => Ok((vec![], 0)),
             Shelf::Similar { fresh, seeds, exclude } => house.recommend(&seeds, &exclude, fresh as f64 / 100.0, 30).map(|picks| {
                 let v: Vec<wo_house::Track> = picks
                     .into_iter()

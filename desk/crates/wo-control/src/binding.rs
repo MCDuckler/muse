@@ -23,6 +23,9 @@ pub struct Positions {
     pub pitch: [f64; 2],
     /// the trim, 0.5 unity
     pub gain: [f32; 2],
+    /// the headphones: the cue/master blend and their level
+    pub head_mix: f32,
+    pub head_level: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -62,15 +65,22 @@ pub enum Action {
     /// The deck's echo send, 0 for none (its tail rings out).
     Echo(usize, f32),
     Crossfader(f32),
+    /// The deck in the headphones, or out of them (its CUE / PFL button).
+    Headphones(usize),
+    /// The headphones' blend, 0 the cued decks alone .. 1 the master alone.
+    HeadMix(f32),
+    /// The headphones' level knob, 0..1.
+    HeadLevel(f32),
     Browse(i32, i32),
     /// The show (the stage's director), as the v1 booth binds it.
     Show(ShowCue),
 }
 
-/// What a controller does to the show. PFL and SOURCE have no use in a booth with one
-/// output, so they are the show's (v1's binding.dart): PFL the scene before (A) or after
-/// (B); SOURCE a hit (A) or the blackout (B); with shift, the picture frozen (A) or the
-/// strobe for as long as it is held (B). Layouts may also name `show.*` controls.
+/// What a controller does to the show. SOURCE has no use in the booth, so it is the
+/// show's (v1's binding.dart): a hit (A) or the blackout (B); with shift, the picture
+/// frozen (A) or the strobe for as long as it is held (B). PFL is the headphones' where
+/// there are some; in a booth with one output it is the show's too: the scene before (A)
+/// or after (B) (with headphones: shift + PFL). Layouts may also name `show.*` controls.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShowCue {
     Previous,
@@ -130,11 +140,22 @@ pub struct Binding {
     pub fx_on: bool,
     pub fx_level: f32,
     pub fx_to: Option<usize>,
+    /// The booth has headphones (a second output): PFL cues decks into them.
+    pub headphones: bool,
 }
 
 impl Default for Binding {
     fn default() -> Self {
-        Binding { shift_held: HashSet::new(), shift_used: false, scratch: false, takeover: SoftTakeover::default(), fx_on: false, fx_level: 0.5, fx_to: None }
+        Binding {
+            shift_held: HashSet::new(),
+            shift_used: false,
+            scratch: false,
+            takeover: SoftTakeover::default(),
+            fx_on: false,
+            fx_level: 0.5,
+            fx_to: None,
+            headphones: false,
+        }
     }
 }
 
@@ -174,6 +195,11 @@ impl Binding {
         let Some(d) = deck else {
             return match name {
                 "mixer.crossfader" if self.take(e, at.crossfader as f64) => vec![Action::Crossfader(e.value as f32)],
+                "mixer.headMix" if self.take(e, at.head_mix as f64) => {
+                    let v = if (e.value - 0.5).abs() < 0.012 { 0.5 } else { e.value };
+                    vec![Action::HeadMix(v as f32)]
+                }
+                "mixer.headGain" if self.take(e, at.head_level as f64) => vec![Action::HeadLevel(e.value as f32)],
                 "mixer.scratch" if pressed => {
                     self.scratch = !self.scratch;
                     vec![]
@@ -281,6 +307,7 @@ impl Binding {
                 let v = if (e.value - 0.5).abs() < 0.012 { 0.5 } else { e.value };
                 vec![Action::Eq(d, band, v as f32)]
             }
+            "pfl" if pressed && self.headphones && !shift => vec![Action::Headphones(d)],
             "pfl" if pressed => vec![Action::Show(if d == 0 { ShowCue::Previous } else { ShowCue::Next })],
             "source" if e.kind == Kind::Button => match (shift, d) {
                 (true, 0) if pressed => vec![Action::Show(ShowCue::Freeze)],
@@ -357,6 +384,13 @@ mod tests {
         // PFL and SOURCE are the show's
         assert_eq!(b.handle(&button("deck.a.pfl", true), &at), vec![Action::Show(ShowCue::Previous)]);
         assert_eq!(b.handle(&button("deck.b.pfl", true), &at), vec![Action::Show(ShowCue::Next)]);
+        // with headphones PFL cues the deck into them; shift + PFL is still the show's
+        b.headphones = true;
+        assert_eq!(b.handle(&button("deck.a.pfl", true), &at), vec![Action::Headphones(0)]);
+        assert_eq!(b.handle(&button("deck.a.pfl", false), &at), vec![]);
+        b.handle(&button("deck.b.stop", true), &at);
+        assert_eq!(b.handle(&button("deck.b.pfl", true), &at), vec![Action::Show(ShowCue::Next)]);
+        b.handle(&button("deck.b.stop", false), &at);
         assert_eq!(b.handle(&button("deck.a.source", true), &at), vec![Action::Show(ShowCue::Hit)]);
         assert!(b.handle(&button("deck.a.source", false), &at).is_empty());
         assert_eq!(b.handle(&button("deck.b.source", true), &at), vec![Action::Show(ShowCue::Blackout)]);

@@ -8,7 +8,7 @@ fn main() {
     let src = root.join("src");
     let vendor = root.join("vendor");
     let rb = vendor.join("rubberband");
-    for f in ["src/engine.cpp", "src/dsp.h", "src/tap.h", "src/we_engine.h", "src/miniaudio.c"] {
+    for f in ["src/engine.cpp", "src/dsp.h", "src/tap.h", "src/we_engine.h", "src/miniaudio.c", "vendor/miniaudio.h"] {
         println!("cargo:rerun-if-changed={}", root.join(f).display());
     }
 

@@ -130,6 +130,17 @@ pub struct Layout {
     pub names: Vec<String>,
     pub inputs: Vec<Input>,
     pub outputs: Vec<Output>,
+    /// The console's own sound card, where the layout says it has one.
+    pub audio: Option<Audio>,
+}
+
+/// A console's sound card: the master on its first two channels, the headphones on
+/// `headphones` and the next; `mixes`: its own HEADPHONES knobs blend the two into the
+/// phones jack (the Desk sends the cued decks alone), else the Desk blends.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Audio {
+    pub headphones: u32,
+    pub mixes: bool,
 }
 
 /// A number as the layouts write them: 11, "11", "0x0B".
@@ -170,6 +181,8 @@ struct Raw {
     inputs: Vec<Value>,
     #[serde(default)]
     outputs: Vec<Value>,
+    #[serde(default)]
+    audio: Value,
 }
 
 impl Layout {
@@ -239,7 +252,11 @@ impl Layout {
             .and_then(|n| n.as_array())
             .map(|a| a.iter().filter_map(|n| n.as_str().map(str::to_owned)).collect())
             .unwrap_or_default();
-        Ok(Layout { id: raw.id, name: raw.name, protocol, usb, names, inputs, outputs })
+        let audio = raw.audio.is_object().then(|| Audio {
+            headphones: int(raw.audio.get("headphones")).unwrap_or(2),
+            mixes: raw.audio.get("mixesHeadphones").and_then(|v| v.as_bool()) == Some(true),
+        });
+        Ok(Layout { id: raw.id, name: raw.name, protocol, usb, names, inputs, outputs, audio })
     }
 
     /// Whether a MIDI port or HID device named `name` is this controller.

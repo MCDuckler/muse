@@ -92,7 +92,8 @@ pub struct Layout {
 
 /// The booth's grid for a window: fixed rows for what has a fixed shape (the top bar, the
 /// overviews, the decks), the rest shared between waveforms and the crate.
-pub fn layout(full: Rect) -> Layout {
+/// `wide`: the stage and the Auto DJ folded away, the crate the whole width.
+pub fn layout(full: Rect, wide: bool) -> Layout {
     let (m, g) = (12.0, t::GAP);
     let r = full.shrink(m);
     // a short window (a laptop's): the overviews and the decks a little shorter, the
@@ -112,11 +113,12 @@ pub fn layout(full: Rect) -> Layout {
     let decks = [Rect::from_min_size(mid.min, vec2(dw, mid_h)), Rect::from_min_size(pos2(mid.right() - dw, mid.top()), vec2(dw, mid_h))];
     let mixer = Rect::from_min_max(pos2(decks[0].right() + g, mid.top()), pos2(decks[1].left() - g, mid.bottom()));
     let rest = Rect::from_min_max(pos2(r.left(), mid.bottom() + g), r.max);
-    let auto_w = (r.width() * 0.21).clamp(360.0, 440.0);
-    let stage_w = (r.width() * 0.17).clamp(280.0, 360.0);
+    let auto_w = if wide { 0.0 } else { (r.width() * 0.21).clamp(360.0, 440.0) };
+    let stage_w = if wide { 0.0 } else { (r.width() * 0.17).clamp(280.0, 360.0) };
+    let g_side = if wide { 0.0 } else { g };
     let auto = Rect::from_min_max(pos2(rest.right() - auto_w, rest.top()), rest.max);
-    let stage = Rect::from_min_max(pos2(auto.left() - g - stage_w, rest.top()), pos2(auto.left() - g, rest.bottom()));
-    let crate_ = Rect::from_min_max(rest.min, pos2(stage.left() - g, rest.bottom()));
+    let stage = Rect::from_min_max(pos2(auto.left() - g_side - stage_w, rest.top()), pos2(auto.left() - g_side, rest.bottom()));
+    let crate_ = Rect::from_min_max(rest.min, pos2(stage.left() - g_side, rest.bottom()));
     Layout { top, overview, waves, decks, mixer, crate_, stage, auto, page }
 }
 
@@ -204,7 +206,7 @@ mod tests {
     fn the_layout_fits_every_window() {
         for size in [MIN, vec2(1440.0, 860.0), vec2(1920.0, 1080.0), vec2(2560.0, 1440.0), vec2(3840.0, 2160.0)] {
             let full = Rect::from_min_size(pos2(0.0, 0.0), size);
-            let l = layout(full);
+            let l = layout(full, false);
             let panels = [("top", l.top), ("overview", l.overview), ("waves", l.waves), ("deck A", l.decks[0]), ("deck B", l.decks[1]), ("mixer", l.mixer), ("crate", l.crate_), ("stage", l.stage), ("auto", l.auto)];
             for (name, r) in panels {
                 assert!(full.contains_rect(r), "{name} leaves the window at {size:?}: {r:?}");
@@ -216,6 +218,9 @@ mod tests {
                 }
             }
             assert!(full.contains_rect(l.page) && l.page.top() >= l.overview.bottom(), "the Show page's room at {size:?}");
+            // the side panels folded away: the crate the whole width under the decks
+            let w = layout(full, true);
+            assert!(full.contains_rect(w.crate_) && (w.crate_.width() - (w.decks[1].right() - w.decks[0].left())).abs() < 0.5, "the wide crate at {size:?}: {:?}", w.crate_);
         }
     }
 }

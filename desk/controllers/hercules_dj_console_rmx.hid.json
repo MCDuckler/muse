@@ -15,6 +15,10 @@
    "Hercules DJ Console"
   ]
  },
+ "audio": {
+  "headphones": 2,
+  "mixesHeadphones": false
+ },
  "hid": {
   "report": 1,
   "outputReport": 0,
@@ -603,9 +607,9 @@
   "deck.a.play": "Play/pause. Shift: start on the other deck's next bar.",
   "deck.a.prev": "Back a bar (shift: eight).",
   "deck.a.next": "Forward a bar (shift: eight).",
-  "deck.a.pfl": "Not bound: the booth has one output.",
+  "deck.a.pfl": "Headphones: the deck in them, before its fader (where the Desk has headphones: the RMX's own 3/4). With one output, or with shift: the scene before (A), the next (B).",
   "mixer.balance": "Not bound.",
-  "mixer.headMix": "Not bound.",
+  "mixer.headMix": "Headphones: the cued decks \u2194 the master.",
   "mixer.scratch": "Jog wheel: nudge \u2194 drag."
  }
 }

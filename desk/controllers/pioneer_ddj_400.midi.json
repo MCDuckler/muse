@@ -8,6 +8,10 @@
    "DDJ-400"
   ]
  },
+ "audio": {
+  "headphones": 2,
+  "mixesHeadphones": true
+ },
  "midi": {
   "on": 127,
   "off": 0
@@ -1726,6 +1730,16 @@
    "id": "fx.on",
    "channel": 4,
    "note": "0x43"
+  },
+  {
+   "id": "deck.a.pfl",
+   "channel": 0,
+   "note": "0x54"
+  },
+  {
+   "id": "deck.b.pfl",
+   "channel": 1,
+   "note": "0x54"
   }
  ],
  "notes": {
@@ -1739,8 +1753,8 @@
   "deck.a.beatjump.1": "BEAT JUMP pads: 1, 2, 4, 8 beats back (odd) and on (even).",
   "show.hit": "SAMPLER pads are the show's: 1 the scene before, 2 the next, 3 a hit, 4 blackout, 5 freeze, 6 strobe while held.",
   "deck.a.loop.in": "LOOP IN / OUT / RELOOP-EXIT; SHIFT + IN a 4-beat loop; CUE/LOOP CALL \u25c0 \u25b6 halve and double it, with SHIFT jump 32 beats.",
-  "deck.a.pfl": "The headphone CUE buttons are the show's (one output): the scene before (A), the next (B). SHIFT: freeze (A), blackout (B).",
+  "deck.a.pfl": "CUE (headphones): the deck in the headphones, before its fader \u2014 where the Desk has headphones (Settings \u2192 Sound: the DDJ's own 3/4 by itself). With one output, the show's: the scene before (A), the next (B). SHIFT: freeze (A), blackout (B).",
   "fx.on": "Beat FX is the echo: CH SELECT picks the deck (MASTER: both), LEVEL/DEPTH its send, ON/OFF on and off.",
-  "mixer.headMix": "Not bound: the booth has one output."
+  "mixer.headMix": "HEADPHONES MIXING and LEVEL are the DDJ's own: it blends the master (its 1/2) and the cued decks (its 3/4) into the phones jack itself."
  }
 }

@@ -14,7 +14,7 @@ const KEYS: [(&str, &[(&str, &str)]); 4] = [
     ("Decks", &[("1 2", "Play A / B"), ("Q W", "Sync A / B"), ("Z X", "Start A / B in step"), ("F G", "The bass off and on, A / B"), ("[ ]", "A 16-beat loop on A / B")]),
     ("Mixer and Auto DJ", &[("← →", "The crossfader"), ("⇧← ⇧→", "Nudge the master"), ("A", "The Auto DJ on and off"), ("M Space", "Mix now"), ("S N", "Not that: another record next"), ("P", "The plan: the move drawn out")]),
     ("Show", &[("K", "The Show page and the booth"), ("H B", "A hit · the blackout"), (", .", "The scene before / after"), ("J", "Mosh into the next"), ("L V", "Hold the scene · freeze")]),
-    ("Desk", &[("?", "These keys"), ("Ctrl ,", "The settings"), ("Esc", "Close what is over the page")]),
+    ("Desk", &[("?", "These keys"), ("Ctrl ,", "The settings"), ("C", "The stage and the Auto DJ folded away"), ("Esc", "Close what is over the page")]),
 ];
 
 impl App {
@@ -27,7 +27,7 @@ impl App {
         let Some(which) = self.overlay.or(self.overlay_was).filter(|_| k > 0.0) else { return };
         let size = match which {
             Overlay::Keys => vec2(780.0, 500.0),
-            Overlay::Settings => vec2(620.0, 612.0),
+            Overlay::Settings => vec2((full.width() - 80.0).clamp(620.0, 1120.0), 612.0),
             Overlay::Set => vec2((full.width() - 80.0).min(1180.0), (full.height() - 80.0).min(720.0)),
             Overlay::Controllers => vec2((full.width() - 80.0).min(1080.0), (full.height() - 80.0).min(680.0)),
         };
@@ -62,8 +62,16 @@ impl App {
         });
     }
 
-    fn settings(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect) {
+    fn settings(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, whole: Rect) {
         let ctx = ui.ctx().clone();
+        // two columns where there is room: the sound and the booth on the right
+        let two = whole.width() >= 1000.0;
+        let r = if two { Rect::from_min_size(whole.min, vec2(572.0, whole.height())) } else { whole };
+        if two {
+            let right = Rect::from_min_max(pos2(r.right() + 36.0, whole.top()), whole.max);
+            p.line_segment([pos2(r.right() + 18.0, whole.top()), pos2(r.right() + 18.0, whole.bottom() - 24.0)], Stroke::new(1.0, white(0.06)));
+            self.sound_settings(desk, ui, p, right);
+        }
         let label_w = 150.0;
         let mut y = r.top();
         let row = |p: &Painter, y: f32, name: &str, hint: &str| {
@@ -167,6 +175,9 @@ impl App {
                 kit::clipped(p, pos2(x, y + 13.0), "Not signed in: the crate's left column signs in", 13.0, "", t::muted(), r.right() - x);
             }
         }
+        if !two {
+            kit::hint(p, pos2(r.left(), r.bottom() - 26.0), Align2::LEFT_BOTTOM, "Sound and headphones: a wider window shows them here");
+        }
         kit::hint(p, pos2(r.left(), r.bottom() - 6.0), Align2::LEFT_BOTTOM, &format!("WetOwl Desk {}", env!("CARGO_PKG_VERSION")));
         if changed {
             self.save_prefs(&ctx);
@@ -204,4 +215,170 @@ fn keycap(p: &Painter, left_center: egui::Pos2, k: &str) -> Rect {
     p.rect(r, CornerRadius::same(5), Color32::from_rgb(0x26, 0x28, 0x30), Stroke::new(1.0, white(0.12)), StrokeKind::Inside);
     p.galley(r.center() - g.size() / 2.0, g, t::text());
     r
+}
+
+/// An output's channel pairs, as words: "1/2", "3/4", …
+fn pairs(channels: u32) -> Vec<(u32, String)> {
+    (0..(channels.max(2) / 2)).map(|i| (i * 2, format!("{}/{}", i * 2 + 1, i * 2 + 2))).collect()
+}
+
+impl App {
+    /// Where the sound goes, and the headphones; and the booth's side panels.
+    fn sound_settings(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect) {
+        let v = desk.audio_view();
+        let mut y = r.top();
+        let label_w = 120.0;
+        let row = |p: &Painter, y: f32, name: &str| {
+            kit::text(p, pos2(r.left(), y + 13.0), Align2::LEFT_CENTER, name, t::BODY, "", t::text());
+        };
+        let x = r.left() + label_w;
+        let w = r.right() - x;
+        let words = |p: &Painter, y: f32, s: &str, c: Color32| -> f32 {
+            let g = p.layout(s.to_owned(), egui::FontId::new(12.0, crate::paint::family("")), c, w);
+            let h = g.size().y;
+            p.galley(pos2(x, y), g, c);
+            h
+        };
+        kit::section(p, pos2(r.left(), y), Align2::LEFT_TOP, "Sound");
+        y += 26.0;
+        row(p, y, "Where it goes");
+        let chosen = Some((!v.prefs.auto) as usize);
+        if let Some(i) = kit::segmented(ui, p, Rect::from_min_size(pos2(x, y), vec2(w.min(300.0), 28.0)), &["Automatic", "Chosen"], chosen, Tone::Neutral, "set-sound-auto") {
+            // chosen: what is routed now, to start from
+            let start = v.route.clone().unwrap_or_default();
+            desk.set_audio_choice(i == 0, if i == 0 { v.prefs.route.clone() } else { start });
+        }
+        y += 38.0;
+        let names: Vec<String> = v.outputs.iter().map(|o| o.name.clone()).collect();
+        let channels_of = |name: &Option<String>| -> u32 {
+            match name {
+                Some(n) => v.outputs.iter().find(|o| &o.name == n).map_or(2, |o| o.channels.max(2)),
+                None => v.outputs.iter().find(|o| o.is_default).map_or(2, |o| o.channels.max(2)),
+            }
+        };
+        if v.prefs.auto {
+            if let Some(why) = &v.why {
+                y += words(p, y, why, t::soft()) + 10.0;
+            }
+        } else {
+            let mut route = v.prefs.route.clone();
+            let mut changed = false;
+            let own = "The system's own".to_owned();
+            // the master: an output and its pair
+            row(p, y, "Master");
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(pos2(x, y + 2.0), vec2(w, 26.0))));
+            child.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("set-master-out").width(w - 110.0).selected_text(route.master.clone().unwrap_or(own.clone())).show_ui(ui, |ui| {
+                    if ui.selectable_label(route.master.is_none(), &own).clicked() {
+                        route.master = None;
+                        route.master_ch = 0;
+                        changed = true;
+                    }
+                    for n in &names {
+                        if ui.selectable_label(route.master.as_ref() == Some(n), n).clicked() {
+                            route.master = Some(n.clone());
+                            route.master_ch = 0;
+                            changed = true;
+                        }
+                    }
+                });
+                let ps = pairs(channels_of(&route.master));
+                let now = ps.iter().find(|(c, _)| *c == route.master_ch).map_or("1/2".to_owned(), |p| p.1.clone());
+                egui::ComboBox::from_id_salt("set-master-ch").width(80.0).selected_text(now).show_ui(ui, |ui| {
+                    for (c, word) in &ps {
+                        if ui.selectable_label(route.master_ch == *c, word).clicked() {
+                            route.master_ch = *c;
+                            changed = true;
+                        }
+                    }
+                });
+            });
+            y += 38.0;
+            // the headphones: none, split, or an output and its pair
+            row(p, y, "Headphones");
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(pos2(x, y + 2.0), vec2(w, 26.0))));
+            child.horizontal(|ui| {
+                let shown = match &route.cue {
+                    wo_deskcore::audio::Cue::None => "None".to_owned(),
+                    wo_deskcore::audio::Cue::Split => "Split: left ear, master right".to_owned(),
+                    wo_deskcore::audio::Cue::Device { name, .. } => name.clone().unwrap_or(own.clone()),
+                };
+                egui::ComboBox::from_id_salt("set-cue-out").width(w - 110.0).selected_text(shown).show_ui(ui, |ui| {
+                    if ui.selectable_label(route.cue == wo_deskcore::audio::Cue::None, "None").clicked() {
+                        route.cue = wo_deskcore::audio::Cue::None;
+                        changed = true;
+                    }
+                    if ui.selectable_label(route.cue == wo_deskcore::audio::Cue::Split, "Split: left ear, master right").on_hover_text("One stereo jack and a splitter cable: the headphones in the left, the master (mono) in the right").clicked() {
+                        route.cue = wo_deskcore::audio::Cue::Split;
+                        changed = true;
+                    }
+                    for n in std::iter::once(None).chain(names.iter().cloned().map(Some)) {
+                        let word = n.clone().unwrap_or(own.clone());
+                        let on = matches!(&route.cue, wo_deskcore::audio::Cue::Device { name, .. } if *name == n);
+                        if ui.selectable_label(on, word).clicked() {
+                            // the master's own output: its next pair
+                            let ch = if n == route.master { route.master_ch + 2 } else { 0 };
+                            route.cue = wo_deskcore::audio::Cue::Device { name: n, ch };
+                            changed = true;
+                        }
+                    }
+                });
+                if let wo_deskcore::audio::Cue::Device { name, ch } = &mut route.cue {
+                    let ps = pairs(channels_of(name));
+                    let now = ps.iter().find(|(c, _)| c == ch).map_or(format!("{}/{}", *ch + 1, *ch + 2), |p| p.1.clone());
+                    egui::ComboBox::from_id_salt("set-cue-ch").width(80.0).selected_text(now).show_ui(ui, |ui| {
+                        for (c, word) in &ps {
+                            if ui.selectable_label(*ch == *c, word).clicked() {
+                                *ch = *c;
+                                changed = true;
+                            }
+                        }
+                    });
+                }
+            });
+            y += 40.0;
+            if changed {
+                desk.set_audio_choice(false, route);
+            }
+        }
+        // how it is
+        let st = v.state;
+        let master = v.route.as_ref().and_then(|r| r.master.clone()).unwrap_or("the system's own output".into());
+        let phones = match st.cue {
+            wo_deskcore::audio::CueAt::Nowhere => "no headphones".to_owned(),
+            wo_deskcore::audio::CueAt::Split => "the headphones split: left ear, master right".to_owned(),
+            wo_deskcore::audio::CueAt::SameDevice => match v.route.as_ref().map(|r| &r.cue) {
+                Some(wo_deskcore::audio::Cue::Device { ch, .. }) => format!("the headphones on its {}/{}", ch + 1, ch + 2),
+                _ => "the headphones on it too".to_owned(),
+            },
+            wo_deskcore::audio::CueAt::SecondCard => "the headphones on a second card".to_owned(),
+        };
+        let now = format!("Now: {master} ({} channels), {phones}", st.channels);
+        y += words(p, y, &now, t::muted()) + 6.0;
+        if let Some(said) = &v.said {
+            y += words(p, y, said, t::warm()) + 6.0;
+        }
+        if st.gaps > 0 && st.cue == wo_deskcore::audio::CueAt::SecondCard {
+            y += words(p, y, &format!("The headphones' card ran dry {} times", st.gaps), t::warm()) + 6.0;
+        }
+        if v.headphones {
+            let how = if v.console_mixes {
+                "A deck's headphones button (CUE on the console) puts it in them, before its fader. The console's own HEADPHONES knobs blend them with the master."
+            } else {
+                "A deck's headphones button (CUE on the console) puts it in them, before its fader. The mixer's Cue · Mst knob blends them with the master; Phones is their level."
+            };
+            y += words(p, y, how, t::faint()) + 6.0;
+        }
+        y += 18.0;
+        kit::section(p, pos2(r.left(), y), Align2::LEFT_TOP, "Booth");
+        y += 26.0;
+        row(p, y, "Side panels");
+        let i = Some(self.prefs.wide_crate as usize);
+        if let Some(i) = kit::segmented(ui, p, Rect::from_min_size(pos2(x, y), vec2(w.min(300.0), 28.0)), &["Shown", "Hidden"], i, Tone::Neutral, "set-wide-crate") {
+            self.prefs.wide_crate = i == 1;
+            self.save_prefs(ui.ctx());
+        }
+        y += 34.0;
+        words(p, y, "Hidden: the stage and the Auto DJ fold away and the crate takes the width (C on the keyboard, or the panel button by the Auto DJ).", t::faint());
+    }
 }

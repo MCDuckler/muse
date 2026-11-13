@@ -100,6 +100,8 @@ pub(crate) struct App {
     app_sign_in: bool,
     /// The crate row a controller's browse is on.
     pub(crate) cursor: usize,
+    /// A search's tab: 0 the house's records, 1 songs from elsewhere, 2 lists.
+    pub(crate) found_tab: usize,
     /// The booth, the Show page (K), or the kit's gallery.
     pub(crate) page: show::Page,
     /// The stage's last word, and since when it shows.
@@ -231,6 +233,16 @@ impl App {
             Some("controllers") => Some(Overlay::Controllers),
             _ => None,
         };
+        // --search <words> [--found-tab 0|1|2]: the crate opens on that search (screenshots)
+        if let Some(q) = arg("--search") {
+            app.search = q.clone();
+            app.search_at = Some(std::time::Instant::now());
+            app.found_tab = arg("--found-tab").and_then(|t| t.parse().ok()).unwrap_or(0);
+        }
+        // --cursor <row>: the crate's cursor there (screenshots)
+        if let Some(c) = arg("--cursor").and_then(|c| c.parse().ok()) {
+            app.cursor = c;
+        }
         // --plan: the plan view over the waveforms (screenshots)
         app.plan_open = std::env::args().any(|a| a == "--plan");
         // --overlay milk: MilkDrop's library open on the Show page (a Rust stage's)
@@ -305,6 +317,7 @@ impl App {
             form: (wo_house::DEFAULT_SERVER.to_owned(), String::new(), String::new()),
             app_sign_in: Desk::app_sign_in_here(),
             cursor: 0,
+            found_tab: 0,
             page: show::Page::Booth,
             said: (0, None),
             strobe: false,
@@ -365,6 +378,12 @@ impl App {
         }
     }
 
+    /// The booth's side panels folded away (the crate wide), or back; kept.
+    pub(crate) fn toggle_wide_crate(&mut self, ctx: &egui::Context) {
+        self.prefs.wide_crate = !self.prefs.wide_crate;
+        self.save_prefs(ctx);
+    }
+
     pub(crate) fn save_prefs(&mut self, ctx: &egui::Context) {
         motion::set_reduced(ctx, self.prefs.reduced_motion);
         self.prefs.save();
@@ -423,7 +442,7 @@ impl App {
                     .collect()
             });
             for (k, m) in keys {
-                self.key(desk, k, m);
+                self.key(desk, k, m, &ui.ctx().clone());
             }
         } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.overlay = None;
@@ -582,7 +601,7 @@ impl App {
     /// kill the bass, A the Auto DJ, M or Space mix now, S or N not that, P the plan, ← → the
     /// crossfader (with shift: nudge the master), [ ] a 16-beat loop, H the show's hit,
     /// B its blackout, ? the keys, ⌘, (Ctrl ,) the settings, Esc closes what is over the page.
-    fn key(&mut self, d: &mut Desk, k: egui::Key, m: egui::Modifiers) {
+    fn key(&mut self, d: &mut Desk, k: egui::Key, m: egui::Modifiers, ctx: &egui::Context) {
         use egui::Key as K;
         match k {
             K::Num1 => d.toggle_play(0),
@@ -600,6 +619,7 @@ impl App {
             K::M | K::Space => d.mix_now(),
             K::S | K::N => d.not_that(),
             K::P => self.plan_open = !self.plan_open,
+            K::C => self.toggle_wide_crate(ctx),
             K::ArrowLeft | K::ArrowRight => {
                 let dir = if k == K::ArrowLeft { -1.0 } else { 1.0 };
                 if m.shift {
