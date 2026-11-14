@@ -57,6 +57,9 @@ pub fn dance_dir() -> Option<std::path::PathBuf> {
     if let Some(h) = std::env::var_os("HOME").map(PathBuf::from).filter(|_| cfg!(target_os = "linux")) {
         c.push(h.join(".local/opt/wetowl/data/flutter_assets/assets/show/dance"));
     }
+    // the repo's assets by where this crate was built from: a test binary's place under
+    // target/ is cargo's to change (newer cargo puts them in target/*/build/<crate>/*/out)
+    c.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../app/assets/show/dance"));
     c.into_iter().find(ok)
 }
 
