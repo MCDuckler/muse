@@ -275,6 +275,10 @@ impl App {
                 _ => d.open_shelf(wo_deskcore::Shelf::Playlist { id: 1, name: "Warm up".into() }),
             }
         }
+        // --play: the crate's shelf played in order (screenshots)
+        if std::env::args().any(|a| a == "--play") {
+            app.desk.lock().unwrap().play_shelf(None);
+        }
         // --show-scene <id>: that scene's page over the rotation (screenshots)
         if let Some(id) = arg("--show-scene") {
             app.show_room = 1;

@@ -92,7 +92,8 @@ impl App {
         let m = s.decks.iter().position(|d| d.master).unwrap_or(0);
         let mid = r.center();
         let bpm = kit::text(p, pos2(mid.x - 4.0, mid.y), Align2::RIGHT_CENTER, &format!("{:.2}", s.master_bpm), t::DISPLAY_M, "mono-semi", t::text());
-        kit::label(p, pos2(bpm.left() - 10.0, mid.y), Align2::RIGHT_CENTER, "Master");
+        let master_label = kit::label(p, pos2(bpm.left() - 10.0, mid.y), Align2::RIGHT_CENTER, "Master");
+        let tabs_end = x;
         let chip = kit::deck_chip(p, pos2(bpm.right() + 10.0, mid.y), m);
         let v = &s.decks[m];
         // the master's beat in its bar: four steps, the one lit on the beat
@@ -138,6 +139,31 @@ impl App {
         let hint = if shown { "Fold the stage and the Auto DJ away: the crate wide  (C)" } else { "The stage and the Auto DJ back  (C)" };
         if self.page == Page::Booth && Btn::new("").icon(Icon::PanelRight).quiet().on(shown).show(ui, p, panels, "panels").on_hover_text(hint).clicked() {
             self.toggle_wide_crate(ui.ctx());
+        }
+        // a list playing in order: where it is, back, next, let go
+        if let Some(pl) = s.player.as_ref() {
+            // between the rooms and the master's tempo, 380 wide at most
+            let left = tabs_end + 24.0;
+            let w = (master_label.left() - 24.0 - left).clamp(120.0, 380.0);
+            let strip = Rect::from_min_size(pos2(left, y - 15.0), vec2(w, 30.0));
+            let b = |i: f32| Rect::from_min_size(pos2(strip.left() + i * 30.0, strip.top()), vec2(28.0, 30.0));
+            if Btn::new("").icon(Icon::Previous).quiet().show(ui, p, b(0.0), "list-back").on_hover_text("Back: this record from its start, or the one before").clicked() {
+                desk.list_back();
+            }
+            if Btn::new("").icon(Icon::Next).quiet().show(ui, p, b(1.0), "list-next").on_hover_text("The next record now (a short fade into it)").clicked() {
+                desk.list_next();
+            }
+            let close = Rect::from_min_size(pos2(strip.right() - 28.0, strip.top()), vec2(28.0, 30.0));
+            if Btn::new("").icon(Icon::Close).quiet().show(ui, p, close, "list-stop").on_hover_text("Stop playing it in order: the Auto DJ mixes again (Pause it for the decks to be yours)").clicked() {
+                desk.stop_list();
+                self.toasts.say(format!("{} let go of", pl.name), Tone::Neutral);
+            }
+            let tx = b(2.0).right() + 6.0;
+            let words = match &pl.next {
+                Some(n) => format!("{}  {}/{}  ·  next {}", pl.name, pl.at + 1, pl.len, n.title),
+                None => format!("{}  {}/{}  ·  the last", pl.name, pl.at + 1, pl.len),
+            };
+            kit::clipped(p, pos2(tx, y), &words, 11.5, "", t::soft(), close.left() - tx - 4.0);
         }
         // a mix under way: its progress along the button's foot, in the deck it goes to
         if let Some(m) = s.mix.as_ref().filter(|m| m.mixing && s.auto) {
@@ -861,8 +887,13 @@ impl App {
     fn crate_strip(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, shelf: &Shelf, s: &Snapshot) {
         match shelf {
             Shelf::Playlist { name, .. } | Shelf::Usb { playlist: Some((_, name)), .. } => {
-                let mix = Rect::from_min_size(r.min, vec2(104.0, r.height()));
-                if Btn::new("Mix it").icon(Icon::Play).accent(true).size(11.0).show(ui, p, mix, "mix-it").on_hover_text(format!("The Auto DJ mixes {name} from now, in its order (the queue you had kept after it)")).clicked() {
+                let play = Rect::from_min_size(r.min, vec2(84.0, r.height()));
+                if Btn::new("Play").icon(Icon::Play).accent(true).size(11.0).show(ui, p, play, "play-list").on_hover_text(format!("{name} from its first record, in order: each whole, a short fade between, the show as ever")).clicked() {
+                    desk.play_shelf(None);
+                    self.toasts.say(format!("Playing {name}"), Tone::Ok);
+                }
+                let mix = Rect::from_min_size(pos2(play.right() + 8.0, r.top()), vec2(104.0, r.height()));
+                if Btn::new("Mix it").icon(Icon::AutoMix).size(11.0).show(ui, p, mix, "mix-it").on_hover_text(format!("The Auto DJ mixes {name} from now, in its order (the queue you had kept after it)")).clicked() {
                     desk.mix_shelf();
                     self.toasts.say(format!("Mixing {name}"), Tone::Ok);
                 }
@@ -1157,6 +1188,7 @@ impl App {
         // where the loaded row's sleeve was (it flies from there to the deck)
         let mut from: Option<Rect> = None;
         let mut queue_it: Option<Record> = None;
+        let mut play_from: Option<Record> = None;
         let mut unqueue: Option<i64> = None;
         let mut load_on: Option<(usize, Record)> = None;
         let mut near_end = false;
@@ -1264,6 +1296,10 @@ impl App {
                         queue_it = Some(rec.clone());
                         ui.close();
                     }
+                    if rec.playable() && ui.button("Play from here, in order").clicked() {
+                        play_from = Some(rec.clone());
+                        ui.close();
+                    }
                     if on_similar && ui.button("Not for me: never offered again").clicked() {
                         dismiss = Some(rec.id);
                         ui.close();
@@ -1327,6 +1363,10 @@ impl App {
         }
         if let Some(i) = clicked {
             self.cursor = i;
+        }
+        if let Some(r) = play_from {
+            self.toasts.say(format!("Playing in order from {}", r.title), Tone::Ok);
+            desk.play_shelf(Some(r.id));
         }
         if let Some(r) = queue_it {
             self.toasts.say(format!("{} queued", r.title), Tone::Neutral);

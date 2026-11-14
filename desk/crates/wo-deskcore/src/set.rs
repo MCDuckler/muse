@@ -277,6 +277,7 @@ impl Desk {
             return;
         }
         self.set.playing = true;
+        self.player = None;
         self.auto = true;
         self.note(LogKind::Plan, "Playing the set");
         // the record coming goes over to the set's next where the Auto DJ chose it

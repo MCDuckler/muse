@@ -23,6 +23,7 @@ pub mod elsewhere;
 pub mod fetch;
 mod crate_;
 pub mod plan_view;
+pub mod player;
 pub mod session;
 pub mod set;
 mod fx;
@@ -39,6 +40,7 @@ pub mod theme;
 pub use backdrop::Backdrop;
 pub use covers::Cover;
 pub use prefs::Prefs;
+pub use player::PlayerView;
 pub use library::{GRID_VERDICTS, Library, Shelf, StickView, verdict_word};
 pub use records::{Audio, Loudness, Record};
 pub use show::{MilkFilter, FaveEdit, FaveRow, FavesView, SetEdit, SetRow, SetsView, FinishView, LooksGrid, MilkHand, MilkRow, MilkView, MoveRow, MovesView, OwnRows, RotationRow, RotationView, ScenePage, ShowBoard, ShowEdit, ShowHands, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, value_name};
@@ -57,7 +59,7 @@ const RATE: u32 = 48_000;
 /// Bars the Auto DJ's blend takes, and the bar its bass swap lands on.
 /// How far ahead of a transition's out point the next record is started (the engine
 /// then starts it sample-exactly on the point).
-const LEAD: f64 = 0.25;
+pub(crate) const LEAD: f64 = 0.25;
 
 
 /// One deck as it is this frame.
@@ -145,6 +147,8 @@ pub struct Snapshot {
     pub set_seconds: f64,
     /// The Auto DJ's next few, best fit first.
     pub up_next: Vec<Record>,
+    /// A list playing in order.
+    pub player: Option<PlayerView>,
 }
 
 /// A control moved on a controller, and what the Desk did with it.
@@ -284,7 +288,7 @@ struct Slot {
 }
 
 /// A transition the Auto DJ has planned (and, once `started`, is making).
-struct Plan {
+pub(crate) struct Plan {
     from: usize,
     to: usize,
     kind: Transition,
@@ -376,6 +380,8 @@ pub struct Desk {
     mind: autodj::Mind,
     /// A set built at the house, and whether the Auto DJ plays it (set.rs).
     set: set::SetState,
+    /// A list played in order, plainly (player.rs).
+    player: Option<player::Player>,
     /// Records a hand queued for the Auto DJ (crate_.rs).
     hand_queue: Vec<Record>,
     /// The library's next page asked for at this many rows.
@@ -511,6 +517,7 @@ impl Desk {
             mind: Default::default(),
             set: Default::default(),
             hand_queue: vec![],
+            player: None,
             more_asked: None,
             control_lines: Default::default(),
             session_kept: None,
@@ -553,6 +560,9 @@ impl Desk {
     /// The Auto DJ's next record: the best fit to the master's on the house's shelf (what
     /// Up next shows first), else the local queue's next.
     fn take_next(&mut self) -> Record {
+        if let Some(Some(r)) = self.list_next_record() {
+            return r;
+        }
         if let Some(r) = self.queued_next() {
             return r;
         }
@@ -753,7 +763,27 @@ impl Desk {
         let fd = DeckId::new(from).unwrap();
         let heard = self.engine.deck(fd).position();
         if !started {
-            if heard >= out - LEAD {
+            // in order: out where the master's sound ends (its analysis may have come
+            // since), unless a hand said sooner
+            let out = if self.player.is_some() && self.mix.as_ref().is_some_and(|m| m.why == "in order") {
+                let (end, _) = self.plain_out(from);
+                let out = out.min(end).max(heard.min(end));
+                if let Some(m) = self.mix.as_mut() {
+                    m.out = out;
+                }
+                out
+            } else {
+                out
+            };
+            if self.player.is_some() && heard >= out - LEAD {
+                let d = self.engine.deck(DeckId::new(to).unwrap());
+                d.play(true);
+                if let Some(m) = self.mix.as_mut() {
+                    m.started = true;
+                    m.begun = Some((self.engine.now(), 1.0));
+                }
+                self.begin_move();
+            } else if heard >= out - LEAD {
                 let d = self.engine.deck(DeckId::new(to).unwrap());
                 // a moment late (the plan came in after its point): start now, in step
                 d.start_with(fd, 4, (heard < out).then_some(out), 0.0);
@@ -792,6 +822,9 @@ impl Desk {
 
     /// The next transition, when there is one to plan.
     fn plan(&mut self) {
+        if self.plan_plain() {
+            return;
+        }
         let (from, to) = (self.master, 1 - self.master);
         let fd = self.engine.deck(DeckId::new(from).unwrap());
         if !fd.read().playing || !self.slots[to].record.playable() {
@@ -916,6 +949,11 @@ impl Desk {
         self.apply_levels();
         self.engine.deck(DeckId::new(to).unwrap()).unsync();
         self.master = to;
+        // in order and the list is done: the deck stays empty of anything new
+        if let Some(None) = self.list_next_record() {
+            self.note(autodj::LogKind::Plan, "The list is done");
+            return;
+        }
         let next = self.take_next();
         self.load(from, next);
     }
@@ -1058,6 +1096,11 @@ impl Desk {
         if !from_set.is_empty() {
             up = from_set;
         }
+        // a list in order: its records still to come
+        let from_list = self.list_up_next();
+        if let Some(l) = from_list.as_ref() {
+            up = l.iter().collect();
+        }
         Snapshot {
             master_bpm,
             crossfader: self.crossfader,
@@ -1079,6 +1122,7 @@ impl Desk {
             load: self.engine.load(),
             set_seconds: self.started.elapsed().as_secs_f64(),
             up_next: up.into_iter().take(4).cloned().collect(),
+            player: self.player(),
             decks,
         }
     }

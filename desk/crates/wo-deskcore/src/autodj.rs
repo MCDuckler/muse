@@ -281,6 +281,7 @@ impl Desk {
         if let Some(to) = self.incoming_parked()
             && self.auto
             && !self.set.playing
+            && self.player.is_none()
             && !self.mind.by_hand[to]
             && self.slots[to].record.id != best.record.id
             && !self.mind.steer.neutral()

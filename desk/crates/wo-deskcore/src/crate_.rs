@@ -167,7 +167,7 @@ impl Desk {
     }
 
     /// The records the crate shows: the house's shelf, or the records on this computer.
-    fn shelf_rows(&self) -> &[Record] {
+    pub(crate) fn shelf_rows(&self) -> &[Record] {
         if self.house.is_some() || matches!(self.library.shelf, Shelf::Usb { .. }) { &self.library.rows } else { &self.rows }
     }
 
@@ -183,6 +183,8 @@ impl Desk {
             }
         }
         self.hand_queue = q;
+        // mixed now, not played plainly in order
+        self.player = None;
         let name = match &self.library.shelf {
             Shelf::Playlist { name, .. } | Shelf::Usb { playlist: Some((_, name)), .. } => name.clone(),
             Shelf::Usb { stick, .. } => stick.clone(),
