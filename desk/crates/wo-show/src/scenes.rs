@@ -30,7 +30,7 @@ pub fn grounds_drawn(milk: bool, cover: bool) -> std::collections::BTreeSet<Stri
 }
 
 /// The dancers (their rigs under assets/show/dance/<id>), by id and name: wo-dance's models.
-pub const DANCERS: &[(&str, &str)] = &[("chris", "Chris"), ("joe", "Joe")];
+pub const DANCERS: &[(&str, &str)] = &[("chris", "Chris"), ("joe", "Joe"), ("dolores", "Dolores")];
 
 /// Where the dancers are (their scans, skeletons, moves): WETOWL_DANCE, `dance/` beside this
 /// program (the Desk's installs), the Mac bundle's Resources, the repo's assets (a build in

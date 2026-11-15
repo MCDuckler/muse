@@ -4,6 +4,9 @@
   up by hand, with arms and hands from an MPFB (MakeHuman) humanoid (CC0) fitted to the scan and textured from its photos.
 - Joe: a photogrammetry scan of the house's Joe (photos by the house, 2026-10-17), rigged the same way, the moves
   retargeted from the first scan's rig (tools/show-dance/dance_model.py).
+- Dolores: no scan, one photo of her (by the house, 2026-11-10): the first scan's body made thinner, shorter
+  (20 cm under Chris) and female, a low-poly bob and scarf built round it, her photo on the face
+  (~/scans/dolores on the machine that made it). She dances Chris's moves.
 - The motion: Bandai Namco Research Motiondataset (dataset 1, `dance-long_normal_001`, `dance-short_normal_001`),
   https://github.com/BandaiNamcoResearchInc/Bandai-Namco-Research-Motiondataset — CC BY-NC 4.0 (non-commercial).
 - More motion: CMU Graphics Lab Motion Capture Database, http://mocap.cs.cmu.edu (free for any use; created with
@@ -15,4 +18,5 @@
 - Mixamo (Adobe), https://www.mixamo.com — animations used under Mixamo's terms (royalty-free in a project, not
   for redistribution as animation files on their own), baked into the moves here (takes `mx_*`, exported without
   skin at 30 fps and retargeted like the rest): running man, shuffling, house, hip-hop steps, samba, swing, party
-  and Thriller pieces.
+  and Thriller pieces; and a crowd's moves for techno (style `rave`: jumping in place, cross jumps,
+  stomps, fist pumps, head banging, cheering, clapping, waving both hands), short cycles looped.
