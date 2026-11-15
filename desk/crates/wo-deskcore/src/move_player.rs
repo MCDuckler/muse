@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn a_move_is_seen_square_on_and_a_strip_of_it_is_drawn() {
         let p = player();
-        assert_eq!(p.models().len(), 2);
+        assert_eq!(p.models().len(), wo_show::scenes::DANCERS.len());
         let id = "long22";
         let f = p.facts(id).unwrap();
         assert!(f.beats > 0 && f.bpm > 40.0 && !f.duo);

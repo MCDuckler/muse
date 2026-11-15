@@ -11,7 +11,12 @@ Captures: the Bandai Namco Research Motiondataset (CC BY-NC 4.0) and the CMU Gra
 Database (free for any use), both as BVH. `skel.py` maps CMU joint names onto the Bandai ones;
 `retarget.py` is direction based, so any skeleton's rest pose works. Mixamo dances (the user's own Adobe
 login) come in as FBX exported without skin at 30 fps, linked into the capture dir as `mx_<name>.fbx`;
-`skel.load` reads either kind (a Mixamo skeleton's chest is its Spine2).
+`skel.load` reads either kind (a Mixamo skeleton's chest is its Spine2). The crowd's rave moves (jumps, fist
+pumps, head banging, stomps, hands up; style `rave`) are short Mixamo cycles in a capture dir of their own
+(`mixamo_rave/`, linked as `mx_rv_<name>.fbx`): `skel.load` repeats each (a Cycles modifier on every curve,
+~24 s) so the beat finder and the retarget see a long loop; they are retargeted into `rigs_rave.blend`
+(`dance_rig2.py` with a dir holding only their picks), which `dance_export3d.py` / `dance_model.py` load
+beside `rigs_cmu.blend`.
 
 1. `blender -b --python bvh_joints.py -- <take>.bvh <dir>/joints/<take>.npz`: joint tracks at 30 fps, legs
    scaled to 0.85 m.

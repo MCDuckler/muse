@@ -299,6 +299,11 @@ pub struct SectionRow {
     pub label: String,
     pub start_ms: i64,
     pub end_ms: i64,
+    /// Whether a voice / the drums are heard in it (the structure's, where it says).
+    #[serde(default)]
+    pub vocals: Option<bool>,
+    #[serde(default)]
+    pub drums: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -330,6 +335,39 @@ pub struct Structure {
     pub bars_ms: Vec<i64>,
     #[serde(default)]
     pub mix_db: Vec<f64>,
+    /// The voice stem's loudness a bar, where the record's stems were measured (else the
+    /// sections' `vocals` say nothing).
+    #[serde(default)]
+    pub vocals_db: Option<Vec<Option<f64>>>,
+}
+
+/// Both passes' drops in seconds, sorted, the loudness pass's dropped where the structure has one
+/// within `near` seconds (the structure places them better).
+pub fn all_drops(structure_ms: &[i64], energy_ms: &[i64], near: f64) -> Vec<f64> {
+    let mut out: Vec<f64> = structure_ms.iter().map(|&m| m as f64 / 1000.0).collect();
+    for &e in energy_ms {
+        let e = e as f64 / 1000.0;
+        if !out.iter().any(|&d| (d - e).abs() <= near) {
+            out.push(e);
+        }
+    }
+    out.sort_by(f64::total_cmp);
+    out
+}
+
+/// How much of a record's drummed time has a voice over it, 0..1, by its sections (all of them
+/// where none says it has drums); None where the structure says nothing of voices. A techno
+/// record with a sung intro or a vocal break is still a record of drums without words.
+pub fn voice_over_drums(sections: &[SectionRow]) -> Option<f64> {
+    let known: Vec<&SectionRow> = sections.iter().filter(|x| x.vocals.is_some() && x.end_ms > x.start_ms).collect();
+    if known.is_empty() {
+        return None;
+    }
+    let drummed: Vec<&SectionRow> = known.iter().copied().filter(|x| x.drums == Some(true)).collect();
+    let over = if drummed.is_empty() { known } else { drummed };
+    let len = |x: &&SectionRow| (x.end_ms - x.start_ms) as f64;
+    let total: f64 = over.iter().map(len).sum();
+    (total > 0.0).then(|| over.iter().filter(|x| x.vocals == Some(true)).map(len).sum::<f64>() / total)
 }
 
 impl Analysis {
@@ -354,7 +392,9 @@ impl Analysis {
         let st = self.structure.clone().unwrap_or_default();
         let drops = if st.drops_ms.is_empty() { &self.drops } else { &st.drops_ms };
         t.drops = drops.iter().map(|&m| s(m)).collect();
+        t.show_drops = all_drops(&st.drops_ms, &self.drops, t.bar().unwrap_or(2.0) * 4.0);
         t.sections = st.sections.iter().map(|x| wo_booth::mix::Section { label: x.label.clone(), start: s(x.start_ms), end: s(x.end_ms) }).collect();
+        t.voice = if st.vocals_db.is_some() { voice_over_drums(&st.sections) } else { None };
         let places = |v: &[PlaceRow]| v.iter().map(|p| wo_booth::mix::Place { at: s(p.ms), why: p.why.clone() }).collect();
         if let Some(c) = &st.cues {
             t.outs = places(&c.outs);
@@ -1069,6 +1109,30 @@ fn parse_pads(row: CuesRow) -> HandPads {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_show_hears_every_drop_either_pass_found() {
+        // MA JET: the structure found the second drop only, the loudness both
+        assert_eq!(all_drops(&[85_509], &[36_008, 87_009], 6.0), vec![36.008, 85.509]);
+        assert_eq!(all_drops(&[], &[9_100], 6.0), vec![9.1]);
+        assert!(all_drops(&[], &[], 6.0).is_empty());
+    }
+
+    #[test]
+    fn the_voice_over_the_drums_where_the_stems_were_measured() {
+        let row = |label: &str, a: i64, b: i64, vocals: bool, drums: bool| SectionRow { label: label.into(), start_ms: a, end_ms: b, vocals: Some(vocals), drums: Some(drums) };
+        // a techno record with a sung intro and break: little voice where the drums play
+        let techno = [row("intro", 0, 36_000, true, false), row("inst", 36_000, 60_000, false, true), row("verse", 60_000, 72_000, true, true), row("drop", 85_500, 124_500, false, true)];
+        let v = voice_over_drums(&techno).unwrap();
+        assert!((v - 12.0 / 75.0).abs() < 0.01, "{v}");
+        assert!(voice_over_drums(&[row("verse", 0, 10_000, true, true), row("chorus", 10_000, 20_000, true, true)]).unwrap() > 0.99);
+        assert_eq!(voice_over_drums(&[SectionRow { label: "inst".into(), start_ms: 0, end_ms: 9, vocals: None, drums: None }]), None);
+        // no stems measured: the sections' "no voice" is only a default
+        let mut a: Analysis = serde_json::from_str(r#"{"bpm": 120.0, "beats": [0, 500], "structure": {"sections": [{"label": "inst", "start_ms": 0, "end_ms": 9000, "vocals": false, "drums": true}], "vocals_db": null}}"#).unwrap();
+        assert_eq!(a.timing().voice, None);
+        a.structure.as_mut().unwrap().vocals_db = Some(vec![Some(-30.0)]);
+        assert_eq!(a.timing().voice, Some(0.0));
+    }
 
     /// 120 bpm from 0.1 s, the bar's one on beat 2: bars at 1.1, 3.1, 5.1 …
     fn analysis() -> Analysis {

@@ -43,9 +43,26 @@ def load(path):
         ob = next(o for o in bpy.context.selected_objects if o.type == "ARMATURE")
         for b in ob.data.bones:
             b.name = re.sub(r"^mixamorig\d*:", "", b.name)
-        return ob, bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
+        fps = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
+        if "/mixamo_rave/" in os.path.realpath(path):
+            loop(ob, fps)
+        return ob, fps
     bpy.ops.import_anim.bvh(filepath=path, axis_forward="-Z", axis_up="Y", global_scale=0.01)
     return bpy.context.object, bvh_fps(path)
+
+
+def loop(ob, fps, seconds=24.0):
+    """A short Mixamo cycle (a crowd's jump, fist pump, head bang) played over and over:
+    every curve repeated (a Cycles modifier) and the action's range stretched to `seconds`."""
+    act = ob.animation_data.action
+    f0, f1 = act.frame_range
+    span = max(1.0, f1 - f0)
+    for fc in act.fcurves:
+        if not any(m.type == "CYCLES" for m in fc.modifiers):
+            fc.modifiers.new("CYCLES")
+    act.use_frame_range = True
+    act.frame_start = f0
+    act.frame_end = f0 + span * max(1, round(seconds * fps / span))
 
 
 def bvh_fps(path):

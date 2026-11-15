@@ -35,6 +35,10 @@ if not MODEL:
         dst.actions = [a for a in src.actions if a not in ("dance",)]
     for a in dst.actions:
         if a.name.endswith(".001"): a.name = a.name[:-4]
+    # the crowd's rave moves (short Mixamo cycles looped; dance_rave/)
+    if os.path.exists(f"{HOME}/dance2/rigs_rave.blend"):
+        with bpy.data.libraries.load(f"{HOME}/dance2/rigs_rave.blend") as (src, dst):
+            dst.actions = [a for a in src.actions if a.startswith("mx_rv_")]
     if os.path.exists(f"{HOME}/dance2/rigs_duo.blend"):
         with bpy.data.libraries.load(f"{HOME}/dance2/rigs_duo.blend") as (src, dst):
             dst.actions = list(src.actions)

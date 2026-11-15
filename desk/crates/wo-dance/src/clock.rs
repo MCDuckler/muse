@@ -45,6 +45,11 @@ pub fn mood(m: &ShowDeck, since_drop: Option<f64>) -> Mood {
     if away.is_none() && since_drop.is_none() && m.energy > 0.85 && matches!(s, None | Some("chorus")) {
         return Mood::Rage;
     }
+    // techno at full tilt is danced as a drop whatever the analysis called the part (a first
+    // drop it labelled "inst", a verse as loud as the drop)
+    if m.energy > 0.85 && m.bpm.is_some_and(|b| techno(b, voice(m))) && !matches!(s, Some("intro" | "outro")) {
+        return Mood::Rage;
+    }
     Mood::Vibe
 }
 
@@ -154,6 +159,11 @@ fn id_hash(id: &str) -> i64 {
 /// `pool` narrowed to the record's own [VOCABULARY]: a weighted draw without putting back, by
 /// the record's and the move's dice.
 pub fn own_moves(pool: &[(usize, f64)], moves: &[Move], salt: i64) -> Vec<(usize, f64)> {
+    // only moves that fit the moment nearly as well as the best (else the round of a
+    // record's few brings a clap to a drop)
+    let best = pool.iter().map(|e| e.1).fold(0.0, f64::max);
+    let near: Vec<(usize, f64)> = pool.iter().copied().filter(|e| e.1 >= 0.2 * best).collect();
+    let pool = if near.len() >= 2 { &near[..] } else { pool };
     if pool.len() <= VOCABULARY {
         return pool.to_vec();
     }
@@ -167,63 +177,127 @@ pub fn own_moves(pool: &[(usize, f64)], moves: &[Move], salt: i64) -> Vec<(usize
     out
 }
 
-/// Capture beats danced per track beat: 1, or half/double time far off the capture's tempo;
-/// a sleeping record at half again.
+/// Capture beats danced per track beat by the tempos alone: 1, or half/double time far off
+/// the capture's tempo (what [playing] falls back on).
 pub fn rate(track_bpm: f64, move_bpm: f64, sleep: bool) -> f64 {
     let q = track_bpm / move_bpm;
     let r = if q > 1.45 { 0.5 } else if q < 0.7 { 2.0 } else { 1.0 };
     if sleep { r / 2.0 } else { r }
 }
 
-/// How true `m` dances to a record at `track_bpm`, 0..1 (`width` in octaves).
-pub fn tempo_fit(track_bpm: f64, m: &Move, width: f64) -> f64 {
-    let played = track_bpm * rate(track_bpm, m.bpm, false);
-    let l = (played / m.bpm).ln() / std::f64::consts::LN_2;
-    (-l * l / (2.0 * width * width)).exp()
+/// How hard a record asks to be danced now, 0 (asleep) to 1 (a drop at full tilt), in tenths:
+/// the mood's range, and within it how loud the bar is, how near the drop, how hot the rage.
+/// `hard`: fast techno ([hard]), danced a notch up when it is merely going.
+pub fn intensity(mood: Mood, energy: f64, wake_k: f64, heat: f64, hard: bool) -> f64 {
+    let e = energy.clamp(0.0, 1.0);
+    let i = match mood {
+        Mood::Sleep => 0.05 + 0.2 * e,
+        Mood::Wake => 0.4 + 0.45 * wake_k.clamp(0.0, 1.0),
+        Mood::Vibe => 0.1 + 0.75 * e + if hard { 0.1 * e } else { 0.0 },
+        Mood::Rage => 0.85 + 0.15 * heat.clamp(0.0, 1.0),
+    };
+    (i.clamp(0.0, 1.0) * 10.0).round() / 10.0
 }
 
-/// How far a pumping move may be stretched on techno.
-pub const TECHNO_STRETCH: f64 = 0.32;
+/// Techno fast enough that half time reads as standing about.
+pub fn hard(bpm: f64, techno: bool) -> bool {
+    techno && bpm >= 138.0
+}
 
-/// Which tier the mood dances: 0 low, 1 mid, 2 high.
-pub fn tier(mood: Mood, wake_k: f64, energy: f64, dice: f64) -> usize {
+/// How much a moment wants hands in the air, 0..1: a build nearing its drop (techno all the
+/// more), a techno breakdown a little.
+pub fn lift(mood: Mood, wake_k: f64, techno: bool) -> f64 {
     match mood {
-        Mood::Sleep => 0,
-        Mood::Rage => 2,
-        Mood::Wake => {
-            if wake_k > 0.66 {
-                2
-            } else if wake_k > 0.2 || dice < 0.5 {
-                1
-            } else {
-                0
-            }
+        Mood::Wake => wake_k.clamp(0.0, 1.0).powi(2) * if techno { 1.0 } else { 0.6 },
+        Mood::Sleep if techno => 0.25,
+        _ => 0.0,
+    }
+}
+
+/// How fast a body should move at an intensity: the hips' and key joints' mean speed, m/s
+/// (a sway about 0.5, a groove about 1.2, the fastest captures at their own tempo about 2.2).
+pub fn target_speed(intensity: f64) -> f64 {
+    0.3 + 2.1 * intensity.clamp(0.0, 1.0)
+}
+
+/// The ways a capture can be laid on the record's beat: capture beats per track beat.
+pub const RATES: [f64; 4] = [0.25, 0.5, 1.0, 2.0];
+
+/// How to dance `m` to a record at `bpm` asking for `intensity`: capture beats per track beat
+/// and how well that fits, 0..1. Of half, full and double time (a quarter asleep) the one whose
+/// speed AS PLAYED is nearest what the intensity asks for, the capture not stretched too far
+/// from its own tempo; on techno a move that pumps may be driven harder, and a loud part wants
+/// a step on every beat (half time is marked down).
+pub fn playing(bpm: f64, m: &Move, intensity: f64, techno: bool, sleep: bool) -> (f64, f64) {
+    let want = target_speed(intensity);
+    let pumps = techno && m.pulse >= Rig::MIN_PULSE_SHIFT;
+    let hi = if pumps && intensity >= 0.7 { 1.75 } else { 1.5 };
+    let width = if pumps { 0.5 } else { 0.3 };
+    let mut best: Option<(f64, f64)> = None;
+    for r in RATES {
+        if r < 0.5 && !sleep {
+            continue;
         }
-        Mood::Vibe => {
-            if energy > 0.75 && dice < 0.35 {
-                2
-            } else if energy < 0.35 && dice < 0.4 {
-                0
-            } else {
-                1
-            }
+        let f = bpm * r / m.bpm;
+        if !(0.6..=hi).contains(&f) {
+            continue;
+        }
+        let l = f.ln() / std::f64::consts::LN_2;
+        let natural = (-l * l / (2.0 * width * width)).exp();
+        let speed = if m.travel > 0.0 {
+            let d = (m.travel * bpm * r / 60.0 / want).ln();
+            (-d * d / (2.0 * 0.35 * 0.35)).exp()
+        } else {
+            // a table without the moves' paths: by its tier, as before
+            let tier = if intensity < 0.3 { 0 } else if intensity < 0.7 { 1 } else { 2 };
+            [1.0, 0.12, 0.015][m.tier_ix().abs_diff(tier).min(2)]
+        };
+        // a crowd's move (a fist pump, head banging, hands up) reads as hard by its gesture,
+        // not by how far the body goes: never far off the mark
+        // (as much as the capture itself is energetic: a fist pump yes, a clap hardly)
+        let speed = if m.style == "rave" { speed.max(0.45 * (m.energy / 8.0).clamp(0.0, 1.0)) } else { speed };
+        let every_beat = if techno && r < 1.0 && intensity >= 0.6 { 0.35 } else { 1.0 };
+        let fit = natural * speed * every_beat;
+        if best.is_none_or(|b| fit > b.1) {
+            best = Some((r, fit));
         }
     }
+    best.unwrap_or((rate(bpm, m.bpm, sleep), 0.0))
+}
+
+/// How fast `m` moves a body played at `rate` on a record at `bpm`, m/s.
+pub fn speed(bpm: f64, m: &Move, rate: f64) -> f64 {
+    m.travel * bpm * rate / 60.0
+}
+
+/// How much voice a deck's record has to judge it by: the record's over its drums where the
+/// Desk knows it, else the bar's.
+pub fn voice(m: &ShowDeck) -> f64 {
+    m.voiced.unwrap_or(m.vocal)
 }
 
 /// A record to dance to as to techno: four to the floor at a club's tempo, few words.
 pub fn techno(bpm: f64, vocal: f64) -> bool {
-    (118.0..=160.0).contains(&bpm) && vocal < 0.4
+    (118.0..=180.0).contains(&bpm) && vocal < 0.4
 }
 
 /// How much a record leans on each style (by [STYLES]' order).
-pub fn flavour(salt: i64, bpm: f64, mood: Mood, hook: bool, techno: bool) -> [f64; 7] {
+/// `intensity`: fast techno going hard takes whatever pumps hard enough, whatever its style;
+/// the crowd's rave moves (jumps, fist pumps, head banging, hands up) are techno's own.
+pub fn flavour(salt: i64, bpm: f64, mood: Mood, hook: bool, techno: bool, intensity: f64) -> [f64; 8] {
     let calm = if mood == Mood::Sleep { 1.6 } else { 0.04 };
-    // groove party toon swing latin folk calm
+    // groove party toon swing latin folk calm rave
     if techno {
-        return [3.0, if hook { 0.1 } else { 0.02 }, 0.04, 0.08, 0.25, 0.2, calm];
+        let rave = if mood == Mood::Sleep { 0.1 } else { 1.2 + 2.0 * intensity };
+        let w = [3.0, if hook { 0.1 } else { 0.02 }, 0.04, 0.08, 0.25, 0.2, calm, rave];
+        if hard(bpm, techno) && intensity >= 0.7 {
+            return [w[0], w[1].max(0.5), w[2], w[3].max(0.3), w[4].max(0.6), w[5].max(0.9), w[6], w[7]];
+        }
+        return w;
     }
-    let mut w = [1.2, if hook { 0.25 } else { 0.02 }, 0.04, 0.25, 0.45, 0.4, calm];
+    // elsewhere a fist in the air now and then where it goes off
+    let rave = if mood == Mood::Rage { 0.25 } else { 0.03 };
+    let mut w = [1.2, if hook { 0.25 } else { 0.02 }, 0.04, 0.25, 0.45, 0.4, calm, rave];
     // latin folk swing groove
     let leaning = [4usize, 5, 3, 0];
     let a = leaning[((meme_hash(s9973(salt), 11.0, 5.0) * 4.0).floor() as usize) % 4];
@@ -243,28 +317,31 @@ pub fn flavour(salt: i64, bpm: f64, mood: Mood, hook: bool, techno: bool) -> [f6
 }
 
 /// The moves of `bank` (indices into `moves`) worth dancing next, best first with their
-/// weights: the tier's, by the record's flavour, by tempo, the recent ones held back. `duo`:
-/// the duets' lead halves alone.
+/// weights: by how well each can be played at the `intensity` asked for ([playing]), by the
+/// record's flavour, on techno by how it pumps; the recent ones held back. `duo`: the duets'
+/// lead halves alone.
 #[allow(clippy::too_many_arguments)]
-pub fn pool(moves: &[Move], bank: &[usize], tier: usize, flavour: &[f64; 7], bpm: f64, recent: &[String], techno: bool, duo: bool) -> Vec<(usize, f64)> {
+/// `lift`, 0..1: how much the moment wants hands in the air (a build nearing its drop).
+pub fn pool(moves: &[Move], bank: &[usize], intensity: f64, flavour: &[f64; 8], bpm: f64, recent: &[String], techno: bool, sleep: bool, duo: bool, lift: f64) -> Vec<(usize, f64)> {
     let mut out = vec![];
     for &i in bank {
         let m = &moves[i];
         if if duo { m.duo.is_none() || m.part != 0 } else { m.duo.is_some() } {
             continue;
         }
-        let d = m.tier_ix().abs_diff(tier);
-        let fit = tempo_fit(bpm, m, if techno && m.pulse >= Rig::MIN_PULSE_SHIFT { TECHNO_STRETCH } else { 0.16 });
+        let (_, fit) = playing(bpm, m, intensity, techno, sleep);
         // an unknown style reads as a groove, as v1 reads it
         let style = flavour[crate::style_ix(&m.style)];
-        let mut w = (match d {
-            0 => 1.0,
-            1 => 0.12,
-            _ => 0.015,
-        }) * style
-            * if techno { (0.1 + fit) * (0.15 + 3.0 * m.pulse * m.pulse) } else { 0.2 + fit };
-        if let Some(r) = recent.iter().position(|id| *id == m.id) {
-            w *= if r == recent.len() - 1 { 0.0 } else { 0.15 };
+        // techno leans on the moves that pump, the more the harder it goes (asleep not at all)
+        let pump = if techno && !sleep { 1.0 + (intensity * 1.6).min(1.0) * (3.0 * m.pulse * m.pulse - 0.85) } else { 1.0 };
+        // (a crowd's fist pump or head bang keeps time with the arms and head, not the hips)
+        let pump = if m.style == "rave" { pump.max(1.0) } else { pump };
+        let w = style * (0.003 + fit) * pump * (1.0 + 4.0 * lift * m.hands_up);
+        // (its latest dancing counts: a move danced twice lately is still the last one)
+        let mut w = w;
+        if let Some(r) = recent.iter().rposition(|id| *id == m.id) {
+            // the last one out, the ones before it the less the nearer (a record's few moves go round)
+            w *= [0.0, 0.06, 0.2, 0.45, 0.7][(recent.len() - 1 - r).min(4)];
         }
         if w > 0.0 {
             out.push((i, w));
@@ -327,7 +404,7 @@ pub fn troupe(mood: Mood, salt: i64, slot: i64, heat: f64, big: bool) -> Troupe 
 }
 
 /// The company as couples now and then (likelier on a latin record), never asleep.
-pub fn paired(t: Troupe, mood: Mood, flavour: &[f64; 7], salt: i64, slot: i64) -> Troupe {
+pub fn paired(t: Troupe, mood: Mood, flavour: &[f64; 8], salt: i64, slot: i64) -> Troupe {
     if mood == Mood::Sleep {
         return t;
     }
@@ -692,7 +769,7 @@ impl Frame {
 }
 
 /// The dancers to pick from (`assets/show/dance/<id>/`).
-pub const MODELS: &[&str] = &[wo_show::scenes::DANCERS[0].0, wo_show::scenes::DANCERS[1].0];
+pub const MODELS: &[&str] = &[wo_show::scenes::DANCERS[0].0, wo_show::scenes::DANCERS[1].0, wo_show::scenes::DANCERS[2].0];
 pub const MIX: &str = "mix";
 
 /// Who may dance in a mix: all but those switched `off` (all off is none off).
@@ -928,41 +1005,90 @@ mod tests {
         assert_eq!(rate(128.0, 93.0, false), 1.0);
         assert_eq!(rate(60.0, 129.0, false), 2.0);
         assert_eq!(rate(128.0, 129.0, true), 0.5);
-        let m = mv("a", "mid", 124.0);
-        assert!((tempo_fit(124.0, &m, 0.16) - 1.0).abs() < 1e-9);
-        assert!((tempo_fit(62.0, &m, 0.16) - 1.0).abs() < 1e-9);
-        assert!(tempo_fit(140.0, &m, 0.16) < tempo_fit(128.0, &m, 0.16));
+    }
+
+    #[test]
+    fn a_move_is_played_at_the_speed_the_record_asks_for() {
+        // a stepping move captured at 96 that pumps: half time on a quiet 160, on the beat at full tilt
+        let mut shuffle = mv("s", "high", 96.0);
+        (shuffle.travel, shuffle.pulse) = (1.0, 0.65);
+        assert_eq!(playing(160.0, &shuffle, 0.3, true, false).0, 0.5);
+        assert_eq!(playing(160.0, &shuffle, 1.0, true, false).0, 1.0);
+        // one that does not pump is not driven past half again its tempo
+        let mut plain = mv("p", "high", 96.0);
+        plain.travel = 1.0;
+        assert_eq!(playing(160.0, &plain, 1.0, true, false).0, 0.5);
+        // at its own tempo and speed: a perfect fit; a sway is none for a drop
+        let mut run = mv("r", "high", 128.0);
+        run.travel = target_speed(1.0) * 60.0 / 128.0;
+        assert!(playing(128.0, &run, 1.0, false, false).1 > 0.99);
+        let mut sway = mv("w", "low", 128.0);
+        sway.travel = 0.2;
+        assert!(playing(128.0, &sway, 1.0, false, false).1 < 0.01);
+        assert!(playing(128.0, &sway, 0.1, false, false).1 > 0.5);
+        // louder is harder, a drop hardest, fast techno a notch up
+        assert!(intensity(Mood::Sleep, 0.9, 0.0, 0.0, false) < intensity(Mood::Vibe, 0.2, 0.0, 0.0, false));
+        assert!(intensity(Mood::Vibe, 0.9, 0.0, 0.0, false) > intensity(Mood::Vibe, 0.4, 0.0, 0.0, false));
+        assert!(intensity(Mood::Vibe, 0.9, 0.0, 0.0, true) > intensity(Mood::Vibe, 0.9, 0.0, 0.0, false));
+        assert_eq!(intensity(Mood::Rage, 0.5, 0.0, 1.0, false), 1.0);
+        assert!(intensity(Mood::Wake, 0.5, 0.9, 0.0, false) > intensity(Mood::Wake, 0.5, 0.1, 0.0, false));
     }
 
     #[test]
     fn the_drop_dances_big_sleep_calm() {
-        assert_eq!(tier(Mood::Rage, 0.0, 0.5, 0.0), 2);
-        assert_eq!(tier(Mood::Sleep, 0.0, 0.5, 0.0), 0);
-        assert_eq!(tier(Mood::Wake, 0.9, 0.5, 0.0), 2);
-        assert_eq!(tier(Mood::Wake, 0.4, 0.5, 0.0), 1);
-        assert!(flavour(1, 120.0, Mood::Sleep, false, false)[6] > flavour(1, 120.0, Mood::Vibe, false, false)[6] * 10.0);
-        let fl = flavour(7, 128.0, Mood::Vibe, false, true);
+        assert!(flavour(1, 120.0, Mood::Sleep, false, false, 0.1)[6] > flavour(1, 120.0, Mood::Vibe, false, false, 0.5)[6] * 10.0);
+        let fl = flavour(7, 128.0, Mood::Vibe, false, true, 0.5);
         assert!(fl[0] > fl[1] * 50.0);
         assert!(techno(128.0, 0.1) && !techno(95.0, 0.1));
+        assert!(techno(165.0, 0.1) && hard(160.0, true) && !hard(126.0, true));
+        // the rave moves: techno's own, the more the harder it goes; rare elsewhere
+        let rave = crate::style_ix("rave");
+        assert_eq!(crate::STYLES[rave], "rave");
+        assert!(flavour(7, 160.0, Mood::Rage, false, true, 1.0)[rave] > flavour(7, 160.0, Mood::Vibe, false, true, 0.3)[rave]);
+        assert!(flavour(7, 160.0, Mood::Rage, false, true, 1.0)[rave] > 10.0 * flavour(7, 100.0, Mood::Vibe, false, false, 0.5)[rave]);
+        // loud techno is danced as a drop whatever the part is called; a loud pop verse is not
+        let deck = |bpm: f64, section: &str| ShowDeck { playing: true, bpm: Some(bpm), energy: 0.95, section: Some(section.into()), drop_beats_away: Some(60.0), ..Default::default() };
+        assert_eq!(mood(&deck(160.0, "inst"), None), Mood::Rage);
+        assert_eq!(mood(&deck(160.0, "intro"), None), Mood::Vibe);
+        assert_eq!(mood(&deck(100.0, "verse"), None), Mood::Vibe);
+        // a sung record at a club's tempo is no techno: a loud chorus stays a groove
+        let sung = ShowDeck { voiced: Some(0.8), ..deck(140.0, "chorus") };
+        assert_eq!(mood(&sung, None), Mood::Vibe);
+        assert!(!techno(140.0, voice(&sung)) && techno(140.0, voice(&ShowDeck { voiced: Some(0.16), ..sung.clone() })));
     }
 
     #[test]
-    fn the_pool_tier_first_the_last_move_out() {
-        let moves: Vec<Move> = (0..4).map(|i| mv(&format!("h{i}"), "high", 120.0)).chain([mv("l0", "low", 120.0), mv("m0", "mid", 120.0)]).collect();
+    fn the_pool_by_speed_the_last_move_out() {
+        let mut moves: Vec<Move> = (0..4).map(|i| mv(&format!("h{i}"), "high", 120.0)).chain([mv("l0", "low", 120.0), mv("m0", "mid", 120.0)]).collect();
+        for m in &mut moves {
+            m.travel = match m.tier.as_str() {
+                "high" => 1.1,
+                "mid" => 0.6,
+                _ => 0.25,
+            };
+        }
         let bank: Vec<usize> = (0..moves.len()).collect();
-        let fl = flavour(4242, 124.0, Mood::Rage, false, false);
-        let p = pool(&moves, &bank, 2, &fl, 124.0, &["h1".into()], false, false);
+        let fl = flavour(4242, 124.0, Mood::Rage, false, false, 1.0);
+        let p = pool(&moves, &bank, 1.0, &fl, 124.0, &["h1".into()], false, false, false, 0.0);
         assert_eq!(moves[p[0].0].tier, "high");
         assert!(!p.iter().any(|e| moves[e.0].id == "h1"));
         assert_eq!(draw(&p, 0.37), draw(&p, 0.37));
-        assert!(!pool(&moves, &[4], 2, &fl, 124.0, &[], false, false).is_empty(), "a tier the bank lacks falls back");
+        assert_eq!(moves[pool(&moves, &bank, 0.1, &fl, 124.0, &[], false, false, false, 0.0)[0].0].tier, "low");
+        assert!(!pool(&moves, &[4], 1.0, &fl, 124.0, &[], false, false, false, 0.0).is_empty(), "a speed the bank lacks falls back");
+        // a build near its drop: hands in the air
+        moves[1].hands_up = 0.9;
+        let share = |l: f64| {
+            let p = pool(&moves, &bank, 0.8, &fl, 124.0, &[], true, false, false, l);
+            p.iter().find(|e| e.0 == 1).unwrap().1 / p.iter().map(|e| e.1).sum::<f64>()
+        };
+        assert!(share(lift(Mood::Wake, 0.95, true)) > 2.0 * share(lift(Mood::Vibe, 0.0, true)));
         let m = mv("x", "mid", 120.0);
         assert_eq!(entries(&m), vec![0, 2, 4, 6]);
     }
 
     #[test]
     fn couples_routines_formations_the_same_for_the_same_slot() {
-        let mut latin = flavour(3, 100.0, Mood::Vibe, false, false);
+        let mut latin = flavour(3, 100.0, Mood::Vibe, false, false, 0.5);
         latin[4] = 6.0;
         let n = (0..200).filter(|&n| paired(Troupe::Duo, Mood::Vibe, &latin, 3, n) == Troupe::Couple).count();
         assert!(n > 60, "{n}");
@@ -1009,7 +1135,7 @@ mod tests {
 
     #[test]
     fn dancers_switched_off_never_in_a_mix() {
-        let off = vec!["chris".to_owned()];
+        let off = vec!["chris".to_owned(), "dolores".to_owned()];
         for salt in 0..400 {
             assert_eq!(lead(Some(MIX), salt, &off), "joe");
             for i in 0..6 {

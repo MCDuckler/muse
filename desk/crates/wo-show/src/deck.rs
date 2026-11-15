@@ -95,6 +95,8 @@ pub struct RecordFacts {
     pub vocal_bars: Option<Vec<u8>>,
     /// Where the hook starts, ms.
     pub hook_ms: Vec<f64>,
+    /// How much of the record's drummed time has a voice over it, 0..1 (None: not known).
+    pub voice: Option<f64>,
     /// The cover's colour, 0xRRGGBB.
     pub cover_rgb: Option<u32>,
 }
@@ -264,6 +266,8 @@ pub struct ShowDeck {
     pub build_k: f64,
     pub energy: f64,
     pub vocal: f64,
+    /// The record's voice over its drums, 0..1, where the Desk knows it ([RecordFacts::voice]).
+    pub voiced: Option<f64>,
     pub hook: bool,
     pub key: Option<String>,
     pub camelot: Option<String>,
@@ -291,6 +295,7 @@ impl ShowDeck {
         d.camelot = t.camelot.clone();
         d.key_hue = t.key_hue();
         d.cover_rgb = t.cover_rgb;
+        d.voiced = t.voice;
         if !t.has_beats() {
             return d;
         }

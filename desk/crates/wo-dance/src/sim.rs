@@ -33,9 +33,16 @@ impl Company {
     }
 }
 
-/// How much bigger a model is drawn, so every dancer stands about a person's height.
+/// How much bigger a model is drawn, so every dancer stands about a person's height (or the
+/// height its folder asks for: Dolores is a head shorter than Chris).
 pub(crate) fn scale_of(rig: &Rig) -> f64 {
-    if rig.height > 0.3 { (1.75 / rig.height).clamp(0.8, 1.2) } else { 1.0 }
+    if rig.height <= 0.3 {
+        return 1.0;
+    }
+    match rig.stands {
+        Some(s) if s > 0.3 => (s / rig.height).clamp(0.8, 1.2),
+        _ => (1.75 / rig.height).clamp(0.8, 1.2),
+    }
 }
 
 /// One line of dancing: a move playing from an anchor, the one before it (danced on by anyone
@@ -246,7 +253,15 @@ pub struct DanceSim {
     book: HashMap<String, Booked>,
     book_salt: Option<i64>,
     frames: u64,
-    alt_due: Option<(usize, [f64; 7], bool, bool)>,
+    alt_due: Option<(f64, [f64; 8], bool, bool)>,
+    /// What the moves on were chosen for: the intensity, asleep, techno (they are kept at the
+    /// rate that fits it until the next choice).
+    level: (f64, bool, bool),
+    /// How much the slot wants hands in the air ([clock::lift]).
+    lift: f64,
+    /// The bar the last frame was in and how loud it was (a leap to the top is a drop).
+    bar_was: i64,
+    energy_was: f64,
     alt_due_frame: u32,
     troupe_drawn: Option<Troupe>,
     size_was: Option<(f64, f64)>,
@@ -292,6 +307,10 @@ impl Default for DanceSim {
             book_salt: None,
             frames: 0,
             alt_due: None,
+            level: (0.5, false, false),
+            lift: 0.0,
+            bar_was: -999,
+            energy_was: 0.0,
             alt_due_frame: 0,
             troupe_drawn: None,
             size_was: None,
@@ -311,6 +330,12 @@ impl Default for DanceSim {
 }
 
 impl DanceSim {
+    /// What the lead dances now: the move (an index into the rig's) and capture beats per
+    /// track beat (for reports and tests).
+    pub fn lead_now(&self) -> Option<(usize, f64)> {
+        self.lead.mv.map(|m| (m, self.lead.rate))
+    }
+
     /// With the environment's forcings (WETOWL_DANCE_ART, _TROUPE, _SHOT), for a look at one.
     pub fn from_env() -> DanceSim {
         let get = |k: &str| std::env::var(k).ok();
@@ -363,6 +388,14 @@ impl DanceSim {
             if m.section.as_deref() == Some("drop") && self.section_was.as_deref() != Some("drop") && self.drop_at.is_none_or(|d| beats - d > 8.0) {
                 self.drop_at = Some(beats);
             }
+            // a drop the analysis did not mark: the loudness leaping to the top from one bar to the next
+            let bar_now = (beats / 4.0).floor() as i64;
+            if bar_now != self.bar_was {
+                if self.bar_was == bar_now - 1 && m.energy >= 0.8 && m.energy - self.energy_was >= 0.3 && self.drop_at.is_none_or(|d| beats - d > 8.0) {
+                    self.drop_at = Some(bar_now as f64 * 4.0);
+                }
+                self.energy_was = m.energy;
+            }
             if self.drop_at.is_some_and(|d| beats - d < -1.0 || beats - d > 64.0) {
                 self.drop_at = None;
             }
@@ -386,6 +419,13 @@ impl DanceSim {
         let drop_now = since.is_some_and(|s| (0.0..0.5).contains(&s)) && self.lead.mv.is_none_or(|i| rig.moves[i].tier_ix() != 2);
         let section_now = section_turned && self.section_slot != n;
         let sleep = mood == Mood::Sleep;
+        let techno = clock::techno(bpm, clock::voice(m));
+        let level = clock::intensity(mood, m.energy, wake_k, heat, clock::hard(bpm, techno));
+        // the record gone much louder or quieter (or to sleep, or awake) inside a slot: a new
+        // choice at the bar, not four bars late
+        let bar_now = (beats / 4.0).floor() as i64;
+        let jolt = playing && self.lead.mv.is_some() && bar_now != self.bar_was && n == self.slot && !drop_now && !section_now && (level - self.level.0).abs() >= 0.35;
+        self.bar_was = bar_now;
         let styled = st.rig.figure.style.clone();
         let let_go = styled.is_none() && self.styled_was.is_some();
         self.styled_was = styled.clone();
@@ -397,14 +437,12 @@ impl DanceSim {
             self.art = Some(want);
         }
         let art = self.art.unwrap_or(Art::Plain);
-        if self.lead.mv.is_none() || n != self.slot || drop_now || section_now {
+        if self.lead.mv.is_none() || n != self.slot || drop_now || section_now || jolt {
             if section_now {
                 self.section_slot = n;
             }
-            let keep = self.lead.mv.is_some() && !drop_now && !section_now && sleep && self.lead.rate < 1.0 && n % 2 != 0;
-            let tier = clock::tier(mood, wake_k, m.energy, meme_hash(salt.rem_euclid(9973) as f64, n as f64, 3.0));
-            let techno = clock::techno(bpm, m.vocal);
-            let flavour = clock::flavour(salt, bpm, mood, m.hook && m.vocal > 0.3, techno);
+            let keep = self.lead.mv.is_some() && !drop_now && !section_now && !jolt && sleep && self.lead.rate < 1.0 && n % 2 != 0;
+            let flavour = clock::flavour(salt, bpm, mood, m.hook && m.vocal > 0.3, techno, level);
             let mut troupe = if drop_now { clock::troupe(Mood::Rage, salt, n + 1, 1.0, self.big) } else { clock::troupe(mood, salt, n, heat, self.big) };
             troupe = match art {
                 Art::Chrono | Art::Viewports => Troupe::Solo,
@@ -420,7 +458,7 @@ impl DanceSim {
             }
             let in_section = n - self.section_slot;
             let book_key = (playing && self.section_slot >= 0 && in_section < 8).then(|| m.section.as_ref().map(|s| format!("{s}|{in_section}"))).flatten();
-            let again = book_key.as_ref().and_then(|k| self.book.get(k)).map(|b| (b.mv, b.entry, b.troupe, b.slot));
+            let again = book_key.as_ref().filter(|_| !jolt).and_then(|k| self.book.get(k)).map(|b| (b.mv, b.entry, b.troupe, b.slot));
             if let Some((_, _, t, _)) = again {
                 troupe = t;
             }
@@ -431,15 +469,17 @@ impl DanceSim {
                 troupe = self.troupe;
             }
             if !keep {
+                self.level = (level, sleep, techno);
+                self.lift = clock::lift(mood, wake_k, techno);
                 let blend = if drop_now { 0.0 } else if sleep { 2.0 } else { 1.0 };
                 if let Some((mv, entry, _, _)) = again {
                     self.replay(rig, mv, entry, bpm, beats, sleep, blend);
                 } else {
                     let duo = clock::is_paired(troupe) && rig.has_duets();
-                    self.step(rig, false, tier, &flavour, bpm, beats, salt, n, sleep, blend, techno, duo);
+                    self.step(rig, false, level, &flavour, bpm, beats, salt, n, sleep, blend, techno, duo);
                 }
                 // the others' own line on the next frame: the slot's work split in two
-                self.alt_due = Some((tier, flavour, techno, drop_now));
+                self.alt_due = Some((level, flavour, techno, drop_now));
             }
             // no duet to dance: a partner becomes a second dancer
             if clock::is_paired(troupe) && self.lead.mv.is_none_or(|i| rig.moves[i].duo.is_none()) {
@@ -453,20 +493,20 @@ impl DanceSim {
             self.routine(troupe, salt, dealt, n, beats);
             self.slot = n;
         }
-        if let Some((tier, flavour, techno, dropped)) = self.alt_due {
+        if let Some((level, flavour, techno, dropped)) = self.alt_due {
             let ready = self.alt_due_frame > 0 || drop_now;
             self.alt_due_frame += 1;
             if ready {
-                self.step(rig, true, tier, &flavour, bpm, beats, salt + 977, n, sleep, if dropped { 0.0 } else { 1.0 }, techno, false);
+                self.step(rig, true, level, &flavour, bpm, beats, salt + 977, n, self.level.1, if dropped { 0.0 } else { 1.0 }, techno, false);
                 self.alt_due = None;
                 self.alt_due_frame = 0;
             }
         }
         if let Some(i) = self.lead.mv {
-            self.lead.retime(beats, clock::rate(bpm, rig.moves[i].bpm, sleep));
+            self.lead.retime(beats, clock::playing(bpm, &rig.moves[i], self.level.0, self.level.2, self.level.1).0);
         }
         if let Some(i) = self.alt.mv {
-            self.alt.retime(beats, clock::rate(bpm, rig.moves[i].bpm, sleep));
+            self.alt.retime(beats, clock::playing(bpm, &rig.moves[i], self.level.0, self.level.2, self.level.1).0);
         }
 
         // ---- the camera: cut to another framing after a while, on a drop and a new section;
@@ -496,11 +536,21 @@ impl DanceSim {
         let cam = frame.cam(w, h, 0.0);
 
         // ---- the troupe's poses; everyone bobs on the beat (but asleep), as deep as the low end is loud
-        let on_beat = if playing { (-(beats - beats.floor()) * 7.0).exp() * (st.num("dyn.band.low") * 1.4).clamp(0.0, 1.0) } else { kick };
-        let bob = if sleep { 0.0 } else { (if clock::techno(bpm, m.vocal) { 0.034 } else { 0.022 }) * on_beat.max(if playing { 0.0 } else { kick }) };
+        // (the dip is gone into over the last eighth of the beat before, not jumped into)
+        let phase = beats - beats.floor();
+        let hit = (-phase * 7.0).exp().max(if phase > 0.88 { ((phase - 0.88) / 0.12).powi(2) } else { 0.0 });
+        let on_beat = if playing { hit * (st.num("dyn.band.low") * 1.4).clamp(0.0, 1.0) } else { kick };
+        // techno pumps: deeper the harder it goes, the back and the head nodding with it
+        let (bob, nod) = if sleep {
+            (0.0, 0.0)
+        } else if techno {
+            ((0.02 + 0.045 * level) * on_beat, 0.11 * level * on_beat)
+        } else {
+            (0.022 * on_beat, 0.0)
+        };
         let mut bodies = vec![];
         let mut pose = self.lead.pose(lead_rig, beats, false).unwrap_or_else(|| lead_rig.sample(0, beats));
-        pose.hips[2] -= bob / hero_scale;
+        lead_rig.pump(&mut pose, bob / hero_scale, nod);
         let world = lead_rig.solve(&pose);
         let hero_spot = Spot { scale: hero_scale, ..Default::default() };
         bodies.push(Body {
@@ -546,7 +596,7 @@ impl DanceSim {
                 wp.blend_toward(&p, k * k * (3.0 - 2.0 * k));
                 p = wp;
             }
-            p.hips[2] -= bob / sc;
+            mr.pump(&mut p, bob / sc, nod);
             let world = mr.solve(&p);
             if let Some(k) = key {
                 shared.insert(k, bodies.len());
@@ -617,16 +667,16 @@ impl DanceSim {
     /// A new move on the lead's track (or the company's own, `alt`): one of the pool, stepped
     /// into at the beat whose pose and motion are nearest what the dancer is doing.
     #[allow(clippy::too_many_arguments)]
-    fn step(&mut self, rig: &Rig, alt: bool, tier: usize, flavour: &[f64; 7], bpm: f64, beats: f64, salt: i64, slot: i64, sleep: bool, blend: f64, techno: bool, duo: bool) {
+    fn step(&mut self, rig: &Rig, alt: bool, level: f64, flavour: &[f64; 8], bpm: f64, beats: f64, salt: i64, slot: i64, sleep: bool, blend: f64, techno: bool, duo: bool) {
         // the moves switched off are out (all of them off: none is)
         let on: Vec<usize> = (0..rig.moves.len()).filter(|&i| !self.moves_off.contains(&rig.moves[i].id)).collect();
         let bank: Vec<usize> = if on.is_empty() { (0..rig.moves.len()).collect() } else { on };
         let track = if alt { &self.alt } else { &self.lead };
         let recent: Vec<String> = if alt { track.mv.map(|i| vec![rig.moves[i].id.clone()]).unwrap_or_default() } else { self.recent.clone() };
-        let mut pool = clock::pool(&rig.moves, &bank, tier, flavour, bpm, &recent, techno, duo);
+        let mut pool = clock::pool(&rig.moves, &bank, level, flavour, bpm, &recent, techno, sleep, duo, self.lift);
         // the record's own few moves (the same whatever was danced last), the starred too
         let star = |i: usize| self.moves_star.contains(&rig.moves[i].id);
-        let own: Vec<usize> = clock::own_moves(&clock::pool(&rig.moves, &bank, tier, flavour, bpm, &[], techno, duo), &rig.moves, salt).into_iter().map(|e| e.0).collect();
+        let own: Vec<usize> = clock::own_moves(&clock::pool(&rig.moves, &bank, level, flavour, bpm, &[], techno, sleep, duo, self.lift), &rig.moves, salt).into_iter().map(|e| e.0).collect();
         let mine: Vec<(usize, f64)> = pool.iter().copied().filter(|e| own.contains(&e.0) || star(e.0)).collect();
         if !mine.is_empty() {
             pool = mine;
@@ -683,7 +733,7 @@ impl DanceSim {
         }
         let (mut best, mut best_e, mut best_score, mut best_d) = (None, 0usize, f64::INFINITY, 0.0);
         for (order, &mv) in picks.iter().enumerate() {
-            let rate = clock::rate(bpm, rig.moves[mv].bpm, sleep);
+            let rate = clock::playing(bpm, &rig.moves[mv], level, techno, sleep).0;
             for e in clock::entries(&rig.moves[mv]) {
                 let (mut d, mut dv) = (0.0, 0.0);
                 if let (Some(from), Some(from_was)) = (&from, &from_was) {
@@ -692,7 +742,9 @@ impl DanceSim {
                     let to_was = rig.key_joints(&rig.sample(mv, e as f64 - H * rate));
                     dv = Rig::motion_distance(from, from_was, &to, &to_was) / H;
                 }
-                let score = d + 0.08 * dv + order as f64 * 0.04 + e as f64 * 0.002;
+                // cut to on a drop (no blend): the fastest of the picks, not the nearest
+                let cut = if blend <= 0.0 { -clock::speed(bpm, &rig.moves[mv], rate) } else { 0.0 };
+                let score = cut + d + 0.08 * dv + order as f64 * 0.04 + e as f64 * 0.002;
                 if score < best_score {
                     (best, best_e, best_score, best_d) = (Some(mv), e, score, d);
                 }
@@ -707,7 +759,7 @@ impl DanceSim {
     #[allow(clippy::too_many_arguments)]
     fn enter(&mut self, rig: &Rig, alt: bool, best: usize, entry: i64, dist: f64, bpm: f64, beats: f64, sleep: bool, blend: f64, quiet: bool, now: Option<Pose>) {
         let had = now.is_some();
-        let rate = clock::rate(bpm, rig.moves[best].bpm, sleep);
+        let rate = clock::playing(bpm, &rig.moves[best], self.level.0, self.level.2, sleep).0;
         let len = if blend <= 0.0 { 0.0 } else { blend * (0.8 + 2.5 * dist).clamp(0.8, 1.8) };
         const HC: f64 = 1.0 / 16.0;
         let track = if alt { &mut self.alt } else { &mut self.lead };
@@ -867,8 +919,22 @@ mod tests {
 
     fn company() -> Option<Company> {
         let co = Company::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../app/assets/show/dance")).expect("the shipped dancers");
-        assert_eq!(co.rigs.len(), 2, "both dancers load");
+        assert_eq!(co.rigs.len(), clock::MODELS.len(), "every dancer loads");
         Some(co)
+    }
+
+    #[test]
+    fn dolores_is_drawn_a_head_shorter_than_chris() {
+        let co = company().unwrap();
+        let drawn = |m: &str| {
+            let (n, r) = co.rig(m);
+            assert_eq!(n, m);
+            scale_of(r) * r.height
+        };
+        assert!((drawn("chris") - 1.75).abs() < 0.01);
+        let real = co.rig("chris").1.height - co.rig("dolores").1.height;
+        assert!((0.19..0.21).contains(&real), "20 cm apart: {real}");
+        assert!((drawn("chris") - drawn("dolores") - real * 1.75 / co.rig("chris").1.height).abs() < 0.005);
     }
 
     fn deck(beat: f64, section: &str) -> ShowDeck {
@@ -973,6 +1039,39 @@ mod tests {
         assert_eq!(shots, vec![Shot::Close], "close alone");
     }
 
+    /// Hard techno at full tilt (160 BPM, the bars as loud as they get, a part the analysis
+    /// called "inst" with the next marked drop far off): danced on every beat and fast, never
+    /// at half time; its quiet intro slowly; no move twice running.
+    #[test]
+    fn hard_techno_is_danced_hard() {
+        let Some(co) = company() else { return };
+        let rig = &co.rigs[0].1;
+        let run = |energy: f64, section: &str| {
+            let mut sim = DanceSim { forced_troupe: Some(Troupe::Solo), ..Default::default() };
+            let mut out: Vec<(String, f64, f64)> = vec![];
+            for f in 0..(10 * 64) {
+                let mut d = deck(64.0 + f as f64 * 0.25, section);
+                (d.bpm, d.energy, d.drop_beats_away) = (Some(160.0), energy, Some(60.0));
+                let st = ShowState { a: d, dt: 1.0 / 60.0, ..Default::default() };
+                sim.frame(&co, &st, 1.0 / 60.0, 1280.0, 720.0);
+                let (m, rate) = sim.lead_now().unwrap();
+                let row = (rig.moves[m].id.clone(), rate, clock::speed(160.0, &rig.moves[m], rate));
+                if out.last() != Some(&row) {
+                    out.push(row);
+                }
+            }
+            out
+        };
+        let loud = run(0.97, "inst");
+        assert!(loud.len() >= 8, "a move a slot: {loud:?}");
+        assert!(loud.iter().all(|r| r.1 >= 1.0), "on every beat: {loud:?}");
+        assert!(loud.iter().all(|r| r.2 > 1.15), "fast: {loud:?}");
+        assert!(loud.iter().map(|r| r.2).sum::<f64>() / loud.len() as f64 > 1.7, "fast on the whole: {loud:?}");
+        assert!(loud.windows(2).all(|w| w[0].0 != w[1].0), "no move twice running: {loud:?}");
+        let quiet = run(0.2, "intro");
+        assert!(quiet.iter().map(|r| r.2).sum::<f64>() / (quiet.len() as f64) < 0.9, "the intro slowly: {quiet:?}");
+    }
+
     #[test]
     fn steps_land_on_the_beat_at_any_tempo() {
         let Some(co) = company() else { return };
@@ -981,8 +1080,8 @@ mod tests {
             let mut st = ShowState { a: deck(40.0, "verse"), dt: 1.0 / 60.0, ..Default::default() };
             st.a.bpm = Some(bpm);
             sim.frame(&co, &st, 1.0 / 60.0, 1280.0, 720.0);
-            let m = sim.lead.mv.unwrap();
-            let r = clock::rate(bpm, co.rigs[0].1.moves[m].bpm, false);
+            let r = sim.lead.rate;
+            assert!(clock::RATES.contains(&r));
             // the track's beat moves at the move's rate per record beat
             let (b0, b1) = (sim.lead.beat_of(40.0), sim.lead.beat_of(41.0));
             assert!((b1 - b0 - r).abs() < 1e-9, "{bpm}: {r}");

@@ -84,12 +84,22 @@ fn main() {
         cache: None,
     });
     let (cw, ch) = (400u32, 760u32);
-    let beats = [0.0, 0.5, 1.0, 1.5];
+    let beats: [f64; 4] = if std::env::var_os("PUMP").is_some() { [0.0, 0.0, 1.0, 1.0] } else { [0.0, 0.5, 1.0, 1.5] };
     let target = wo_render::target(&gpu, cw * beats.len() as u32, ch);
     let depth = d.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: target.width(), height: ch, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
     let mut buffers = vec![];
+    let mut pumped = false;
     for &beat in &beats {
-        let skinning = rig.skinning(&rig.solve(&rig.sample(mi, beat)));
+        // PUMP=<metres>,<radians>: the beat's pump on the second and fourth (to look at it beside none)
+        let mut pose = rig.sample(mi, beat);
+        if let Ok(p) = std::env::var("PUMP") {
+            let v: Vec<f64> = p.split(',').filter_map(|x| x.parse().ok()).collect();
+            pumped = !pumped;
+            if !pumped {
+                rig.pump(&mut pose, v[0], v.get(1).copied().unwrap_or(0.0));
+            }
+        }
+        let skinning = rig.skinning(&rig.solve(&pose));
         for (k, m) in rig.meshes.iter().enumerate() {
             let (pos, nrm) = rig.deform(k, &skinning);
             let mut v: Vec<f32> = Vec::with_capacity(m.corners() * 8);

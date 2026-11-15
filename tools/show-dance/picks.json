@@ -21,7 +21,8 @@
   "mx_twist 0 4",
   "mx_hokey_pokey 0 8",
   "mx_f_hh_raise_roof 0 4",
-  "mx_shopping_cart_silly 11 8"
+  "mx_shopping_cart_silly 11 8",
+  "mx_rv_jacks 0 8"
  ],
  "toon": [
   "120_06 7 8",
@@ -167,5 +168,26 @@
   "mx_hh_just_listening_v 5 8",
   "mx_bellydance_v2 0 8",
   "mx_wave_hh_v2 7 8"
+ ],
+ "rave": [
+  "mx_rv_crossjump 2 8",
+  "mx_rv_ecstatic 15 8",
+  "mx_rv_excited 20 8",
+  "mx_rv_f_jump 1 8",
+  "mx_rv_jump1 16 8",
+  "mx_rv_jump2 17 8",
+  "mx_rv_jump3 17 8",
+  "mx_rv_stomp1 14 8",
+  "mx_rv_stomp2 5 8",
+  "mx_rv_twofists 39 8",
+  "mx_rv_fist2 9 8",
+  "mx_rv_fist3 27 8",
+  "mx_rv_fist4 20 8",
+  "mx_rv_fists_fwd 30 8",
+  "mx_rv_headbang 0 8",
+  "mx_rv_clap 2 8",
+  "mx_rv_rally 14 8",
+  "mx_rv_victory 22 8",
+  "mx_rv_wave2 39 8"
  ]
 }

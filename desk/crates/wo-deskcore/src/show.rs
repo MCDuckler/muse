@@ -259,12 +259,13 @@ pub(crate) fn facts_of(r: &Record, t: &Timing) -> RecordFacts {
         downbeats_ms: downbeats,
         markers_ms: t.markers.iter().map(|&m| ms(m)).collect(),
         energy,
-        drops_ms: t.drops.iter().map(|&d| ms(d)).collect(),
+        drops_ms: if t.show_drops.is_empty() { &t.drops } else { &t.show_drops }.iter().map(|&d| ms(d)).collect(),
         sections,
         key: None,
         camelot: t.camelot.clone().or_else(|| Some(r.key.clone()).filter(|k| !k.is_empty())),
         vocal_bars: None,
         hook_ms: vec![],
+        voice: t.voice,
         cover_rgb: r.cover_rgb,
     }
 }

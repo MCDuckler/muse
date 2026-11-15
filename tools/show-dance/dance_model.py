@@ -89,6 +89,10 @@ with bpy.data.libraries.load(f"{HOME}/dance_bank/rig_short.blend") as (s, d):
 d.actions[0].name = "short"
 with bpy.data.libraries.load(f"{HOME}/dance2/rigs_cmu.blend") as (s, d):
     d.actions = [x for x in s.actions if x != "dance"]
+# the crowd's rave moves (short Mixamo cycles looped; dance_rave/)
+if os.path.exists(f"{HOME}/dance2/rigs_rave.blend"):
+    with bpy.data.libraries.load(f"{HOME}/dance2/rigs_rave.blend") as (s, d):
+        d.actions = [a for a in s.actions if a.startswith("mx_rv_")]
 if os.path.exists(f"{HOME}/dance2/rigs_duo.blend"):
     with bpy.data.libraries.load(f"{HOME}/dance2/rigs_duo.blend") as (s, d):
         d.actions = list(s.actions)

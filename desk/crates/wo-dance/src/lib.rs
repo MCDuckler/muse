@@ -46,6 +46,10 @@ pub struct Move {
     /// How strongly it bounces once a beat, 0..1 (worked out on load).
     #[serde(skip)]
     pub pulse: f64,
+    /// How far its body moves in a capture beat, metres: the hips' and the key joints' mean
+    /// path (worked out on load). At a tempo that is its speed: `travel × beats a second`.
+    #[serde(skip)]
+    pub travel: f64,
 }
 
 #[derive(Deserialize)]
@@ -70,6 +74,8 @@ struct RigJson {
     moves: Vec<Move>,
     #[serde(default = "eight")]
     fpb: usize,
+    #[serde(default)]
+    stands: Option<f64>,
 }
 
 fn eight() -> usize {
@@ -172,7 +178,7 @@ pub fn style_ix(style: &str) -> usize {
 }
 
 /// The styles, in v1's order (DanceStyle).
-pub const STYLES: &[&str] = &["groove", "party", "toon", "swing", "latin", "folk", "calm"];
+pub const STYLES: &[&str] = &["groove", "party", "toon", "swing", "latin", "folk", "calm", "rave"];
 
 impl Move {
     /// Its tier: 0 low, 1 mid, 2 high.
@@ -197,6 +203,9 @@ pub struct Rig {
     pub skin: Vec<u8>,
     /// The scan's top, metres.
     pub height: f64,
+    /// How tall the body is drawn, metres, where its folder says (dancer.json `stands`): a
+    /// dancer made to be shorter than the others keeps that; else every body stands ~1.75 m.
+    pub stands: Option<f64>,
     samples: Vec<u8>,
     inv: Vec<M34>,
     rel: Vec<M34>,
@@ -321,7 +330,7 @@ impl Rig {
         let inv: Vec<M34> = rest.iter().map(invert).collect();
         let rel = (0..rest.len()).map(|i| if parent[i] < 0 { IDENTITY } else { mul(&inv[parent[i] as usize], &rest[i]) }).collect();
         let height = meshes.iter().flat_map(|m| m.pos.as_chunks::<3>().0.iter().map(|p| p[2] as f64)).fold(0.0, f64::max);
-        let mut rig = Rig { names: j.bones.iter().map(|b| b.name.clone()).collect(), parent, rest, meshes, moves: j.moves, fpb: j.fpb, skin, height, samples, inv, rel };
+        let mut rig = Rig { names: j.bones.iter().map(|b| b.name.clone()).collect(), parent, rest, meshes, moves: j.moves, fpb: j.fpb, skin, height, stands: j.stands, samples, inv, rel };
         let need = rig.moves.iter().map(|m| m.offset + (m.beats * rig.fpb + 1) * rig.stride()).max().unwrap_or(0);
         if need > rig.samples.len() + rig.stride() {
             return Err(LoadError(format!("moves.bin holds {} bytes, the moves want {need}", rig.samples.len())));
@@ -329,6 +338,7 @@ impl Rig {
         for i in 0..rig.moves.len() {
             let (pulse, shift) = rig.pulse(i);
             rig.moves[i].pulse = pulse;
+            rig.moves[i].travel = rig.travel(i);
             if let Some(s) = shift {
                 rig.moves[i].shift = s;
             }
@@ -445,6 +455,29 @@ impl Rig {
         (pulse, shift)
     }
 
+    /// How far move `i` carries the body in a capture beat: the mean path of the hips and
+    /// the key joints (in the world, so a bounce and a step count), metres.
+    fn travel(&self, i: usize) -> f64 {
+        let m = &self.moves[i];
+        let n = m.beats * self.fpb;
+        let keys: Vec<usize> = ["Hips", "Head", "Hand_L", "Hand_R", "LowerArm_L", "LowerArm_R", "Foot_L", "Foot_R", "LowerLeg_L", "LowerLeg_R"].iter().filter_map(|b| self.bone(b)).collect();
+        if keys.is_empty() || n == 0 {
+            return 0.0;
+        }
+        let at = |j: usize| -> Vec<[f64; 3]> {
+            let w = self.solve(&self.sample(i, j as f64 / self.fpb as f64 - m.shift));
+            keys.iter().map(|&k| [w[k][3], w[k][7], w[k][11]]).collect()
+        };
+        let mut was = at(0);
+        let mut path = 0.0;
+        for j in 1..n {
+            let now = at(j);
+            path += now.iter().zip(&was).map(|(p, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()).sum::<f64>() / keys.len() as f64;
+            was = now;
+        }
+        path / (n - 1).max(1) as f64 * self.fpb as f64
+    }
+
     /// Move `i`'s pose `beat` capture beats in (round its loop), samples blended.
     pub fn sample(&self, i: usize, beat: f64) -> Pose {
         let m = &self.moves[i];
@@ -483,6 +516,71 @@ impl Rig {
         });
         Pose { q, hips }
     }
+
+    /// The beat's pump laid on a pose: the hips `drop` metres down, the knees bent to keep the
+    /// feet where they were; the back and the head `nod` radians forward.
+    pub fn pump(&self, pose: &mut Pose, drop: f64, nod: f64) {
+        if drop <= 0.0 && nod <= 0.0 {
+            return;
+        }
+        // a bone turned about the body's side-to-side axis as the bone carries it (the rest's
+        // x in the bone's own frame)
+        let turn = |pose: &mut Pose, name: &str, angle: f64| {
+            let Some(b) = self.bone(name) else { return };
+            let r = &self.rest[b];
+            let len = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt().max(1e-9);
+            let (sn, c) = (angle / 2.0).sin_cos();
+            let t = [c, r[0] / len * sn, r[1] / len * sn, r[2] / len * sn];
+            let a = pose.q[b];
+            pose.q[b] = [
+                a[0] * t[0] - a[1] * t[1] - a[2] * t[2] - a[3] * t[3],
+                a[0] * t[1] + a[1] * t[0] + a[2] * t[3] - a[3] * t[2],
+                a[0] * t[2] - a[1] * t[3] + a[2] * t[0] + a[3] * t[1],
+                a[0] * t[3] + a[1] * t[2] - a[2] * t[1] + a[3] * t[0],
+            ];
+        };
+        if nod > 0.0 {
+            turn(pose, "Spine", nod * 0.4);
+            turn(pose, "Chest", nod * 0.3);
+            turn(pose, "Head", nod * 0.6);
+        }
+        if drop > 0.0 {
+            let at = |n: &str| self.bone(n).map(|b| [self.rest[b][3], self.rest[b][7], self.rest[b][11]]);
+            let dist = |a: [f64; 3], b: [f64; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+            let floor = self.solve(pose);
+            pose.hips[2] -= drop;
+            for side in ["L", "R"] {
+                let names = [format!("UpperLeg_{side}"), format!("LowerLeg_{side}"), format!("Foot_{side}")];
+                let (Some(hip), Some(knee), Some(foot), Some(fb)) = (at(&names[0]), at(&names[1]), at(&names[2]), self.bone(&names[2])) else { continue };
+                let bent = |pose: &Pose, bend: f64| {
+                    let mut p = pose.clone();
+                    turn(&mut p, &names[0], bend * Self::KNEE);
+                    turn(&mut p, &names[1], -2.0 * bend * Self::KNEE);
+                    turn(&mut p, &names[2], bend * Self::KNEE);
+                    p
+                };
+                // the bend that puts the foot back at its height: a straight leg's to start
+                // with, then by the secant (a leg already bent or out to the side needs another)
+                let want = floor[fb][11];
+                let high = |bend: f64| self.solve(&bent(pose, bend))[fb][11] - want;
+                let leg = dist(hip, knee) + dist(knee, foot);
+                let (mut b0, mut e0) = (0.0, high(0.0));
+                let mut b1 = (1.0 - drop / leg.max(0.1)).clamp(0.5, 1.0).acos();
+                for _ in 0..4 {
+                    let e1 = high(b1);
+                    if e1.abs() < 0.002 || (e1 - e0).abs() < 1e-9 {
+                        break;
+                    }
+                    let next = (b1 - e1 * (b1 - b0) / (e1 - e0)).clamp(0.0, 1.0);
+                    (b0, e0, b1) = (b1, e1, next);
+                }
+                *pose = bent(pose, b1);
+            }
+        }
+    }
+
+    /// Which way round a knee bends about the side-to-side axis (forwards).
+    const KNEE: f64 = -1.0;
 
     /// Each bone's place in the world for `pose`.
     pub fn solve(&self, pose: &Pose) -> Vec<M34> {
@@ -552,7 +650,7 @@ mod tests {
     fn the_scan_reads_whole() {
         let Some(r) = chris() else { return };
         assert_eq!(r.bones(), 21);
-        assert_eq!(r.moves.len(), 231);
+        assert_eq!(r.moves.len(), 251);
         assert_eq!(r.meshes.len(), 2);
         assert_eq!(r.meshes[0].positions(), 4290);
         assert_eq!(r.meshes[0].corners(), 9888);
@@ -615,7 +713,7 @@ mod tests {
     #[test]
     fn a_step_starts_in_the_old_pose_carries_its_motion_and_ends_in_the_new_move() {
         let Some(r) = chris() else { return };
-        let (a, b) = (0, r.moves.len() / 2);
+        let (a, b) = (0, r.moves.iter().position(|m| m.id == "mx_hh_side_to_side_10").unwrap());
         let (from, from_was) = (r.sample(a, 3.0), r.sample(a, 3.0 - 1.0 / 16.0));
         let (to, to_was) = (r.sample(b, 0.0), r.sample(b, -1.0 / 16.0));
         let mut carry = carry::Carry::new(r.bones());
@@ -664,6 +762,21 @@ mod tests {
     #[test]
     fn moves_that_bounce_land_the_dip_on_the_beat() {
         let Some(r) = chris() else { return };
+        // every move has a path; the beat's pump: hips down, feet kept, knees forwards, the head nodding forwards
+        assert!(r.moves.iter().all(|m| m.travel > 0.05 && m.travel < 3.0));
+        let calm = r.moves.iter().position(|m| m.id == "long22").unwrap();
+        let before = r.sample(calm, 0.0);
+        let mut after = before.clone();
+        r.pump(&mut after, 0.05, 0.1);
+        let (w0, w1) = (r.solve(&before), r.solve(&after));
+        let b = |n: &str| r.bone(n).unwrap();
+        assert!((w0[b("Hips")][11] - w1[b("Hips")][11] - 0.05).abs() < 1e-9);
+        for side in ["L", "R"] {
+            let (foot, knee) = (b(&format!("Foot_{side}")), b(&format!("LowerLeg_{side}")));
+            assert!((w0[foot][11] - w1[foot][11]).abs() < 0.015, "the {side} foot stays on the floor: {} {}", w0[foot][11], w1[foot][11]);
+            assert!(w1[knee][7] < w0[knee][7] - 0.02, "the {side} knee goes forwards: {} {}", w0[knee][7], w1[knee][7]);
+        }
+        assert!(w1[b("Head")][7] < w0[b("Head")][7] - 0.01, "the head nods forwards");
         let bouncy = r.moves.iter().filter(|m| m.pulse >= Rig::MIN_PULSE_SHIFT).count();
         assert!(bouncy > 20, "{bouncy} moves bounce");
         assert!(r.moves.iter().all(|m| (-0.5..=0.5).contains(&m.shift)));

@@ -188,6 +188,11 @@ pub struct Timing {
     pub ins: Vec<Place>,
     /// Each bar's start and loudness (dBFS), the structure's.
     pub bars_db: Vec<(f64, f64)>,
+    /// Every drop either of the analysis's passes found (the structure's and the loudness's,
+    /// one where they agree within four bars), for the show; `drops` stays the booth's.
+    pub show_drops: Vec<f64>,
+    /// How much of the drummed time has a voice over it, 0..1 (None: not known).
+    pub voice: Option<f64>,
     /// How loud each bar is, 0..255, by the grid's bars (the analysis's; the show reads it).
     pub energy: Vec<u8>,
     /// Where a hand said it leaves, and comes in.
