@@ -417,6 +417,10 @@ impl Show {
         {
             self.shelf.fave_on = None;
         }
+        // the favourite let go of: the pool's 3D text again
+        if self.shelf.fave_on.is_none() {
+            self.direct.fave_type3d = None;
+        }
         let dir = self.faves_dir();
         let d = &self.direct;
         let name_of = |s: &str| d.looks.get(s).map_or(s.to_owned(), |l| l.name.clone());

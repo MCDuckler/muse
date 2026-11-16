@@ -150,6 +150,9 @@ pub struct Direct {
     launch: Option<Launch>,
     /// Each dancers' scene's framings' levels (the ones not 1), by the plan.
     shots: BTreeMap<String, BTreeMap<String, f64>>,
+    /// The 3D type's say, the document's; a favourite's own while it is on.
+    type3d: crate::type3d::TypeSpec,
+    pub fave_type3d: Option<crate::type3d::TypeSpec>,
     audition_at: f64,
 }
 
@@ -159,12 +162,17 @@ impl Direct {
         let mut director = Director::new(book.metas(), seed);
         director.kinds = book.kinds();
         director.set_scores(scores);
-        let mut d = Direct { director, looks: book.looks(), doc, held_fx: None, macros: ShowMacros::default(), milk: None, master: "A".into(), prev: None, hit_at: None, clock: 0.0, last: Cue::default(), launch: None, shots: BTreeMap::new(), audition_at: 0.0 };
+        let mut d = Direct { director, looks: book.looks(), doc, held_fx: None, macros: ShowMacros::default(), milk: None, master: "A".into(), prev: None, hit_at: None, clock: 0.0, last: Cue::default(), launch: None, shots: BTreeMap::new(), type3d: Default::default(), fave_type3d: None, audition_at: 0.0 };
         // a move asked for is told by a new number: this session's own (a stage kept open
         // across a Desk's restart must not take its first asking for one it served)
         d.macros.audition_n = (seed as u32).wrapping_mul(2_654_435_761) >> 8;
         d.apply_doc();
         d
+    }
+
+    /// The 3D type's say as the stage gets it now.
+    pub fn type3d(&self) -> &crate::type3d::TypeSpec {
+        self.fave_type3d.as_ref().unwrap_or(&self.type3d)
     }
 
     /// The document's say into the director and the hands' numbers: the plan, the temper,
@@ -178,6 +186,7 @@ impl Direct {
         self.macros.dancers_off = self.doc.dancers_off();
         self.macros.moves_off = self.doc.moves_off();
         self.macros.moves_star = self.doc.move_stars();
+        self.type3d = self.doc.type3d();
         let plan = self.doc.plan();
         self.shots = self
             .director
@@ -366,6 +375,9 @@ impl Direct {
         }
         let mut macros = self.macros.clone();
         macros.shots = scene.as_ref().and_then(|s| self.shots.get(s)).cloned().unwrap_or_default();
+        // the 3D type's say, while it is on (or being left)
+        let typed = |r: Option<&ShowRig>| r.is_some_and(|r| r.figure.kind == crate::rig::Figure::Type3d);
+        macros.type3d = (typed(Some(&rig)) || typed(rig_from.as_ref())).then(|| self.fave_type3d.clone().unwrap_or_else(|| self.type3d.clone()));
         if dark && !macros.blackout {
             macros.blackout = true;
         }

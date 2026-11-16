@@ -64,6 +64,8 @@ pub(crate) struct SceneUi {
     pub strips: std::collections::HashMap<(usize, String), egui::TextureHandle>,
     /// The master's tempo while a record plays (the Show page's, each frame).
     pub tempo: Option<f64>,
+    /// The 3D text's words as being typed.
+    pub type_lines: String,
 }
 
 impl App {
@@ -149,6 +151,10 @@ impl App {
         let b_at = if two { pos2(at.x + col_w + gap, at.y) } else { pos2(at.x, at.y + a_h + 16.0) };
         let b_h = self.scene_rows(desk, ui, p, Rect::from_min_size(b_at, vec2(col_w, 0.0)), page);
         let mut y = if two { at.y + a_h.max(b_h) + 18.0 } else { b_at.y + b_h + 18.0 };
+        // the 3D text: what it says, its face, motions, looks, bends and knobs
+        if page.figure == "type3d" {
+            y += self.type3d_editor(desk, ui, p, Rect::from_min_size(pos2(at.x, y), vec2(w, 0.0))) + 18.0;
+        }
         // the grid of its looks, the whole width
         y += self.looks_grid(desk, ui, p, Rect::from_min_size(pos2(at.x, y), vec2(w, 0.0)), page, strength) + 18.0;
         if let Some(m) = moves {

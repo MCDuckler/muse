@@ -47,6 +47,7 @@ pub use show::{MilkFilter, FaveEdit, FaveRow, FavesView, SetEdit, SetRow, SetsVi
 pub use wo_show::plan::{LEVEL_MOST, LEVEL_STEPS, level_word};
 pub use wo_show::rig::{RigFinish, TransformSet};
 pub use wo_show::shares::share_word;
+pub use wo_show::type3d as type3d;
 pub use wo_show::Mix as ShowMix;
 /// The scenes the Rust stage draws so far.
 pub use wo_show::scenes::DRAWN as RUST_SCENES;
@@ -2001,6 +2002,11 @@ impl Desk {
     /// The dancers' moves, with the hands' say on each.
     pub fn show_moves(&mut self) -> MovesView {
         self.stage.moves()
+    }
+
+    /// The 3D text's say (the show's, kept in this Desk's show; ShowEdit::Type3d changes it).
+    pub fn show_type3d(&mut self) -> wo_show::type3d::TypeSpec {
+        self.stage.type3d()
     }
 
     /// The finish over every scene, the blend's strength, the slit-scan's knobs.

@@ -89,6 +89,8 @@ pub enum ShowEdit {
     MoveOn(String, bool),
     MoveStar(String, bool),
     Audition(String),
+    /// The 3D text's say: its lines, face, motions, looks, bends and knobs.
+    Type3d(wo_show::type3d::TypeSpec),
     /// A treatment's knob (`ascii.size`), or back to its rest.
     Tune(String, Option<f64>),
     /// The finish over every scene, or None: each scene's own.
@@ -824,6 +826,7 @@ impl Show {
                 if let Some(f) = self.direct.doc.faves().into_iter().find(|f| &f.id == id) {
                     self.shelf.fave_on = Some(f.id.clone());
                     let words = if f.name.is_empty() { combo_words(&f.combo, &self.direct.looks) } else { f.name.clone() };
+                    self.direct.fave_type3d = f.type3d.as_ref().map(wo_show::type3d::TypeSpec::from_json);
                     self.direct.put_on(f.combo, None);
                     self.fave_milk = f.milk;
                     let when = match self.direct.pending().map(|l| l.at) {
@@ -1163,7 +1166,9 @@ impl Show {
         let at = chrono_free_iso(micros / 1_000_000);
         let milk = self.direct.milk.as_ref().and_then(|m| m.preset().map(|p| p.full_name()));
         let words = combo_words(&c, &self.direct.looks);
-        let fave = wo_show::faves::ShowFave { id: wo_show::faves::ShowFave::new_id(micros), at, combo: c, milk, shot: None, type3d: None, stars: 0, name: String::new() };
+        // the 3D text's say with it, where that is the look
+        let type3d = (c.scene == "type3d").then(|| self.direct.type3d().to_json());
+        let fave = wo_show::faves::ShowFave { id: wo_show::faves::ShowFave::new_id(micros), at, combo: c, milk, shot: None, type3d, stars: 0, name: String::new() };
         self.shelf.kept = Some(fave.id.clone());
         self.direct.doc.keep_fave(fave);
         self.faves_kept += 1;
@@ -1426,6 +1431,35 @@ mod tests {
         let v = back.milk(None);
         assert_eq!((v.every_bars, v.cut_on_drop, v.min_rating, v.favourites_only, v.locked), (4, false, 4.0, true, true), "kept");
         drop(back);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn the_3d_texts_say_is_kept_and_rides_the_cue_while_it_is_on() {
+        use wo_show::type3d::{TypeFont, TypeSpec};
+        let home = std::env::temp_dir().join(format!("wo-show-type3d-{}", std::process::id()));
+        let mut show = Show::new_in(Some(home.clone()), None);
+        let spec = TypeSpec { lines: vec!["HELLO".into(), "{title}".into()], font: TypeFont::Pixel, size: 1.5, ..Default::default() };
+        show.edit(ShowEdit::Type3d(spec.clone()));
+        assert_eq!(show.direct.doc.type3d(), spec, "kept in the show");
+        assert!(show.doc_dirty);
+        let frame = wo_wire::Frame { a: wo_wire::Deck { playing: true, position_ms: 4000.0, rate: 1.0, level: 1.0, ..Default::default() }, ..Default::default() };
+        show.tick(&frame, None);
+        if show.cue().scene.as_deref() != Some("type3d") {
+            assert!(show.cue().macros.type3d.is_none(), "not sent while another scene is on");
+        }
+        show.direct.put_on(wo_show::Combo::new("black", "type3d", "raw"), Some(wo_show::rig::Quantise::Now));
+        show.tick(&frame, None);
+        show.tick(&frame, None);
+        assert_eq!(show.cue().scene.as_deref(), Some("type3d"));
+        assert_eq!(show.cue().macros.type3d.as_ref(), Some(&spec));
+        // a favourite kept with it carries it, and brings it back over the pool's
+        show.hand(&Hand::Keep);
+        let fave = show.direct.doc.faves()[0].clone();
+        assert_eq!(fave.type3d.as_ref().map(TypeSpec::from_json), Some(spec.clone()));
+        show.edit(ShowEdit::Type3d(TypeSpec::default()));
+        show.hand(&Hand::Fave(fave.id.clone()));
+        assert_eq!(show.direct.type3d(), &spec);
         let _ = std::fs::remove_dir_all(&home);
     }
 

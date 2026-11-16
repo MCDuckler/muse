@@ -456,6 +456,12 @@ pub struct Stage {
     /// (wo_dance::sim::DanceSim::paint), drawn as the figure where the frame has no shader.
     pub dance: Option<crate::dance::Dance>,
     pub dance_cmds: Vec<wo_dance::cmd::Cmd>,
+    /// The 3D text (sim/type3d.frag): its pass, the two lines' distance fields (uSdf, uSdfB),
+    /// and this frame's floats in the shader's order (wo_type3d::Params::flat), drawn as the
+    /// figure where the frame has no shader.
+    type3d_pass: Option<Pass>,
+    type3d_slots: [Option<wgpu::TextureView>; 2],
+    pub type3d: Option<Vec<f32>>,
 }
 
 /// Which of the stage's pictures a frame showed (the datamosh starts from it).
@@ -556,6 +562,15 @@ impl Stage {
             drawn: Drawn::default(),
             dance: None,
             dance_cmds: vec![],
+            type3d_pass: match wo_shaders::fit_shipped("sim/type3d.frag") {
+                Ok(f) => Some(Pass::new(gpu, &f, WORK)),
+                Err(t) => {
+                    eprintln!("stage: no 3D text: {t}");
+                    None
+                }
+            },
+            type3d_slots: [None, None],
+            type3d: None,
         })
     }
 
@@ -566,6 +581,16 @@ impl Stage {
     /// The dancers, their meshes and skins up to the GPU.
     pub fn set_dancers(&mut self, gpu: &Gpu, co: &wo_dance::sim::Company) {
         self.dance = Some(crate::dance::Dance::new(gpu, co));
+    }
+
+    /// A line of the 3D text's distance field (RGBA, `w`×`h`) into its slot (0 or 1).
+    pub fn type3d_field(&mut self, gpu: &Gpu, slot: usize, w: u32, h: u32, rgba: &[u8]) {
+        self.type3d_slots[slot.min(1)] = Some(crate::upload(gpu, w, h, rgba).create_view(&Default::default()));
+    }
+
+    /// Whether the stage draws the 3D text.
+    pub fn has_type3d(&self) -> bool {
+        self.type3d_pass.is_some()
     }
 
     /// The working size for an output `w`×`h` (what the dancers' painter draws at).
@@ -673,6 +698,14 @@ impl Stage {
                     let milk = self.milk.as_ref().unwrap_or(&self.black);
                     let tex: Vec<&wgpu::TextureView> = if l.milk { vec![milk] } else { vec![] };
                     p.draw_in(gpu, &mut enc, &mut self.arena, work, &v, &tex);
+                }
+                None if f.figure.is_none() && self.type3d_pass.is_some() && self.type3d.is_some() => {
+                    // the 3D text: its two lines' fields, and the ground the glass bends
+                    let v = self.type3d.take().unwrap();
+                    let [a, b] = &self.type3d_slots;
+                    let (a, b) = (a.as_ref().or(b.as_ref()).unwrap_or(&self.black), b.as_ref().or(a.as_ref()).unwrap_or(&self.black));
+                    let g = if f.blend.is_some() { self.ground.as_ref().map_or(&self.black, |t| &t.view) } else { &self.black };
+                    self.type3d_pass.as_ref().unwrap().draw_in(gpu, &mut enc, &mut self.arena, work, &v, &[a, b, g]);
                 }
                 None if f.figure.is_none() && self.dance.is_some() && !self.dance_cmds.is_empty() => {
                     // the dancers (wo_dance's painter's commands): their alpha the coverage

@@ -14,7 +14,7 @@ include!(concat!(env!("OUT_DIR"), "/scenes.rs"));
 
 /// The scenes the Rust stage draws now: the shader scenes (P2), MilkDrop (P3), the dancers
 /// (P6); the rest of [IN_SCOPE] come with their phases (the sims P5, the 3D type P8).
-pub const DRAWN: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift", "milk", "dance-art"];
+pub const DRAWN: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift", "milk", "dance-art", "type3d"];
 
 /// The backgrounds the Rust stage draws (not the camera): MilkDrop's where the stage has it,
 /// the record's cover where there is one.

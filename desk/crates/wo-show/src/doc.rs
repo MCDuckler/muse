@@ -246,6 +246,17 @@ impl ShowDoc {
     }
 
     /// Who dances (None or "mix": each record its own).
+    /// The 3D type's say (v1's TypeSpec, as the pool keeps it).
+    pub fn type3d(&self) -> crate::type3d::TypeSpec {
+        self.pool().get("type3d").map(crate::type3d::TypeSpec::from_json).unwrap_or_default()
+    }
+
+    /// The 3D type's say kept (the standard's is left out, as v1 leaves it).
+    pub fn set_type3d(&mut self, spec: &crate::type3d::TypeSpec) {
+        let v = (*spec != crate::type3d::TypeSpec::default()).then(|| spec.to_json());
+        self.put("type3d", v);
+    }
+
     pub fn dancer(&self) -> Option<String> {
         self.pool().get("dancer").and_then(Value::as_str).map(str::to_owned)
     }

@@ -11,6 +11,7 @@ winit = "0.30.13"
 wo-render = { path = "../../crates/wo-render" }
 wo-show = { path = "../../crates/wo-show" }
 wo-dance = { path = "../../crates/wo-dance" }
+wo-type3d = { path = "../../crates/wo-type3d" }
 wo-wire = { path = "../../crates/wo-wire" }
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 serde_json = "1.0.154"

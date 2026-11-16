@@ -23,6 +23,7 @@ pub mod shares;
 pub mod state;
 pub mod taste;
 pub mod treat;
+pub mod type3d;
 
 pub use combos::{Combo, Fx, Mask, Mix};
 pub use rig::{Figure, Ground, Look, SceneMeta, ShowRig};

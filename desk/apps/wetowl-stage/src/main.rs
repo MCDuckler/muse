@@ -304,6 +304,24 @@ struct App {
     /// The dancers (their rigs, where this stage has them) and their choreography.
     dance: Option<(wo_dance::sim::Company, wo_dance::sim::DanceSim)>,
     picture_cam: wo_dance::clock::PictureCam,
+    /// The 3D text's clock and its lines.
+    type3d: wo_type3d::Type3dSim,
+}
+
+/// Whether `scene` (by id) is the 3D text.
+fn typed(book: &SceneBook, scene: Option<&str>) -> bool {
+    scene.and_then(|s| book.scenes.get(s)).is_some_and(|s| s.layers.iter().any(|l| l.sim.as_deref() == Some("type3d")))
+}
+
+/// The 3D text's frame into the stage: the lines made since up, this frame's floats.
+#[allow(clippy::too_many_arguments)]
+fn type3d_frame(sim: &mut wo_type3d::Type3dSim, stage: &mut wo_render::Stage, gpu: &wo_render::Gpu, st: &wo_show::state::ShowState, f: &wo_show::frame::StageFrame, dt: f64, w: u32, h: u32) {
+    let (ww, wh) = stage.work_size(w, h);
+    let p = sim.tick(st, dt, ww as f64, wh as f64, f.blend.is_some());
+    for (slot, field) in sim.take_placed() {
+        stage.type3d_field(gpu, slot, field.w, field.h, &field.rgba);
+    }
+    stage.type3d = Some(p.flat());
 }
 
 /// Whether `scene` (by id) is one the dancers draw.
@@ -545,6 +563,9 @@ impl App {
             let scene = sim.frame(co, &st, dt, ww as f64, wh as f64);
             d.stage.dance_cmds = sim.paint(co, &scene, &st, dt);
         }
+        if f.figure.is_none() && typed(&self.book, f.scene.as_deref()) {
+            type3d_frame(&mut self.type3d, &mut d.stage, &d.gpu, &st, &f, dt, w, h);
+        }
         let began = Instant::now();
         let cmd = d.stage.draw(&d.gpu, &f, dt, view.as_ref(), w, h, pic.map(|p| &p.view));
         let mut cmds = vec![cmd];
@@ -612,6 +633,9 @@ impl App {
             let (ww, wh) = d.stage.work_size(w, h);
             let scene = sim.frame(co, &st, 0.0, ww as f64, wh as f64);
             d.stage.dance_cmds = sim.paint(co, &scene, &st, 0.0);
+        }
+        if f.figure.is_none() && typed(&self.book, f.scene.as_deref()) {
+            type3d_frame(&mut self.type3d, &mut d.stage, &d.gpu, &st, &f, 0.0, w, h);
         }
         let cmd = d.stage.draw(&d.gpu, &f, 0.0, None, w, h, Some(&v));
         d.gpu.queue.submit([cmd]);
@@ -793,7 +817,7 @@ fn main() {
             None
         }
     };
-    let mut app = App { args, instance, book, source, play: Play::default(), win: None, started: now, last: now, frames: 0, since: now, shown_due: now, pictures: 0, heard: 0, cues: 0, black: 0.0, presented: now, missing: None, milk, covers: [None, None], ground: None, dance, picture_cam: Default::default(), paced: false, due: now, phase: 0.0 };
+    let mut app = App { args, instance, book, source, play: Play::default(), win: None, started: now, last: now, frames: 0, since: now, shown_due: now, pictures: 0, heard: 0, cues: 0, black: 0.0, presented: now, missing: None, milk, covers: [None, None], ground: None, dance, picture_cam: Default::default(), type3d: Default::default(), paced: false, due: now, phase: 0.0 };
     el.run_app(&mut app).expect("the stage ran");
 }
 

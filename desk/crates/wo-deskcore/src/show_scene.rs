@@ -710,6 +710,7 @@ impl Show {
             E::Set(x) => self.edit_set(x),
             E::Fave(x) => self.edit_fave(x),
             E::Strength(s) => self.direct.doc.set_strength(s),
+            E::Type3d(spec) => self.direct.doc.set_type3d(&spec),
             _ => {}
         }
     }

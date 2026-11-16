@@ -375,6 +375,10 @@ impl Stage {
         self.show().moves()
     }
 
+    pub(crate) fn type3d(&mut self) -> wo_show::type3d::TypeSpec {
+        self.show().direct.doc.type3d()
+    }
+
     pub(crate) fn finish(&mut self) -> crate::show::FinishView {
         self.show().finish()
     }

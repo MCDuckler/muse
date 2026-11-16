@@ -73,6 +73,15 @@ baked! {
     "kinetic.lines" => "kinetic.lines.png",
     "kinetic.slit" => "kinetic.slit.png",
     "kinetic.thermal" => "kinetic.thermal.png",
+    "type3d" => "type3d.png",
+    "type3d.ascii" => "type3d.ascii.png",
+    "type3d.contour" => "type3d.contour.png",
+    "type3d.crt" => "type3d.crt.png",
+    "type3d.dither" => "type3d.dither.png",
+    "type3d.halftone" => "type3d.halftone.png",
+    "type3d.lines" => "type3d.lines.png",
+    "type3d.slit" => "type3d.slit.png",
+    "type3d.thermal" => "type3d.thermal.png",
 }
 
 /// A picture by name: the Rust stage's own where it baked one, else v1's.

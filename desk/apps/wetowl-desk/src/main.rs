@@ -36,6 +36,7 @@ mod set_page;
 mod pages;
 mod show;
 mod tracks;
+mod type3d;
 mod ui;
 
 use paint::fonts;

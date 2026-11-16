@@ -7,7 +7,7 @@ name: Stage (Rust)
 on:
   push:
     branches: [desk]
-    paths: ["desk/crates/wo-shaders/**", "desk/crates/wo-render/**", "desk/crates/wo-dance/**", "desk/crates/wo-milk/**", "desk/crates/wo-show/**", "app/assets/show/scenes/**", "desk/apps/wetowl-stage/**", "desk/crates/wo-wire/**", "desk/crates/wo-deskcore/**", "app/native/milk/**", "app/assets/milk/**", "app/assets/show/combo_scores.json", "app/shaders/**", "app/assets/show/dance/**", ".github/workflows/stage-rust.yml"]
+    paths: ["desk/crates/wo-shaders/**", "desk/crates/wo-render/**", "desk/crates/wo-dance/**", "desk/crates/wo-type3d/**", "desk/crates/wo-milk/**", "desk/crates/wo-show/**", "app/assets/show/scenes/**", "desk/apps/wetowl-stage/**", "desk/crates/wo-wire/**", "desk/crates/wo-deskcore/**", "app/native/milk/**", "app/assets/milk/**", "app/assets/show/combo_scores.json", "app/shaders/**", "app/assets/show/dance/**", "app/assets/fonts/**", ".github/workflows/stage-rust.yml"]
   workflow_dispatch:
 
 jobs:
@@ -53,6 +53,12 @@ jobs:
         run: |
           cargo test --release -p wo-dance
           cargo run --release -p wo-render --example dancer_shot -- ../app/assets/show/dance/chris long22 "$GITHUB_WORKSPACE/shots-${{ runner.os }}/dancer.png"
+      - name: The 3D text set, baked and drawn on this GPU API
+        env:
+          WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}
+        run: |
+          cargo test --release -p wo-type3d
+          cargo run --release -p wo-type3d --example type3d_shots -- "$GITHUB_WORKSPACE/shots-${{ runner.os }}/type3d" 640x360
       - name: The stage window, full screen on a screen chosen by name
         env:
           WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}

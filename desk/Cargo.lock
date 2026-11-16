@@ -4691,6 +4691,7 @@ dependencies = [
  "wo-milk",
  "wo-render",
  "wo-show",
+ "wo-type3d",
  "wo-wire",
 ]
 
@@ -5452,6 +5453,18 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "wo-type3d"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "image",
+ "wgpu",
+ "wo-dance",
+ "wo-render",
+ "wo-show",
 ]
 
 [[package]]

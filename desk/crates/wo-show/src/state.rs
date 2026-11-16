@@ -386,6 +386,9 @@ pub struct ShowMacros {
     /// asking, a new number.
     pub audition: Option<String>,
     pub audition_n: u32,
+    /// The 3D type's say (the pool's), while the scene on is the 3D type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type3d: Option<crate::type3d::TypeSpec>,
 }
 
 impl Default for ShowMacros {
@@ -409,6 +412,7 @@ impl Default for ShowMacros {
             moves_star: vec![],
             audition: None,
             audition_n: 0,
+            type3d: None,
         }
     }
 }
