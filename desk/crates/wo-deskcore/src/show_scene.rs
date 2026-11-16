@@ -462,7 +462,8 @@ impl Show {
         let style_on = |st: &str| plan.level_in(id, PlanAxis::Style, st) > 0.0;
         let ground_on = |g: &str| g == OWN_GROUND || plan.level_in(id, PlanAxis::Ground, g) > 0.0;
         let all_styles: Vec<&str> = styles_of_figure(kind);
-        let all_grounds: Vec<&str> = if world { vec![OWN_GROUND] } else { COMBO_GROUNDS.iter().copied().filter(|g| *g != "camera").collect() };
+        // (not the camera; not footage under the footage)
+        let all_grounds: Vec<&str> = if world { vec![OWN_GROUND] } else { COMBO_GROUNDS.iter().copied().filter(|g| *g != "camera" && !(*g == "video" && kind == wo_show::Figure::Video)).collect() };
         let shown_styles: Vec<&str> = all_styles.iter().copied().filter(|s| all || style_on(s)).collect();
         let shown_grounds: Vec<&str> = all_grounds.iter().copied().filter(|g| all || ground_on(g)).collect();
         let hidden = all_styles.len() - shown_styles.len() + all_grounds.len() - shown_grounds.len();
@@ -711,6 +712,9 @@ impl Show {
             E::Fave(x) => self.edit_fave(x),
             E::Strength(s) => self.direct.doc.set_strength(s),
             E::Type3d(spec) => self.direct.doc.set_type3d(&spec),
+            E::Video(spec) => self.direct.doc.set_video(&spec),
+            E::VideoNext => self.direct.video.next(),
+            E::VideoRescan => self.videos.rescan(),
             _ => {}
         }
     }

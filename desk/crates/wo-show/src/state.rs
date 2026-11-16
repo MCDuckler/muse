@@ -389,6 +389,9 @@ pub struct ShowMacros {
     /// The 3D type's say (the pool's), while the scene on is the 3D type.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type3d: Option<crate::type3d::TypeSpec>,
+    /// The clip on and the video's say, while a look with video is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video: Option<crate::video::VideoCue>,
 }
 
 impl Default for ShowMacros {
@@ -413,6 +416,7 @@ impl Default for ShowMacros {
             audition: None,
             audition_n: 0,
             type3d: None,
+            video: None,
         }
     }
 }

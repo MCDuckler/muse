@@ -31,6 +31,8 @@ pub enum GroundDraw {
     Milk,
     /// The record's cover, filled and cropped.
     Cover,
+    /// The clip on (the stage's video pass: fitted, tinted, moved by the beat).
+    Video,
     /// A scene shader drawn whole as a backdrop (a field, or the pulse with its variant).
     Field(ShaderLayer),
 }
@@ -196,6 +198,7 @@ pub fn stage_frame(st: &ShowState, book: &SceneBook, time: f64) -> StageFrame {
         Ground::Wash => GroundDraw::Wash,
         Ground::Milk => GroundDraw::Milk,
         Ground::Cover => GroundDraw::Cover,
+        Ground::Video => GroundDraw::Video,
         Ground::Pulse => field("pulse", [pulse_variant(g.field.as_deref()) as f32, 0.0, 0.0, 0.0]),
         Ground::Field => match g.field.as_deref().and_then(|f| book.scenes.get(f)).and_then(|s| s.layers.first()) {
             // a field that is a shader scene, with the look's knobs (the record's genome
@@ -257,6 +260,7 @@ pub fn ground_index(g: &GroundDraw) -> usize {
         GroundDraw::Wash => Ground::Wash.index(),
         GroundDraw::Milk => Ground::Milk.index(),
         GroundDraw::Cover => Ground::Cover.index(),
+        GroundDraw::Video => Ground::Video.index(),
         GroundDraw::Field(l) if l.shader == "pulse" => Ground::Pulse.index(),
         GroundDraw::Field(_) => Ground::Field.index(),
     }

@@ -66,6 +66,8 @@ pub(crate) struct SceneUi {
     pub tempo: Option<f64>,
     /// The 3D text's words as being typed.
     pub type_lines: String,
+    /// The footage's posters, by clip (None: none to show).
+    pub posters: std::collections::HashMap<String, Option<egui::TextureHandle>>,
 }
 
 impl App {
@@ -154,6 +156,10 @@ impl App {
         // the 3D text: what it says, its face, motions, looks, bends and knobs
         if page.figure == "type3d" {
             y += self.type3d_editor(desk, ui, p, Rect::from_min_size(pos2(at.x, y), vec2(w, 0.0))) + 18.0;
+        }
+        // the footage: its clips, how it moves and looks
+        if page.figure == "video" {
+            y += self.video_editor(desk, ui, p, Rect::from_min_size(pos2(at.x, y), vec2(w, 0.0))) + 18.0;
         }
         // the grid of its looks, the whole width
         y += self.looks_grid(desk, ui, p, Rect::from_min_size(pos2(at.x, y), vec2(w, 0.0)), page, strength) + 18.0;

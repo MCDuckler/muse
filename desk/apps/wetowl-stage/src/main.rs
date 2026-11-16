@@ -4,6 +4,7 @@
 //!   wetowl-stage --stage <ws url>    the Desk's show: it directs, this draws (ShowWire v2)
 //!   wetowl-stage                     on its own: its own director over a made-up record
 //!     [--scene <id>]                 that scene held (on its own)
+//!     [--ground <key>]               that background held (`video`, `milk`…)
 //!     [--screen <name>]              full screen there from the start
 //!     [--scale <0.5..1>]             the working size's share of the window's (it adapts)
 //!     [--milk-dir <dir>]             MilkDrop's presets (on its own: the Desk says otherwise)
@@ -18,6 +19,7 @@
 //! Every second it says `STAGE fps=… size=WxH screen=<name> full=0|1 gpu=… scene=… work=WxH`.
 mod link;
 mod milk;
+mod video;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -44,6 +46,7 @@ use wo_wire::v2::Said;
 struct Args {
     url: Option<String>,
     scene: Option<String>,
+    ground: Option<String>,
     screen: Option<String>,
     scale: f32,
     seconds: Option<f64>,
@@ -58,6 +61,7 @@ fn args() -> Args {
     Args {
         url: after("--stage"),
         scene: after("--scene"),
+        ground: after("--ground"),
         screen: after("--screen"),
         scale: after("--scale").and_then(|s| s.parse().ok()).unwrap_or(1.0f32).clamp(0.25, 2.0),
         seconds: after("--seconds").and_then(|s| s.parse().ok()),
@@ -185,6 +189,8 @@ impl Source {
                 let room = Room { a, b: ShowDeck { name: "B".into(), ..Default::default() }, audio, ..Default::default() };
                 let mut extra = wo_show::deck::Flat::new();
                 extra.insert("milk.ok".into(), if *milk_ok { 1.0 } else { 0.0 });
+                let filmed = direct.video.any(direct.video_spec());
+                extra.insert("video.ok".into(), if filmed { 1.0 } else { 0.0 });
                 let (cue, _) = direct.tick(dt, room.clone(), extra);
                 (room, cue, true)
             }
@@ -306,6 +312,8 @@ struct App {
     picture_cam: wo_dance::clock::PictureCam,
     /// The 3D text's clock and its lines.
     type3d: wo_type3d::Type3dSim,
+    /// The footage: this machine's clips, the one on decoded as the clock says.
+    video: video::VideoRun,
 }
 
 /// Whether `scene` (by id) is the 3D text.
@@ -566,6 +574,7 @@ impl App {
         if f.figure.is_none() && typed(&self.book, f.scene.as_deref()) {
             type3d_frame(&mut self.type3d, &mut d.stage, &d.gpu, &st, &f, dt, w, h);
         }
+        self.video.frame(&mut d.stage, &d.gpu, &self.book, &st, &f, dt);
         let began = Instant::now();
         let cmd = d.stage.draw(&d.gpu, &f, dt, view.as_ref(), w, h, pic.map(|p| &p.view));
         let mut cmds = vec![cmd];
@@ -637,6 +646,7 @@ impl App {
         if f.figure.is_none() && typed(&self.book, f.scene.as_deref()) {
             type3d_frame(&mut self.type3d, &mut d.stage, &d.gpu, &st, &f, 0.0, w, h);
         }
+        self.video.frame(&mut d.stage, &d.gpu, &self.book, &st, &f, 0.0);
         let cmd = d.stage.draw(&d.gpu, &f, 0.0, None, w, h, Some(&v));
         d.gpu.queue.submit([cmd]);
         let px = wo_render::read(&d.gpu, &t);
@@ -794,7 +804,14 @@ fn main() {
                 let lib = wo_show::milk::MilkLibrary::new(presets, Default::default());
                 direct.milk = Some(wo_show::milk::MilkDirector::new(lib, wo_show::scores::MilkScores::shipped(), 11));
             }
-            direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(milk_ok, false));
+            // the footage here (made into proxies by the Desk)
+            direct.video.clips = wo_video::Library::here().map(|l| l.clips()).unwrap_or_default();
+            eprintln!("stage: {} clips of footage", direct.video.clips.len());
+            let filmed = !direct.video.clips.is_empty();
+            direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(milk_ok, false, filmed));
+            if let Some(g) = &args.ground {
+                direct.director.held_ground = Some(g.clone());
+            }
             if let Some(s) = &args.scene {
                 direct.director.choose(s, wo_show::director::SceneChange::Cut);
                 direct.hold(true);
@@ -817,7 +834,7 @@ fn main() {
             None
         }
     };
-    let mut app = App { args, instance, book, source, play: Play::default(), win: None, started: now, last: now, frames: 0, since: now, shown_due: now, pictures: 0, heard: 0, cues: 0, black: 0.0, presented: now, missing: None, milk, covers: [None, None], ground: None, dance, picture_cam: Default::default(), type3d: Default::default(), paced: false, due: now, phase: 0.0 };
+    let mut app = App { args, instance, book, source, play: Play::default(), win: None, started: now, last: now, frames: 0, since: now, shown_due: now, pictures: 0, heard: 0, cues: 0, black: 0.0, presented: now, missing: None, milk, covers: [None, None], ground: None, dance, picture_cam: Default::default(), type3d: Default::default(), video: video::VideoRun::new(wo_video::Library::here()), paced: false, due: now, phase: 0.0 };
     el.run_app(&mut app).expect("the stage ran");
 }
 

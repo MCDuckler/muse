@@ -1,0 +1,20 @@
+[package]
+name = "wo-video"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Footage for the Rust stage: clips made into proxies the stage can jump about in (ffmpeg, once), their facts, and a thread that decodes the frames asked for"
+
+[dependencies]
+dirs = "7.0.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+wo-show = { path = "../wo-show" }
+zune-core = "0.5.3"
+zune-jpeg = "0.5.15"
+
+[dev-dependencies]
+wo-render = { path = "../wo-render" }
+wgpu = "30.0.1"
+image = { version = "0.25", default-features = false, features = ["png"] }

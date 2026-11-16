@@ -36,6 +36,7 @@ pub mod show;
 pub mod stage;
 pub mod synth;
 pub mod theme;
+pub mod videos;
 
 pub use backdrop::Backdrop;
 pub use covers::Cover;
@@ -48,6 +49,8 @@ pub use wo_show::plan::{LEVEL_MOST, LEVEL_STEPS, level_word};
 pub use wo_show::rig::{RigFinish, TransformSet};
 pub use wo_show::shares::share_word;
 pub use wo_show::type3d as type3d;
+pub use wo_show::video as video;
+pub use videos::VideoShelf;
 pub use wo_show::Mix as ShowMix;
 /// The scenes the Rust stage draws so far.
 pub use wo_show::scenes::DRAWN as RUST_SCENES;
@@ -2002,6 +2005,22 @@ impl Desk {
     /// The dancers' moves, with the hands' say on each.
     pub fn show_moves(&mut self) -> MovesView {
         self.stage.moves()
+    }
+
+    /// The footage's say (ShowEdit::Video changes it), what there is of it on this machine,
+    /// and the clip on.
+    pub fn show_video(&mut self) -> (wo_show::video::VideoSpec, VideoShelf, Option<String>) {
+        self.stage.video()
+    }
+
+    /// The footage folder (made where it is not), to open.
+    pub fn show_video_folder(&mut self) -> Option<std::path::PathBuf> {
+        self.stage.video_folder()
+    }
+
+    /// A clip's poster frame.
+    pub fn show_video_poster(&mut self, id: &str) -> Option<std::path::PathBuf> {
+        self.stage.video_poster(id)
     }
 
     /// The 3D text's say (the show's, kept in this Desk's show; ShowEdit::Type3d changes it).

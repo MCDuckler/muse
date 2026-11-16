@@ -7,7 +7,7 @@ name: Stage (Rust)
 on:
   push:
     branches: [desk]
-    paths: ["desk/crates/wo-shaders/**", "desk/crates/wo-render/**", "desk/crates/wo-dance/**", "desk/crates/wo-type3d/**", "desk/crates/wo-milk/**", "desk/crates/wo-show/**", "app/assets/show/scenes/**", "desk/apps/wetowl-stage/**", "desk/crates/wo-wire/**", "desk/crates/wo-deskcore/**", "app/native/milk/**", "app/assets/milk/**", "app/assets/show/combo_scores.json", "app/shaders/**", "app/assets/show/dance/**", "app/assets/fonts/**", ".github/workflows/stage-rust.yml"]
+    paths: ["desk/crates/wo-shaders/**", "desk/crates/wo-render/**", "desk/crates/wo-dance/**", "desk/crates/wo-type3d/**", "desk/crates/wo-video/**", "desk/crates/wo-milk/**", "desk/crates/wo-show/**", "app/assets/show/scenes/**", "desk/apps/wetowl-stage/**", "desk/crates/wo-wire/**", "desk/crates/wo-deskcore/**", "app/native/milk/**", "app/assets/milk/**", "app/assets/show/combo_scores.json", "app/shaders/**", "app/assets/show/dance/**", "app/assets/fonts/**", ".github/workflows/stage-rust.yml"]
   workflow_dispatch:
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
           key: stage-rust
       - name: "A Vulkan driver (Linux: Mesa's lavapipe, on the CPU)"
         if: runner.os == 'Linux'
-        run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers xvfb libxkbcommon-x11-0 libasound2-dev libudev-dev libegl-dev libgl-dev libglvnd-dev
+        run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers xvfb libxkbcommon-x11-0 libasound2-dev libudev-dev libegl-dev libgl-dev libglvnd-dev ffmpeg
       - name: The shaders fitted, read and written for Metal, Direct3D and Vulkan
         run: cargo test --release -p wo-shaders
       - name: The show's rules (wo-show), v1's tests among them; the wire
@@ -59,6 +59,20 @@ jobs:
         run: |
           cargo test --release -p wo-type3d
           cargo run --release -p wo-type3d --example type3d_shots -- "$GITHUB_WORKSPACE/shots-${{ runner.os }}/type3d" 640x360
+      - name: Footage made ready and drawn on this GPU API
+        env:
+          WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}
+        shell: bash
+        run: |
+          # the import's own test needs ffmpeg (skipped where there is none)
+          cargo test --release -p wo-video
+          if command -v ffmpeg >/dev/null; then
+            f="$RUNNER_TEMP/footage"
+            mkdir -p "$f/src"
+            ffmpeg -hide_banner -loglevel error -f lavfi -i "mandelbrot=size=640x480:rate=25" -t 6 -vf "format=gray,noise=alls=20:allf=t,pad=854:480:107:0:black,format=yuv420p" -y "$f/src/reel.mp4"
+            cargo run --release -p wo-video --example import_dir -- "$f/src" "$f/prox"
+            cargo run --release -p wo-video --example video_shots -- "$GITHUB_WORKSPACE/shots-${{ runner.os }}/video" "$f/src" "$f/prox"
+          fi
       - name: The stage window, full screen on a screen chosen by name
         env:
           WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || (runner.os == 'macOS' && 'metal' || 'vulkan') }}

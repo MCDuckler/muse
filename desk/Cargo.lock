@@ -4692,6 +4692,7 @@ dependencies = [
  "wo-render",
  "wo-show",
  "wo-type3d",
+ "wo-video",
  "wo-wire",
 ]
 
@@ -5380,6 +5381,7 @@ dependencies = [
  "wo-house",
  "wo-show",
  "wo-usb",
+ "wo-video",
  "wo-wave",
  "wo-wire",
 ]
@@ -5470,6 +5472,21 @@ dependencies = [
 [[package]]
 name = "wo-usb"
 version = "0.1.0"
+
+[[package]]
+name = "wo-video"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "image",
+ "serde",
+ "serde_json",
+ "wgpu",
+ "wo-render",
+ "wo-show",
+ "zune-core",
+ "zune-jpeg",
+]
 
 [[package]]
 name = "wo-wave"

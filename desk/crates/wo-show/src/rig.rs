@@ -10,13 +10,13 @@ use crate::named;
 
 named!(
     /// What lies under the figure.
-    pub enum Ground { Black = "black", Wash = "wash", Milk = "milk", Camera = "camera", Field = "field", Cover = "cover", Pulse = "pulse", White = "white" }
+    pub enum Ground { Black = "black", Wash = "wash", Milk = "milk", Camera = "camera", Field = "field", Cover = "cover", Pulse = "pulse", White = "white", Video = "video" }
 );
 named!(
     /// What stands in the middle (none: a look that is its own whole picture).
     pub enum Figure {
         None = "none", Dancers = "dancers", Birds = "birds", Kinetic = "kinetic", Blocks = "blocks", Flash = "flash", Glide = "glide",
-        Turntable = "turntable", Fluid = "fluid", Veins = "veins", Meme = "meme", Words = "words", Field = "field", Room = "room", Type3d = "type3d"
+        Turntable = "turntable", Fluid = "fluid", Veins = "veins", Meme = "meme", Words = "words", Field = "field", Room = "room", Type3d = "type3d", Video = "video"
     }
 );
 named!(pub enum Shade { Auto = "auto", Textured = "textured", Chrome = "chrome", Silhouette = "silhouette", Flat = "flat", Toon = "toon" });
@@ -121,7 +121,7 @@ impl RigFigure {
 
     /// A simulation: the picture it keeps between frames.
     pub fn is_sim(&self) -> bool {
-        matches!(self.kind, Figure::Dancers | Figure::Birds | Figure::Turntable | Figure::Fluid | Figure::Veins | Figure::Meme | Figure::Words | Figure::Type3d)
+        matches!(self.kind, Figure::Dancers | Figure::Birds | Figure::Turntable | Figure::Fluid | Figure::Veins | Figure::Meme | Figure::Words | Figure::Type3d | Figure::Video)
     }
 
     pub fn label(&self) -> String {

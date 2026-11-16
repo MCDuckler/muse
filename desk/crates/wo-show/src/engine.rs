@@ -153,6 +153,9 @@ pub struct Direct {
     /// The 3D type's say, the document's; a favourite's own while it is on.
     type3d: crate::type3d::TypeSpec,
     pub fave_type3d: Option<crate::type3d::TypeSpec>,
+    /// The footage: the clips this machine has, and which is on; the hands' say on it.
+    pub video: crate::video::VideoDirector,
+    video_spec: crate::video::VideoSpec,
     audition_at: f64,
 }
 
@@ -162,12 +165,17 @@ impl Direct {
         let mut director = Director::new(book.metas(), seed);
         director.kinds = book.kinds();
         director.set_scores(scores);
-        let mut d = Direct { director, looks: book.looks(), doc, held_fx: None, macros: ShowMacros::default(), milk: None, master: "A".into(), prev: None, hit_at: None, clock: 0.0, last: Cue::default(), launch: None, shots: BTreeMap::new(), type3d: Default::default(), fave_type3d: None, audition_at: 0.0 };
+        let mut d = Direct { director, looks: book.looks(), doc, held_fx: None, macros: ShowMacros::default(), milk: None, master: "A".into(), prev: None, hit_at: None, clock: 0.0, last: Cue::default(), launch: None, shots: BTreeMap::new(), type3d: Default::default(), fave_type3d: None, video: crate::video::VideoDirector::new(seed), video_spec: Default::default(), audition_at: 0.0 };
         // a move asked for is told by a new number: this session's own (a stage kept open
         // across a Desk's restart must not take its first asking for one it served)
         d.macros.audition_n = (seed as u32).wrapping_mul(2_654_435_761) >> 8;
         d.apply_doc();
         d
+    }
+
+    /// The video's say as the hands set it.
+    pub fn video_spec(&self) -> &crate::video::VideoSpec {
+        &self.video_spec
     }
 
     /// The 3D type's say as the stage gets it now.
@@ -187,6 +195,7 @@ impl Direct {
         self.macros.moves_off = self.doc.moves_off();
         self.macros.moves_star = self.doc.move_stars();
         self.type3d = self.doc.type3d();
+        self.video_spec = self.doc.video();
         let plan = self.doc.plan();
         self.shots = self
             .director
@@ -381,8 +390,11 @@ impl Direct {
         if dark && !macros.blackout {
             macros.blackout = true;
         }
+        // the footage, while the look on shows it (as its ground, or as the scene)
+        let filmed = rig.ground.kind == crate::rig::Ground::Video || rig.figure.kind == crate::rig::Figure::Video;
+        macros.video = self.video.frame(&state, &said, &self.video_spec, filmed);
         // MilkDrop's preset, while the stage has MilkDrop to draw
-        let mut moshes = self.director.moshes;
+        let mut moshes = self.director.moshes + self.video.moshes;
         let mut milk_cue = crate::milk::MilkCue::default();
         if let Some(mk) = &mut self.milk {
             if state.num("milk.ok") >= 0.5 {

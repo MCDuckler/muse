@@ -257,6 +257,17 @@ impl ShowDoc {
         self.put("type3d", v);
     }
 
+    /// The video's say (the clips kept out and starred, the modes, the knobs).
+    pub fn video(&self) -> crate::video::VideoSpec {
+        self.pool().get("video").map(crate::video::VideoSpec::from_json).unwrap_or_default()
+    }
+
+    /// The video's say kept (the standard's is left out).
+    pub fn set_video(&mut self, spec: &crate::video::VideoSpec) {
+        let v = (*spec != crate::video::VideoSpec::default()).then(|| spec.to_json());
+        self.put("video", v);
+    }
+
     pub fn dancer(&self) -> Option<String> {
         self.pool().get("dancer").and_then(Value::as_str).map(str::to_owned)
     }

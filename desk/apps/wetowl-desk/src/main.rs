@@ -37,6 +37,7 @@ mod pages;
 mod show;
 mod tracks;
 mod type3d;
+mod video;
 mod ui;
 
 use paint::fonts;

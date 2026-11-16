@@ -1,0 +1,42 @@
+{
+  "id": "video",
+  "name": "Footage",
+  "energy": [
+    0.0,
+    1.0
+  ],
+  "sections": [
+    "drop",
+    "chorus",
+    "build",
+    "breakdown",
+    "inst",
+    "intro",
+    "outro",
+    "on"
+  ],
+  "needs": [
+    "video"
+  ],
+  "priority": 1.0,
+  "instant": true,
+  "layers": [
+    {
+      "sim": "video"
+    }
+  ],
+  "particles": [],
+  "text": {
+    "title": false,
+    "lyrics": false
+  },
+  "post": {
+    "trails": 0.0,
+    "bloom": 0.3,
+    "fringe": 0.004,
+    "vignette": 0.5,
+    "grain": 0.45,
+    "recipe": 0.0,
+    "tone": 0.8
+  }
+}

@@ -14,17 +14,20 @@ include!(concat!(env!("OUT_DIR"), "/scenes.rs"));
 
 /// The scenes the Rust stage draws now: the shader scenes (P2), MilkDrop (P3), the dancers
 /// (P6); the rest of [IN_SCOPE] come with their phases (the sims P5, the 3D type P8).
-pub const DRAWN: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift", "milk", "dance-art", "type3d"];
+pub const DRAWN: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift", "milk", "dance-art", "type3d", "video"];
 
 /// The backgrounds the Rust stage draws (not the camera): MilkDrop's where the stage has it,
-/// the record's cover where there is one.
-pub fn grounds_drawn(milk: bool, cover: bool) -> std::collections::BTreeSet<String> {
+/// the record's cover where there is one, the footage where this machine has some.
+pub fn grounds_drawn(milk: bool, cover: bool, video: bool) -> std::collections::BTreeSet<String> {
     let mut g: std::collections::BTreeSet<String> = ["black", "white", "wash", "pulse.grid", "pulse.rays", "pulse.smoke", "pulse.stars", "field.drift"].iter().map(|s| s.to_string()).collect();
     if milk {
         g.insert("milk".into());
     }
     if cover {
         g.insert("cover".into());
+    }
+    if video {
+        g.insert("video".into());
     }
     g
 }
@@ -64,7 +67,7 @@ pub fn dance_dir() -> Option<std::path::PathBuf> {
 }
 
 /// The scenes the Rust stage draws (plan §1): the rest stay v1's until they are ported, or not.
-pub const IN_SCOPE: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift", "milk", "fluid", "veins", "dance-art", "type3d"];
+pub const IN_SCOPE: &[&str] = &["kinetic", "flash", "blocks", "glide", "drift", "milk", "fluid", "veins", "dance-art", "type3d", "video"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneLayer {
@@ -151,6 +154,7 @@ impl Scene {
                 "flock" => Figure::Birds,
                 "words" => Figure::Words,
                 "type3d" => Figure::Type3d,
+                "video" => Figure::Video,
                 "dance.art" | "dance.disco" | "dance.neon" | "dance.shadow" => Figure::Dancers,
                 _ => Figure::None,
             };
@@ -244,7 +248,7 @@ mod tests {
         assert_eq!(k["milk"], Figure::None);
         assert_eq!(book.looks()["milk"].rig.ground.kind, Ground::Milk);
         assert_eq!(k["echo"], Figure::Room);
-        let ours = book.only(IN_SCOPE);
+        let ours = SceneBook::shipped().only(IN_SCOPE);
         assert_eq!(ours.scenes.len(), IN_SCOPE.len(), "every scene in scope is shipped");
         assert!(!ours.scenes.contains_key("flock"));
         let kin = &book.scenes["kinetic"];
@@ -260,7 +264,11 @@ mod shipped_tests {
     #[test]
     fn the_shipped_scenes_are_the_files() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../app/assets/show/scenes");
-        assert_eq!(SceneBook::shipped(), SceneBook::from_dir(&dir));
+        // the app's, and the Rust stage's own (scenes/)
+        let mut both = SceneBook::from_dir(&dir);
+        both.scenes.extend(SceneBook::from_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scenes")).scenes);
+        assert_eq!(SceneBook::shipped(), both);
+        assert_eq!(SceneBook::shipped().kinds()["video"], Figure::Video);
         assert_eq!(SceneBook::shipped().only(DRAWN).scenes.len(), DRAWN.len());
     }
 }

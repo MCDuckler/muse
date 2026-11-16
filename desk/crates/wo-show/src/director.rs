@@ -485,11 +485,12 @@ impl Director {
         let cam_on = s.num("cam.on") > 0.5 && s.num("cam.light") > 0.08;
         let cam_motion = s.num("cam.motion");
         let milk_ok = s.num("milk.ok") >= 0.5;
+        let video_ok = s.num("video.ok") >= 0.5;
         let levels = self.levels();
         let mut out: Vec<(f64, SceneMeta)> = vec![];
         for sc in self.on() {
             let needs = |n: &str| sc.needs.iter().any(|x| x == n);
-            if (needs("cover") && !has_cover) || needs("words") || (needs("camera") && !cam_on) || (needs("milk") && !milk_ok) {
+            if (needs("cover") && !has_cover) || needs("words") || (needs("camera") && !cam_on) || (needs("milk") && !milk_ok) || (needs("video") && !video_ok) {
                 continue;
             }
             let mut score = 0.0;

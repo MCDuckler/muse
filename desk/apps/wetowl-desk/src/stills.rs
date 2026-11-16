@@ -82,6 +82,16 @@ baked! {
     "type3d.lines" => "type3d.lines.png",
     "type3d.slit" => "type3d.slit.png",
     "type3d.thermal" => "type3d.thermal.png",
+    "video" => "video.png",
+    "video.ascii" => "video.ascii.png",
+    "video.contour" => "video.contour.png",
+    "video.crt" => "video.crt.png",
+    "video.dither" => "video.dither.png",
+    "video.halftone" => "video.halftone.png",
+    "video.lines" => "video.lines.png",
+    "video.slit" => "video.slit.png",
+    "video.thermal" => "video.thermal.png",
+    "ground.video" => "ground.video.png",
 }
 
 /// A picture by name: the Rust stage's own where it baked one, else v1's.
@@ -325,6 +335,7 @@ impl Stills {
             let dim = match k.ground.as_str() {
                 "field.drift" => 0.6,
                 "cover" => 0.6,
+                "video" => 0.6,
                 _ => 1.0,
             };
             let mask = match k.mask.as_str() {

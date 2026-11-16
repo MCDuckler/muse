@@ -75,7 +75,7 @@ fn own_rig(st: &mut ShowState, b: &SceneBook) {
 }
 
 fn cases() -> Vec<Case> {
-    let mut v: Vec<Case> = DRAWN.iter().filter(|s| **s != "dance-art").map(|s| Case { name: (*s).into(), scene: s, dance: None, edit: |_, _, _| {} }).collect();
+    let mut v: Vec<Case> = DRAWN.iter().filter(|s| !matches!(**s, "dance-art" | "type3d" | "video")).map(|s| Case { name: (*s).into(), scene: s, dance: None, edit: |_, _, _| {} }).collect();
     fn rig(st: &mut ShowState, b: &SceneBook, ground: RigGround, blend: RigBlend) {
         let mut r = b.scenes[st.scene.as_deref().unwrap()].rig();
         r.ground = ground;

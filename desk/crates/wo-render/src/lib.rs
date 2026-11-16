@@ -16,6 +16,7 @@ pub mod dance;
 pub mod looks;
 pub mod particles;
 pub mod stage;
+pub mod video;
 pub use stage::Stage;
 
 /// One frame's uniform blocks, side by side in one buffer at the device's alignment, written

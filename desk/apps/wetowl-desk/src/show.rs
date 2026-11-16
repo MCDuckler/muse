@@ -512,7 +512,14 @@ impl App {
         let at = row(ui, p, &mut y, "Under", "One background held under every scene, till let go; Rotation: the director's choice");
         let mut unders: Vec<(&str, Option<String>)> = vec![("Rotation", None)];
         for g in &h.unders {
-            unders.push((if g == "milk" { "MilkDrop" } else { "Cover" }, Some(g.clone())));
+            unders.push((
+                match g.as_str() {
+                    "milk" => "MilkDrop",
+                    "video" => "Footage",
+                    _ => "Cover",
+                },
+                Some(g.clone()),
+            ));
         }
         if unders.len() == 1 {
             kit::hint(p, pos2(at.left(), at.center().y), Align2::LEFT_CENTER, "the rotation's: no MilkDrop or cover on this stage");

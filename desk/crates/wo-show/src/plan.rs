@@ -48,7 +48,7 @@ pub fn level_word(v: f64) -> String {
 /// The levels the app comes with, by row.
 pub fn shipped_level(a: PlanAxis, v: &str) -> Option<f64> {
     let table: &[(&str, f64)] = match a {
-        PlanAxis::Ground => &[("milk", 3.0), ("white", 0.8), ("pulse.grid", 0.5), ("pulse.rays", 0.5), ("pulse.smoke", 0.5), ("pulse.stars", 0.5), ("field.drift", 0.6), ("cover", 0.6)],
+        PlanAxis::Ground => &[("milk", 3.0), ("white", 0.8), ("pulse.grid", 0.5), ("pulse.rays", 0.5), ("pulse.smoke", 0.5), ("pulse.stars", 0.5), ("field.drift", 0.6), ("cover", 0.6), ("video", 1.0)],
         PlanAxis::Mask => &[("none", 2.0), ("keyhole", 0.6), ("inverted", 0.6)],
         PlanAxis::Mix => &[("screen", 0.7), ("contrast", 1.5)],
         // no effect most of the time: a sixth of the looks with one, as many of each

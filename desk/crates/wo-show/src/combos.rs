@@ -20,7 +20,7 @@ impl Fx {
 }
 
 /// The backgrounds, by key: a ground's kind, and its variant after a dot.
-pub const COMBO_GROUNDS: &[&str] = &["black", "white", "milk", "wash", "pulse.grid", "pulse.rays", "pulse.smoke", "pulse.stars", "field.drift", "cover", "camera"];
+pub const COMBO_GROUNDS: &[&str] = &["black", "white", "milk", "wash", "pulse.grid", "pulse.rays", "pulse.smoke", "pulse.stars", "field.drift", "cover", "camera", "video"];
 
 /// The background of a world: its own.
 pub const OWN_GROUND: &str = "own";
@@ -40,6 +40,7 @@ pub fn ground_of_key(key: &str) -> RigGround {
         "field" => g(Ground::Field, Some(field.unwrap_or("drift")), 0.6),
         "cover" => g(Ground::Cover, None, 0.6),
         "camera" => g(Ground::Camera, None, 0.8),
+        "video" => g(Ground::Video, None, 0.6),
         _ => RigGround::default(),
     }
 }
@@ -155,6 +156,10 @@ pub fn combos_of(scene: &str, kind: Figure, grounds: &[&str], fxs: &[Fx]) -> Vec
             continue;
         }
         for g in grounds {
+            // one video at a time: not footage under footage
+            if kind == Figure::Video && *g == "video" {
+                continue;
+            }
             for &mask in Mask::ALL {
                 for &mix in Mix::ALL {
                     for &fx in fxs {
@@ -215,7 +220,7 @@ mod tests {
     #[test]
     fn a_scene_has_every_combination_and_a_world_one_per_effect() {
         let k = combos_of("kinetic", Figure::Kinetic, COMBO_GROUNDS, Fx::ALL);
-        assert_eq!(k.len(), 9 * 11 * 3 * 4 * 5, "styles × grounds × masks × blends × effects");
+        assert_eq!(k.len(), 9 * 12 * 3 * 4 * 5, "styles × grounds × masks × blends × effects");
         let m = combos_of("milk", Figure::None, COMBO_GROUNDS, Fx::ALL);
         assert_eq!(m.len(), 5);
         assert!(m.iter().all(Combo::world));

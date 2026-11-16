@@ -91,6 +91,11 @@ pub enum ShowEdit {
     Audition(String),
     /// The 3D text's say: its lines, face, motions, looks, bends and knobs.
     Type3d(wo_show::type3d::TypeSpec),
+    /// The footage's say: its modes, fit, colour, knobs, the clips kept out and starred.
+    Video(wo_show::video::VideoSpec),
+    /// Another clip now; the footage folder looked at again.
+    VideoNext,
+    VideoRescan,
     /// A treatment's knob (`ascii.size`), or back to its rest.
     Tune(String, Option<f64>),
     /// The finish over every scene, or None: each scene's own.
@@ -152,6 +157,7 @@ pub fn ground_name(key: &str) -> String {
         "field.drift" => "Drift",
         "cover" => "Cover",
         "camera" => "Camera",
+        "video" => "Footage",
         _ => key,
     }
     .to_owned()
@@ -389,6 +395,10 @@ pub(crate) struct Show {
     pub(crate) house: Option<wo_house::House>,
     /// The sets shared at the house, the favourite on, UNDO.
     shelf: sets::Shelf,
+    /// The footage on this machine (made into proxies on a thread), and its version given to
+    /// the director last.
+    pub(crate) videos: crate::videos::Videos,
+    videos_seen: u64,
 }
 
 type PageKey = (
@@ -468,7 +478,9 @@ pub struct ShowBoard {
 impl Show {
     /// The director over the scenes the Rust stage draws, the show kept in the Desk's own file.
     pub(crate) fn new() -> Show {
-        Show::new_in(crate::milk::home(), doc_file())
+        let mut s = Show::new_in(crate::milk::home(), doc_file());
+        s.videos = crate::videos::Videos::here();
+        s
     }
 
     /// With MilkDrop's library in `milk_home` (None: no MilkDrop) and the show kept in
@@ -477,7 +489,7 @@ impl Show {
         let book = SceneBook::shipped().only(DRAWN);
         let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_secs());
         let mut direct = Direct::new(&book, read_doc(doc_file.as_deref()), ComboScores::shipped(), seed);
-        direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(false, false));
+        direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(false, false, false));
         // MilkDrop's library: the shipped presets out where the helper reads them
         if let Some(home) = &milk_home {
             if let Err(e) = crate::milk::write_shipped(home) {
@@ -509,6 +521,8 @@ impl Show {
             moves: None,
             house: None,
             shelf: Default::default(),
+            videos: crate::videos::Videos::none(),
+            videos_seen: 0,
         };
         show.apply_milk();
         show
@@ -556,8 +570,15 @@ impl Show {
         // a cover ground where a deck's record has its cover (the stage shows the master's,
         // else the other's)
         let cover = self.covers.iter().any(|&c| c);
-        if self.direct.director.grounds_here.as_ref().is_none_or(|g| g.contains("milk") != ok || g.contains("cover") != cover) {
-            self.direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(ok, cover));
+        // the footage here, as it is made
+        let v = self.videos.version();
+        if v != self.videos_seen {
+            self.videos_seen = v;
+            self.direct.video.clips = self.videos.shelf().clips;
+        }
+        let filmed = self.direct.video.any(self.direct.video_spec());
+        if self.direct.director.grounds_here.as_ref().is_none_or(|g| g.contains("milk") != ok || g.contains("cover") != cover || g.contains("video") != filmed) {
+            self.direct.director.grounds_here = Some(wo_show::scenes::grounds_drawn(ok, cover, filmed));
         }
         if let (Some(m), Some(d)) = (milk, self.direct.milk.as_mut()) {
             for p in &m.crashed {
@@ -566,6 +587,7 @@ impl Show {
         }
         let mut extra = wo_show::deck::Flat::new();
         extra.insert("milk.ok".into(), if ok { 1.0 } else { 0.0 });
+        extra.insert("video.ok".into(), if filmed { 1.0 } else { 0.0 });
         let (cue, _) = self.direct.tick(dt, room, extra);
         // a favourite's preset, once the favourite is on
         if self.direct.pending().is_none()
@@ -920,7 +942,11 @@ impl Show {
             .into_iter()
             .map(|h| match h {
                 Hold::Look => "the look".to_owned(),
-                Hold::Ground => if d.director.held_ground.as_deref() == Some("milk") { "MilkDrop under".to_owned() } else { "the background".to_owned() },
+                Hold::Ground => match d.director.held_ground.as_deref() {
+                    Some("milk") => "MilkDrop under".to_owned(),
+                    Some("video") => "footage under".to_owned(),
+                    _ => "the background".to_owned(),
+                },
                 Hold::Effect => "the effect".to_owned(),
                 Hold::Pending => "a look waiting".to_owned(),
             })
@@ -934,7 +960,7 @@ impl Show {
             hue: d.macros.colour as f32,
             effect: d.held_fx.map(|f| f.name().to_owned()),
             under: d.director.held_ground.clone(),
-            unders: ["milk", "cover"].iter().filter(|g| d.director.grounds_here.as_ref().is_some_and(|h| h.contains(**g))).map(|g| g.to_string()).collect(),
+            unders: ["milk", "cover", "video"].iter().filter(|g| d.director.grounds_here.as_ref().is_some_and(|h| h.contains(**g))).map(|g| g.to_string()).collect(),
             land_on: d.doc.quantise().name().to_owned(),
             dancer: d.macros.dancer.clone(),
             dancers: wo_show::scenes::DANCERS.iter().map(|(id, name)| (id.to_string(), name.to_string(), !off.iter().any(|o| o == id))).collect(),

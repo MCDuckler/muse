@@ -375,6 +375,19 @@ impl Stage {
         self.show().moves()
     }
 
+    pub(crate) fn video(&mut self) -> (wo_show::video::VideoSpec, crate::videos::VideoShelf, Option<String>) {
+        let s = self.show();
+        (s.direct.doc.video(), s.videos.shelf(), s.direct.video.on().map(str::to_owned))
+    }
+
+    pub(crate) fn video_folder(&mut self) -> Option<std::path::PathBuf> {
+        self.show().videos.folder()
+    }
+
+    pub(crate) fn video_poster(&mut self, id: &str) -> Option<std::path::PathBuf> {
+        self.show().videos.poster(id)
+    }
+
     pub(crate) fn type3d(&mut self) -> wo_show::type3d::TypeSpec {
         self.show().direct.doc.type3d()
     }

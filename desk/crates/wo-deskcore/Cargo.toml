@@ -15,6 +15,7 @@ wo-house = { path = "../wo-house" }
 wo-control = { path = "../wo-control" }
 wo-wire = { path = "../wo-wire" }
 wo-show = { path = "../wo-show" }
+wo-video = { path = "../wo-video" }
 wo-dance = { path = "../wo-dance" }
 wo-usb = { path = "../wo-usb" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

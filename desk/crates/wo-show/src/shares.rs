@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn the_night_is_shared_out_whole() {
         let plan = ShowPlan::default();
-        let g = grounds_drawn(false, false);
+        let g = grounds_drawn(false, false, false);
         let s = PlanShares::of(&plan, &kinds(), &g, ComboScores::shipped().as_ref(), None);
         let total: f64 = s.scenes.values().sum();
         assert!((total - 1.0).abs() < 1e-9, "the scenes' shares make the night: {total}");
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn a_scene_twice_as_loud_has_twice_the_night_and_muted_none() {
         let k = kinds();
-        let g = grounds_drawn(false, false);
+        let g = grounds_drawn(false, false, false);
         let plan = ShowPlan::default();
         let s0 = PlanShares::of(&plan, &k, &g, None, None);
         let (a, b) = {
