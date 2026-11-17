@@ -202,6 +202,12 @@ pub fn fit(name: &str, src: &str) -> Result<Fitted, Trouble> {
         let _ = writeln!(glsl, "layout(set = 0, binding = {sm}) uniform sampler {s}_wsS;");
         let _ = writeln!(glsl, "#define {s} sampler2D({s}_wsT, {s}_wsS)");
     }
+    // Every texture here has one mip level, so a sample at level 0 is the same picture,
+    // and it needs no derivatives: Direct3D's FXC refuses a loop whose step count varies
+    // that samples with them (X3511: it tries to unroll it), as the 3D text's ray march does.
+    if !samplers.is_empty() {
+        glsl.push_str("#define texture(s, uv) textureLod(s, uv, 0.0)\n");
+    }
     glsl.push_str("vec4 FlutterFragCoord() { return gl_FragCoord; }\n");
     // the body keeps its own line numbers after this many header lines
     let header_lines = glsl.lines().count();
