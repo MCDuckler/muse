@@ -145,6 +145,9 @@ pub(crate) struct App {
     pub(crate) flights: Vec<(wo_deskcore::Record, Rect, usize, Instant)>,
     /// What the toasts last said of: the crate's trouble, the sign-in, the stage's trouble.
     seen: (Option<String>, bool, Option<String>),
+    /// The Desk keeping itself up to date (none in tests), and the build last said ready.
+    pub(crate) updates: Option<wo_update::Updater>,
+    update_said: Option<String>,
 }
 
 /// The live stage behind the glass: its pictures blurred, crossfaded over [motion::GENTLE];
@@ -349,6 +352,8 @@ impl App {
             platter_at: [Rect::NOTHING; 2],
             flights: vec![],
             seen: (None, false, None),
+            updates: None,
+            update_said: None,
         }
     }
 
@@ -374,6 +379,13 @@ impl App {
                 self.sleeves.clear();
             }
             self.seen.1 = signed;
+        }
+        // a newer build fetched: said once
+        if let Some(wo_update::State::Ready(m)) = self.updates.as_ref().map(wo_update::Updater::state)
+            && self.update_said.as_ref() != Some(&m.stamp)
+        {
+            self.toasts.say(format!("A newer Desk ({}) is ready: it goes in at the next start (Settings: restart now)", wo_update::pretty_stamp(&m.stamp)), Tone::Ok);
+            self.update_said = Some(m.stamp);
         }
         let trouble = desk.stage().trouble;
         if trouble != self.seen.2 {
@@ -582,6 +594,9 @@ fn log_to_file() {
 fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     log_to_file();
+    // a newer build fetched last time goes in now (and is started instead of this one)
+    wo_update::at_start();
+    let updates = wo_update::Updater::start();
     let renderer = if glow() { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
     // A laptop's screen on a Mac is about 1500 points wide: the full design at 1920 would
     // open past its edges. The booth lays itself out for whatever the window is.
@@ -598,7 +613,23 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default().with_inner_size(size).with_min_inner_size([960.0, 600.0]).with_title("WetOwl Desk").with_app_id("wetowl-desk").with_icon(icon()),
         ..Default::default()
     };
-    eframe::run_native("WetOwl Desk", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
+    let u = updates.clone();
+    let r = eframe::run_native(
+        "WetOwl Desk",
+        options,
+        Box::new(move |cc| {
+            let mut app = App::new(cc);
+            app.updates = Some(u);
+            Ok(Box::new(app))
+        }),
+    );
+    // "Restart now" in the settings: the window gone, the update in, the new Desk started
+    if updates.restarting()
+        && let Err(e) = wo_update::relaunch_into_update()
+    {
+        eprintln!("updates: {e}");
+    }
+    r
 }
 
 

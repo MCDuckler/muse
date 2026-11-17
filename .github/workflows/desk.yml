@@ -8,6 +8,12 @@
 #   nothing writes to; the Intel half through Rosetta), and on pushes to desk published as
 #   the rolling release wetowl-desk-macos: a zip that runs wherever it is unpacked, which
 #   desk/deploy/macos/install.sh also fetches (no administrator).
+# - linux: the Desk, the Rust stage and MilkDrop in a folder (wetowl-desk-linux.tar.gz), on
+#   pushes to desk published as the rolling release wetowl-desk-linux; desk/deploy/linux/install.sh
+#   fetches it into ~/.local/opt/wetowl-desk with a launcher.
+# Each release also carries <release>.json (commit, stamp, the download's size and SHA-256):
+# the Desk reads it and updates itself (crates/wo-update). The builds here are stamped for it
+# (WO_UPDATE_CHANNEL, WO_BUILD_STAMP, WO_BUILD_COMMIT); a build made by hand never updates.
 # Runs on pushes to the desk branch that touch desk/, the engine or the Mac runner (or by hand).
 name: Desk
 
@@ -23,6 +29,8 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      WO_UPDATE_CHANNEL: wetowl-desk-windows
     defaults:
       run:
         working-directory: desk
@@ -32,6 +40,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desk
+      - name: Stamp the build (the Desk's updater reads it)
+        shell: bash
+        run: |
+          echo "WO_BUILD_STAMP=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_ENV"
+          echo "WO_BUILD_COMMIT=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
       - name: Build the Desk
         run: cargo build --release -p wetowl-desk -p wetowl-stage
       - name: vcpkg's GLEW, kept between runs
@@ -73,7 +86,7 @@ jobs:
             Copy-Item "$($d.FullName)/dancer.json", "$($d.FullName)/dancer.bin", "$($d.FullName)/moves.bin", "$($d.FullName)/skin.webp" "pkg/dance/$($d.Name)/"
           }
           Copy-Item design/fonts/OFL-*.txt pkg/
-          $build = "$(Get-Date -AsUTC -Format yyyyMMdd-HHmm) $("${{ github.sha }}".Substring(0, 7))"
+          $build = "$env:WO_BUILD_STAMP $env:WO_BUILD_COMMIT"
           Set-Content pkg/build.txt $build
           Set-Content pkg/README.txt @"
           WetOwl Desk for Windows (build $build)
@@ -83,8 +96,14 @@ jobs:
           Sign in with your WetOwl account. The stage (the show) opens from the Show page.
           If Windows says VCRUNTIME140.dll is missing, install the Microsoft Visual C++
           Redistributable (x64): https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+          It updates itself: a newer build is fetched in the background and goes in when
+          it next starts (Settings: Restart now). Keep the folder somewhere you can write.
           "@
-          Compress-Archive -Path pkg/* -DestinationPath wetowl-desk-windows.zip -Force
+          # 7-Zip, not Compress-Archive: its paths use "/" (the updater unpacks with tar)
+          Push-Location pkg
+          7z a -tzip ../wetowl-desk-windows.zip * | Out-Null
+          Pop-Location
       - uses: actions/upload-artifact@v4
         with:
           name: wetowl-desk-windows
@@ -104,8 +123,140 @@ jobs:
             --prerelease --latest=false --target "${{ github.event.repository.default_branch }}" \
             --title "WetOwl Desk for Windows (rolling)" \
             --notes "The newest WetOwl Desk for Windows, from the desk branch."
-          gh release upload "$tag" wetowl-desk-windows.zip --clobber
-          gh release edit "$tag" --notes "Build $(tr -d '\r' < pkg/build.txt). The newest WetOwl Desk for Windows (the booth and the Rust stage), from the desk branch. Download $zip_url, unzip it anywhere, run wetowl-desk.exe. Windows may say \"Windows protected your PC\" (the program is not signed): More info, then Run anyway."
+          file=wetowl-desk-windows.zip
+          gh release upload "$tag" "$file" --clobber
+          # the manifest the Desk's updater reads (after the download it names)
+          size=$(wc -c < "$file" | tr -d ' ')
+          sum=$( (sha256sum "$file" 2>/dev/null || shasum -a 256 "$file") | cut -d' ' -f1)
+          printf '{"commit":"%s","stamp":"%s","asset":"%s","size":%s,"sha256":"%s"}\n' "$WO_BUILD_COMMIT" "$WO_BUILD_STAMP" "$(basename "$file")" "$size" "$sum" > "$tag.json"
+          cat "$tag.json"
+          gh release upload "$tag" "$tag.json" --clobber
+          gh release edit "$tag" --notes "Build $(tr -d '\r' < pkg/build.txt). The newest WetOwl Desk for Windows (the booth and the Rust stage), from the desk branch. Download $zip_url, unzip it anywhere, run wetowl-desk.exe. Windows may say \"Windows protected your PC\" (the program is not signed): More info, then Run anyway. It updates itself: a newer build is fetched in the background and goes in the next time it starts (Settings › Restart now does it at once)."
+
+  linux:
+    # 22.04: its glibc (2.35) is older than most desktops'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      WO_UPDATE_CHANNEL: wetowl-desk-linux
+    defaults:
+      run:
+        shell: bash
+        working-directory: desk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desk
+      - name: Stamp the build (the Desk's updater reads it)
+        shell: bash
+        run: |
+          echo "WO_BUILD_STAMP=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_ENV"
+          echo "WO_BUILD_COMMIT=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - name: Tools and libraries
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q cmake ninja-build pkg-config libasound2-dev libudev-dev libegl-dev libgl-dev libglvnd-dev libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dri mesa-vulkan-drivers xvfb
+      - name: Build the Desk
+        run: cargo build --release -p wetowl-desk -p wetowl-stage
+      - name: MilkDrop's helper (projectM through EGL), in lib/ beside the stage
+        run: |
+          cmake -S ../app/native/milk -B milk-build -G Ninja -DCMAKE_BUILD_TYPE=Release > /dev/null
+          cmake --build milk-build > /dev/null
+          mkdir -p milk-out
+          cp "$(find milk-build -name wetowl-milk -type f | head -1)" milk-out/
+          cp -P $(find milk-build -name 'libprojectM-4.so*') milk-out/
+          ls -l milk-out
+          readelf -d milk-out/wetowl-milk | grep -iE 'runpath|rpath' || true
+      - name: Engine and decoder tests
+        run: cargo test --release --workspace --no-fail-fast
+      - name: Smoke — the booth starts and draws (Xvfb, Mesa on the CPU)
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          WO_AUDIO=off WO_CONTROLLERS=off WO_USB=off xvfb-run -a -s "-screen 0 1920x1080x24" ./target/release/wetowl-desk --bench 8 --out smoke
+          cat smoke/bench-egui-glow.json
+      - name: Package
+        run: |
+          p=pkg/wetowl-desk
+          rm -rf pkg
+          mkdir -p "$p/lib" "$p/dance"
+          cp target/release/wetowl-desk target/release/wetowl-stage "$p/"
+          cp -P milk-out/* "$p/lib/"
+          for d in ../app/assets/show/dance/*/; do
+            m=$(basename "$d")
+            mkdir -p "$p/dance/$m"
+            cp "$d"dancer.json "$d"dancer.bin "$d"moves.bin "$d"skin.webp "$p/dance/$m/"
+          done
+          cp design/fonts/OFL-*.txt deploy/icon-256.png "$p/"
+          echo "$WO_BUILD_STAMP $WO_BUILD_COMMIT" > "$p/build.txt"
+          cat > "$p/README.txt" <<README
+          WetOwl Desk for Linux (build $WO_BUILD_STAMP $WO_BUILD_COMMIT)
+
+          Run ./wetowl-desk from this folder (x86_64, glibc 2.35 or newer: Ubuntu 22.04,
+          Debian 12, Fedora 36 and later). Sign in with your WetOwl account. The stage
+          (the show) opens from the Show page.
+
+          It updates itself: a newer build is fetched in the background and goes in when it
+          next starts (Settings: Restart now). The folder must stay writable for that.
+
+          A launcher in your menu, installed into ~/.local/opt/wetowl-desk:
+            curl -fsSL https://raw.githubusercontent.com/MCDuckler/muse/desk/desk/deploy/linux/install.sh | bash
+          README
+          tar -czf wetowl-desk-linux.tar.gz -C pkg wetowl-desk
+          ls -lh wetowl-desk-linux.tar.gz
+      - name: The package runs from where it is unpacked (the stage and MilkDrop found)
+        timeout-minutes: 3
+        run: |
+          t="$RUNNER_TEMP/unpacked folder"
+          mkdir -p "$t"
+          tar -xzf wetowl-desk-linux.tar.gz -C "$t"
+          ldd "$t/wetowl-desk/lib/wetowl-milk" | grep -i "not found" && { echo "the helper misses a library"; exit 1; } || true
+          WGPU_BACKEND=vulkan xvfb-run -a -s "-screen 0 1920x1080x24" "$t/wetowl-desk/wetowl-stage" --scene dance-art --seconds 10 --shot "$PWD/smoke-stage.png" > stage.log 2>&1 || true
+          grep -E 'STAGE|stage:|dance' stage.log | tail -6
+          grep -q 'STAGE fps=' stage.log || { echo "the unpacked stage never drew"; cat stage.log; exit 1; }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wetowl-desk-linux
+          path: |
+            desk/wetowl-desk-linux.tar.gz
+            desk/smoke/
+            desk/smoke-stage.png
+            desk/stage.log
+      - name: Published for download (rolling release wetowl-desk-linux)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/desk'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The tag sits on the default branch, as the Mac's does (see there).
+          tag=wetowl-desk-linux
+          url="https://github.com/${{ github.repository }}/releases/download/$tag/wetowl-desk-linux.tar.gz"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" \
+            --prerelease --latest=false --target "${{ github.event.repository.default_branch }}" \
+            --title "WetOwl Desk for Linux (rolling)" \
+            --notes "The newest WetOwl Desk for Linux, from the desk branch."
+          file=wetowl-desk-linux.tar.gz
+          gh release upload "$tag" "$file" --clobber
+          # the manifest the Desk's updater reads (after the download it names)
+          size=$(wc -c < "$file" | tr -d ' ')
+          sum=$( (sha256sum "$file" 2>/dev/null || shasum -a 256 "$file") | cut -d' ' -f1)
+          printf '{"commit":"%s","stamp":"%s","asset":"%s","size":%s,"sha256":"%s"}\n' "$WO_BUILD_COMMIT" "$WO_BUILD_STAMP" "$(basename "$file")" "$size" "$sum" > "$tag.json"
+          cat "$tag.json"
+          gh release upload "$tag" "$tag.json" --clobber
+          cat > notes.md <<NOTES
+          Build $WO_BUILD_STAMP $WO_BUILD_COMMIT. The newest WetOwl Desk for Linux (the booth, the Rust stage, MilkDrop), from the desk branch. x86_64, glibc 2.35+.
+
+          **Portable:** download $url, \`tar -xzf wetowl-desk-linux.tar.gz\`, run \`wetowl-desk/wetowl-desk\`.
+
+          **Installed with a launcher** (~/.local/opt/wetowl-desk, no root): \`curl -fsSL https://raw.githubusercontent.com/MCDuckler/muse/desk/desk/deploy/linux/install.sh | bash\`
+
+          It updates itself: a newer build is fetched in the background and goes in the next time it starts (Settings › Restart now does it at once).
+          NOTES
+          gh release edit "$tag" --notes-file notes.md
 
   macos:
     runs-on: macos-15
@@ -113,6 +264,7 @@ jobs:
     permissions:
       contents: write
     env:
+      WO_UPDATE_CHANNEL: wetowl-desk-macos
       STAGE: app/build/macos/Build/Products/Release/WetOwl.app
       APP: desk/target/macos/WetOwl Desk.app
     steps:
@@ -123,6 +275,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desk
+      - name: Stamp the build (the Desk's updater reads it)
+        shell: bash
+        run: |
+          echo "WO_BUILD_STAMP=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_ENV"
+          echo "WO_BUILD_COMMIT=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -321,13 +478,22 @@ jobs:
             --prerelease --latest=false --target "${{ github.event.repository.default_branch }}" \
             --title "WetOwl Desk for Mac (rolling)" \
             --notes "The newest WetOwl Desk for macOS, from the desk branch."
-          gh release upload "$tag" desk/target/macos/wetowl-desk-macos.zip --clobber
+          file=desk/target/macos/wetowl-desk-macos.zip
+          gh release upload "$tag" "$file" --clobber
+          # the manifest the Desk's updater reads (after the download it names)
+          size=$(wc -c < "$file" | tr -d ' ')
+          sum=$( (sha256sum "$file" 2>/dev/null || shasum -a 256 "$file") | cut -d' ' -f1)
+          printf '{"commit":"%s","stamp":"%s","asset":"%s","size":%s,"sha256":"%s"}\n' "$WO_BUILD_COMMIT" "$WO_BUILD_STAMP" "$(basename "$file")" "$size" "$sum" > "$tag.json"
+          cat "$tag.json"
+          gh release upload "$tag" "$tag.json" --clobber
           cat > notes.md <<NOTES
           Build $(cat "$APP/Contents/Resources/build.txt"). The newest WetOwl Desk for macOS (the booth, its stage, MilkDrop), from the desk branch. Apple silicon and Intel, macOS 11 or newer.
 
           **Portable, nothing to install:** download $zip_url, unzip it anywhere, open the folder *WetOwl Desk* and double-click *WetOwl Desk.app*. The app is not signed with a paid Apple account, so the first time macOS stops it: click Done, then System Settings › Privacy & Security › *Open Anyway* — or, with no password, in Terminal: \`xattr -dr com.apple.quarantine\` + the app dragged in. *READ ME FIRST.txt* in the folder says the same.
 
           **Portable from Terminal (no Gatekeeper step; lands in your home folder):** \`cd ~ && curl -fL $zip_url -o wetowl-desk.zip && ditto -x -k wetowl-desk.zip . && rm wetowl-desk.zip && open "WetOwl Desk/WetOwl Desk.app"\`
+
+          **It updates itself:** a newer build is fetched in the background and goes in the next time it starts (Settings › Restart now does it at once). Not while macOS runs it from a locked place (opened straight from the download, still quarantined): move it with Finder first.
 
           **Installed into ~/Applications** (no administrator; run again to update): \`curl -fsSL https://raw.githubusercontent.com/MCDuckler/muse/desk/desk/deploy/macos/install.sh | bash\`
           NOTES

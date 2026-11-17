@@ -178,7 +178,30 @@ impl App {
         if !two {
             kit::hint(p, pos2(r.left(), r.bottom() - 26.0), Align2::LEFT_BOTTOM, "Sound and headphones: a wider window shows them here");
         }
-        kit::hint(p, pos2(r.left(), r.bottom() - 6.0), Align2::LEFT_BOTTOM, &format!("WetOwl Desk {}", env!("CARGO_PKG_VERSION")));
+        // the build, and keeping it up to date
+        let bw = 150.0;
+        let state = self.updates.as_ref().map(wo_update::Updater::state);
+        let words = format!("WetOwl Desk {} · {} · {}", env!("CARGO_PKG_VERSION"), wo_update::this_build().words(), state.as_ref().map_or_else(|| "updates off".into(), wo_update::State::words));
+        let room = r.width() - if state.as_ref().is_some_and(|s| !matches!(s, wo_update::State::Off(_))) { bw + 12.0 } else { 0.0 };
+        kit::clipped(p, pos2(r.left(), r.bottom() - 14.0), &words, t::HINT, "", t::faint(), room);
+        if let (Some(u), Some(s)) = (&self.updates, &state)
+            && !matches!(s, wo_update::State::Off(_))
+        {
+            let b = Rect::from_min_size(pos2(r.right() - bw, r.bottom() - 28.0), vec2(bw, 26.0));
+            let ready = matches!(s, wo_update::State::Ready(_));
+            let busy = matches!(s, wo_update::State::Checking | wo_update::State::Fetching(..));
+            let word = if ready { "Restart now" } else { "Check for updates" };
+            let resp = Btn::new(word).accent(ready).enabled(!busy).size(11.0).show(ui, p, b, "set-update");
+            if resp.on_hover_text(s.words()).clicked() {
+                if ready {
+                    if u.restart() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                } else {
+                    u.check_now();
+                }
+            }
+        }
         if changed {
             self.save_prefs(&ctx);
         }

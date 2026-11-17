@@ -3525,6 +3525,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha2"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4677,6 +4688,7 @@ dependencies = [
  "wo-control",
  "wo-deskcore",
  "wo-house",
+ "wo-update",
 ]
 
 [[package]]
@@ -5467,6 +5479,16 @@ dependencies = [
  "wo-dance",
  "wo-render",
  "wo-show",
+]
+
+[[package]]
+name = "wo-update"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "ureq",
 ]
 
 [[package]]

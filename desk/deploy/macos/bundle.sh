@@ -46,7 +46,7 @@ for d in ../app/assets/show/dance/*/; do
 done
 
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' apps/wetowl-desk/Cargo.toml | head -1)
-build="$(date -u +%Y%m%d%H%M)"
+build="${WO_BUILD_STAMP:-$(date -u +%Y%m%d%H%M)}"
 sed -e "s/__VERSION__/$version/" -e "s/__BUILD__/$build/" deploy/macos/Info.plist > "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
 printf '%s %s\n' "$(git rev-parse --short HEAD)" "$build" > "$app/Contents/Resources/build.txt"
