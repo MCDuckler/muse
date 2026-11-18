@@ -59,7 +59,7 @@ pub use wo_show::shares::share_word;
 pub use wo_show::type3d as type3d;
 pub use wo_show::video as video;
 pub use videos::VideoShelf;
-pub use follow::{FollowDeck, FollowOptions, FollowView};
+pub use follow::{FollowDeck, FollowHere, FollowOptions, FollowView, LibraryView, Rkbx};
 pub use wo_show::Mix as ShowMix;
 /// The scenes the Rust stage draws so far.
 pub use wo_show::scenes::DRAWN as RUST_SCENES;
@@ -839,7 +839,8 @@ impl Desk {
         self.stems_tick();
         self.mind_tick();
         self.feed_stage();
-        if !self.auto {
+        // following rekordbox, the decks are rekordbox's: no Auto DJ, however it was asked
+        if !self.auto || self.follow.is_some() {
             return;
         }
         // a hand loaded something else onto the incoming deck: plan again

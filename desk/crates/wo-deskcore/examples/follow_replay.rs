@@ -29,14 +29,16 @@ fn main() {
     };
     let port = UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let addr = if live.is_some() { wo_rkbx::listen::DEFAULT_ADDR.to_owned() } else { format!("127.0.0.1:{port}") };
-    let mut desk = wo_deskcore::Desk::open_following(wo_deskcore::FollowOptions { addr: addr.clone(), ..Default::default() }).expect("following");
+    // live: the Desk runs rkbx_link itself, as for a user; replayed: nobody does
+    let o = wo_deskcore::FollowOptions { addr: addr.clone(), run_rkbx: live.is_some(), ..Default::default() };
+    let mut desk = wo_deskcore::Desk::open_following(o).expect("following");
     // the library first, as at a gig (rkbx_link starts after)
     let t0 = Instant::now();
-    while desk.following().unwrap().library.is_none() && t0.elapsed() < Duration::from_secs(20) {
+    while (desk.following().unwrap().library.is_none() || desk.following().unwrap().reading) && t0.elapsed() < Duration::from_secs(20) {
         desk.tick();
         std::thread::sleep(Duration::from_millis(16));
     }
-    println!("library: {:?} records in {} ms", desk.following().unwrap().library, t0.elapsed().as_millis());
+    println!("library: {:?} in {} ms", desk.following().unwrap().library.map(|l| (l.tracks, l.with_phrases, l.missing.len())), t0.elapsed().as_millis());
     let tx = UdpSocket::bind("127.0.0.1:0").unwrap();
     let end = live.unwrap_or_else(|| heard.last().map_or(0.0, |h| at(h.t)) + 1.0);
     let start = Instant::now();
@@ -88,6 +90,12 @@ fn main() {
                     v.decoded * 100.0,
                     form.sections.len()
                 ));
+            }
+            if live.is_some() {
+                line.push_str(&format!(" | rkbx: {}", match &fv.rkbx {
+                    wo_deskcore::Rkbx::Ours(r) => format!("ours {:?} v{:?} knows {:?} restarts {}", r.state, r.version, r.knows, r.restarts),
+                    other => format!("{other:?}"),
+                }));
             }
             println!("{line}");
         }

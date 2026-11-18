@@ -30,6 +30,7 @@ mod gallery;
 mod overlays;
 mod paint;
 mod plan;
+mod rekordbox;
 mod platter;
 mod rotation;
 mod scene;
@@ -59,7 +60,12 @@ pub(crate) enum Overlay {
     Controllers,
     /// rekordbox's effects (the WetOwl's layout; rekordbox's has them under the decks).
     Fx,
+    /// Following rekordbox: on and off, what it needs, how it goes.
+    Rekordbox,
 }
+
+/// The Desk is to start again once its window is gone (following rekordbox turned on or off).
+pub(crate) static RESTART: AtomicBool = AtomicBool::new(false);
 
 /// How the crate is sorted: by fit (the booth's own order), title, artist, tempo or key;
 /// and the other way round.
@@ -168,6 +174,12 @@ pub(crate) struct App {
     /// The Desk keeping itself up to date (none in tests), and the build last said ready.
     pub(crate) updates: Option<wo_update::Updater>,
     update_said: Option<String>,
+    /// Following rekordbox was asked for and could not start: why.
+    pub(crate) follow_failed: Option<String>,
+    /// What is here for following (the rekordbox page), and when it was looked for.
+    pub(crate) follow_here: Option<(Instant, wo_deskcore::FollowHere)>,
+    /// rekordbox seen open, and when that was looked at.
+    pub(crate) rekordbox_seen: Option<(Instant, bool)>,
 }
 
 /// The live stage behind the glass: its pictures blurred, crossfaded over [motion::GENTLE];
@@ -238,11 +250,13 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // --bench plays and mixes by itself; a desk opened by hand stays quiet
         let bench = Bench::from_args(if glow() { "egui-glow" } else { "egui-wgpu" });
-        // --follow rekordbox [--music <dir>]… [--rkbx <addr>]: the Desk follows a set played
-        // in rekordbox (rkbx_link's OSC), silently, and the show with it
-        let mut desk = match follow_options() {
+        // following rekordbox (the settings' choice, or --follow rekordbox [--music <dir>]…
+        // [--rkbx <addr>]): the Desk silent, the show with rekordbox's decks
+        let mut follow_failed = None;
+        let mut desk = match follow_options(&Prefs::read()) {
             Some(o) => Desk::open_following(o).unwrap_or_else(|e| {
                 eprintln!("follow: {e}; opening as usual");
+                follow_failed = Some(e);
                 Desk::open(false)
             }),
             None => Desk::open(bench.is_some()),
@@ -253,6 +267,7 @@ impl App {
         }
         let arg = |name: &str| std::env::args().collect::<Vec<_>>().windows(2).find(|w| w[0] == name).map(|w| w[1].clone());
         let mut app = App::with(&cc.egui_ctx, desk, bench, true);
+        app.follow_failed = follow_failed;
         // --page show: open on the Show page (screenshots, a show-only night)
         app.page = match arg("--page").as_deref() {
             Some("show") => show::Page::Show,
@@ -265,6 +280,7 @@ impl App {
             Some("set") => Some(Overlay::Set),
             Some("controllers") => Some(Overlay::Controllers),
             Some("fx") => Some(Overlay::Fx),
+            Some("rekordbox") => Some(Overlay::Rekordbox),
             _ => None,
         };
         // --search <words> [--found-tab 0|1|2]: the crate opens on that search (screenshots)
@@ -405,6 +421,9 @@ impl App {
             flights: vec![],
             seen: (None, false, None),
             updates: None,
+            follow_failed: None,
+            follow_here: None,
+            rekordbox_seen: None,
             update_said: None,
         }
     }
@@ -487,6 +506,13 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// The window going: following stopped first (rkbx_link with it, its port let go).
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Ok(mut d) = self.desk.lock() {
+            d.stop_following();
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let t0 = Instant::now();
         let (full, moving, stage) = self.frame(ui);
@@ -633,15 +659,16 @@ impl App {
 }
 
 /// The window's icon (the launcher's, for X11 and Windows; Wayland takes the launcher's).
-/// `--follow rekordbox`, with any `--music <dir>` (each searched for rekordbox's audio; the
-/// usual Music folder when none) and `--rkbx <addr>` (where rkbx_link sends).
-fn follow_options() -> Option<wo_deskcore::FollowOptions> {
+/// Following rekordbox, when the settings say so or `--follow rekordbox` does: the music
+/// folders and rkbx_link the settings chose (`--music <dir>`… instead, for this run) and
+/// `--rkbx <addr>` (where rkbx_link sends).
+fn follow_options(prefs: &Prefs) -> Option<wo_deskcore::FollowOptions> {
     let a: Vec<String> = std::env::args().collect();
     let after = |name: &str| a.windows(2).filter(|w| w[0] == name).map(|w| w[1].clone()).collect::<Vec<_>>();
-    if !after("--follow").iter().any(|v| v == "rekordbox") {
+    if !prefs.follow_rekordbox && !after("--follow").iter().any(|v| v == "rekordbox") {
         return None;
     }
-    let mut o = wo_deskcore::FollowOptions::default();
+    let mut o = wo_deskcore::FollowOptions { music: prefs.music(), rkbx_link: prefs.rkbx_link.clone(), ..Default::default() };
     let music: Vec<std::path::PathBuf> = after("--music").into_iter().map(Into::into).collect();
     if !music.is_empty() {
         o.music = music;
@@ -650,6 +677,47 @@ fn follow_options() -> Option<wo_deskcore::FollowOptions> {
         o.addr = addr;
     }
     Some(o)
+}
+
+/// `args` without `--follow <what>` (the settings decide that now).
+fn restart_args(mut args: Vec<String>) -> Vec<String> {
+    while let Some(i) = args.iter().position(|a| a == "--follow") {
+        args.drain(i..(i + 2).min(args.len()));
+    }
+    args
+}
+
+/// This Desk started again, with its arguments but `--follow rekordbox`.
+fn restart() {
+    let args = restart_args(std::env::args().skip(1).collect());
+    match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(&args).spawn()) {
+        Ok(_) => {}
+        Err(e) => eprintln!("restarting the Desk: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod follow_tests {
+    use super::*;
+
+    #[test]
+    fn a_restart_leaves_following_to_the_settings() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(restart_args(a(&["--follow", "rekordbox", "--stage"])), a(&["--stage"]));
+        assert_eq!(restart_args(a(&["--size", "1440x860", "--follow", "rekordbox"])), a(&["--size", "1440x860"]));
+        assert_eq!(restart_args(a(&["--follow"])), a(&[]));
+    }
+
+    #[test]
+    fn the_settings_alone_turn_following_on() {
+        // (this test's own arguments carry no --follow)
+        assert!(follow_options(&Prefs::default()).is_none());
+        let p = Prefs { follow_rekordbox: true, music_folders: vec!["D:/Music".into()], rkbx_link: Some("D:/rkbx".into()), ..Default::default() };
+        let o = follow_options(&p).unwrap();
+        assert_eq!(o.music, vec![std::path::PathBuf::from("D:/Music")]);
+        assert_eq!(o.rkbx_link, Some("D:/rkbx".into()));
+        assert!(o.run_rkbx);
+    }
 }
 
 fn icon() -> egui::IconData {
@@ -721,6 +789,11 @@ fn main() -> eframe::Result {
             Ok(Box::new(app))
         }),
     );
+    // following rekordbox turned on or off: this Desk again, as it was started (but for a
+    // --follow, which the settings now decide)
+    if RESTART.load(Ordering::Relaxed) && !updates.restarting() {
+        restart();
+    }
     // "Restart now" in the settings: the window gone, the update in, the new Desk started
     if updates.restarting()
         && let Err(e) = wo_update::relaunch_into_update()

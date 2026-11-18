@@ -233,25 +233,30 @@ impl App {
             x = tr.left() - 2.0;
             ui.interact(tr, ui.scope_id().with("dsp-tip"), Sense::hover()).on_hover_text(tip);
         }
-        // following rekordbox: whether rkbx_link is heard, the library read, each deck found
-        if let Some(fv) = desk.following() {
-            let heard = if fv.live { "rkbx on" } else { "rkbx silent" };
-            let lib = fv.library.map_or("library…".to_owned(), |n| format!("{n} records"));
-            let missing = fv.decks.iter().any(|d| d.found == Some(false));
-            let colour = if fv.trouble.is_some() || !fv.live || missing { t::warm() } else { t::soft() };
-            let tr = kit::text(p, pos2(x - 6.0, right.y), Align2::RIGHT_CENTER, &format!("rekordbox · {heard} · {lib}"), 11.5, "mono", colour);
-            let mut tip = vec![fv.trouble.clone().unwrap_or_else(|| format!("Following rekordbox: {} messages from rkbx_link", fv.packets))];
-            for (i, d) in fv.decks.iter().enumerate() {
-                let found = match d.found {
-                    None => "nothing loaded".to_owned(),
-                    Some(true) => format!("{}{}", if d.playing { "playing" } else { "stopped" }, d.drift_ms.map_or(String::new(), |ms| format!(", {ms:+.0} ms off"))),
-                    Some(false) => "not found in rekordbox's library and the music folders".to_owned(),
-                };
-                let lead = if fv.lead == Some(i) { "  (the show follows it)" } else { "" };
-                tip.push(format!("Deck {}: {} — {found}{lead}", i + 1, if d.title.is_empty() { "—" } else { &d.title }));
+        // rekordbox: following (how it goes, in a sentence), or, rekordbox being open, the
+        // offer; a click: the rekordbox page
+        let rb = match desk.following() {
+            Some(v) => Some(crate::rekordbox::summary(&v)),
+            None if self.rekordbox_open() => Some((State::Off, "Follow rekordbox?".to_owned())),
+            None => None,
+        };
+        if let Some((st, words)) = rb {
+            let short: String = if words.chars().count() > 46 { format!("{}…", words.chars().take(45).collect::<String>()) } else { words.clone() };
+            let colour = match st {
+                State::Trouble => t::warm(),
+                State::Off => t::muted(),
+                _ => t::soft(),
+            };
+            let tr = kit::text(p, pos2(x - 8.0, right.y), Align2::RIGHT_CENTER, &short, 12.0, "", colour);
+            let ir = Rect::from_center_size(pos2(tr.left() - 14.0, right.y), vec2(26.0, 26.0));
+            kit::status(ui, p, ir, Icon::Disc, st, ("status-icon", "rekordbox"));
+            let all = ir.union(tr).expand(3.0);
+            let resp = ui.interact(all, ui.scope_id().with("rekordbox-chip"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+            if resp.on_hover_text(format!("{words}
+a click: following rekordbox")).clicked() {
+                self.overlay = Some(Overlay::Rekordbox);
             }
-            ui.interact(tr, ui.scope_id().with("follow-tip"), Sense::hover()).on_hover_text(tip.join("\n"));
-            x = tr.left() - 8.0;
+            x = ir.left() - 8.0;
         }
         x
     }

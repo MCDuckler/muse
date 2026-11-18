@@ -30,6 +30,10 @@ pub struct Entry {
     pub wetowl_id: Option<i64>,
     /// When the analysis was last written (newer wins between two of one file).
     pub analysed: Option<SystemTime>,
+    /// It has a beat grid (a record, not a one-shot sample).
+    pub beats: bool,
+    /// It has rekordbox's phrase analysis.
+    pub phrases: bool,
 }
 
 impl Entry {
@@ -51,6 +55,11 @@ pub struct Stats {
     pub with_audio: usize,
     /// File names found more than once in the music folders (the first is taken).
     pub ambiguous: usize,
+    /// Records (with a beat grid), and of them those with phrases.
+    pub tracks: usize,
+    pub with_phrases: usize,
+    /// Records whose audio was not found: their file names.
+    pub missing: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -110,7 +119,10 @@ impl Index {
         let mut index = Index::default();
         for dat in dats {
             let Ok(bytes) = std::fs::read(&dat) else { continue };
-            let Some(path) = wo_usb::anlz::read(&bytes).path else { continue };
+            let a = wo_usb::anlz::read(&bytes);
+            let Some(path) = a.path else { continue };
+            let beats = a.beats.len() > 8;
+            let phrases = std::fs::read(dat.with_extension("EXT")).is_ok_and(|b| wo_usb::anlz::read(&b).phrases.is_some());
             index.stats.analyses += 1;
             let file_name = path.rsplit(['/', '\\']).next().unwrap_or(&path).to_owned();
             let audio = if Path::new(&path).is_absolute() && Path::new(&path).is_file() {
@@ -126,9 +138,16 @@ impl Index {
             if audio.is_some() {
                 index.stats.with_audio += 1;
             }
+            if beats {
+                index.stats.tracks += 1;
+                index.stats.with_phrases += phrases as usize;
+                if audio.is_none() {
+                    index.stats.missing.push(file_name.clone());
+                }
+            }
             let wetowl_id = tags.comment.split_whitespace().find_map(|w| w.strip_prefix("wetowl:")?.parse().ok());
             let analysed = std::fs::metadata(&dat).and_then(|m| m.modified()).ok();
-            index.push(Entry { dat, file_name, audio, tags, wetowl_id, analysed });
+            index.push(Entry { dat, file_name, audio, tags, wetowl_id, analysed, beats, phrases });
         }
         index
     }
@@ -184,6 +203,8 @@ mod tests {
             tags: Tags { title: title.into(), artist: artist.into(), ..Default::default() },
             wetowl_id: None,
             analysed: None,
+            beats: true,
+            phrases: true,
         }
     }
 

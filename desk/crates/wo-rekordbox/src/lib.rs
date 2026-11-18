@@ -27,16 +27,47 @@ pub fn library_dir() -> Option<PathBuf> {
     dir.is_dir().then_some(dir)
 }
 
+/// The rekordbox installed here, its version ("7.2.2"; on a Mac only what its folder says,
+/// "7"): the newest of `C:\Program Files\rekordbox\rekordbox <version>` or
+/// `/Applications/rekordbox <version>`.
+pub fn installed() -> Option<String> {
+    let (root, prefix) = if cfg!(target_os = "windows") {
+        (PathBuf::from(std::env::var_os("ProgramFiles").unwrap_or_else(|| "C:\\Program Files".into())).join("rekordbox"), "rekordbox ")
+    } else {
+        (PathBuf::from("/Applications"), "rekordbox ")
+    };
+    let mut versions: Vec<String> = std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.strip_prefix(prefix).map(str::to_owned))
+        .filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .collect();
+    let key = |v: &String| v.split('.').map(|n| n.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>();
+    versions.sort_by_key(key);
+    versions.pop()
+}
+
+/// rekordbox is open now, as its library says (its database's shared-memory file, there while
+/// rekordbox has it open; a crash can leave it behind, so a hint, not a fact).
+pub fn open_now() -> bool {
+    library_dir().is_some_and(|d| d.join("master.db-shm").exists())
+}
+
 /// Where the library keeps its analyses.
 pub fn anlz_root(library: &Path) -> PathBuf {
     library.join("share").join("PIONEER").join("USBANLZ")
 }
 
-/// The usual music folder (the one searched when no other is given).
+/// The usual music folder.
 pub fn default_music() -> Option<PathBuf> {
-    let home = std::env::var_os(if cfg!(target_os = "windows") { "USERPROFILE" } else { "HOME" })?;
-    let m = PathBuf::from(home).join("Music");
-    m.is_dir().then_some(m)
+    default_music_folders().into_iter().next()
+}
+
+/// Where music usually is, searched when no folders are given: Music, Downloads and the
+/// Desktop, those that are there.
+pub fn default_music_folders() -> Vec<PathBuf> {
+    let Some(home) = std::env::var_os(if cfg!(target_os = "windows") { "USERPROFILE" } else { "HOME" }) else { return vec![] };
+    ["Music", "Downloads", "Desktop"].iter().map(|d| PathBuf::from(&home).join(d)).filter(|p| p.is_dir()).collect()
 }
 
 /// What the Desk takes from rekordbox for one record.

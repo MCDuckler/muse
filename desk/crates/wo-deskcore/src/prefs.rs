@@ -23,6 +23,12 @@ pub struct Prefs {
     pub bar_groups: bool,
     /// rekordbox's layout shows its effect panel under the decks.
     pub club_fx: bool,
+    /// Follow a set played in rekordbox: the Desk silent, the show with rekordbox's decks.
+    pub follow_rekordbox: bool,
+    /// Where rekordbox's audio is looked for (none: Music, Downloads and the Desktop).
+    pub music_folders: Vec<PathBuf>,
+    /// rkbx_link chosen by hand (the program or its folder).
+    pub rkbx_link: Option<PathBuf>,
 }
 
 /// rekordbox's waveform colours (Preferences → View → Waveform color), and the Desk's own.
@@ -60,11 +66,29 @@ pub enum DeskLayout {
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { reduced_motion: false, still_backdrop: false, backdrop_light: 1.0, disc_label: 0.31, wide_crate: false, wave_style: WaveStyle::ThreeBand, layout: DeskLayout::WetOwl, bar_groups: true, club_fx: true }
+        Prefs {
+            reduced_motion: false,
+            still_backdrop: false,
+            backdrop_light: 1.0,
+            disc_label: 0.31,
+            wide_crate: false,
+            wave_style: WaveStyle::ThreeBand,
+            layout: DeskLayout::WetOwl,
+            bar_groups: true,
+            club_fx: true,
+            follow_rekordbox: false,
+            music_folders: vec![],
+            rkbx_link: None,
+        }
     }
 }
 
 impl Prefs {
+    /// Where rekordbox's audio is looked for: the folders chosen, else the usual ones.
+    pub fn music(&self) -> Vec<PathBuf> {
+        if self.music_folders.is_empty() { wo_rekordbox::default_music_folders() } else { self.music_folders.clone() }
+    }
+
     fn file() -> Option<PathBuf> {
         wo_house::folders::config().map(|d| d.join("wetowl-desk").join("desk.json"))
     }

@@ -13,6 +13,8 @@ wo-control = { version = "0.1.0", path = "../../crates/wo-control" }
 wo-deskcore.workspace = true
 wo-house = { version = "0.1.0", path = "../../crates/wo-house" }
 wo-update = { version = "0.1.0", path = "../../crates/wo-update" }
+# the folder and file pickers (following rekordbox: music folders, rkbx_link)
+rfd = "0.15"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2.191"

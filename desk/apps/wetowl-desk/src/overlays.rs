@@ -28,10 +28,11 @@ impl App {
         let Some(which) = self.overlay.or(self.overlay_was).filter(|_| k > 0.0) else { return };
         let size = match which {
             Overlay::Keys => vec2(780.0, 500.0),
-            Overlay::Settings => vec2((full.width() - 80.0).clamp(620.0, 1120.0), 612.0),
+            Overlay::Settings => vec2((full.width() - 80.0).clamp(620.0, 1120.0), 660.0),
             Overlay::Set => vec2((full.width() - 80.0).min(1180.0), (full.height() - 80.0).min(720.0)),
             Overlay::Controllers => vec2((full.width() - 80.0).min(1080.0), (full.height() - 80.0).min(680.0)),
             Overlay::Fx => vec2((full.width() - 80.0).min(1340.0), 150.0),
+            Overlay::Rekordbox => vec2((full.width() - 80.0).clamp(620.0, 980.0), (full.height() - 80.0).min(700.0)),
         };
         egui::Area::new(egui::Id::unique("overlay-area")).order(egui::Order::Foreground).fixed_pos(full.min).show(&ctx, |ui| {
             let (all, scrim) = ui.allocate_exact_size(full.size(), Sense::click());
@@ -49,6 +50,7 @@ impl App {
                 Overlay::Set => "Plan a set",
                 Overlay::Controllers => "Controllers",
                 Overlay::Fx => "Effects",
+                Overlay::Rekordbox => "Follow rekordbox",
             };
             kit::text(&pp, inner.left_top() + vec2(0.0, 2.0), Align2::LEFT_TOP, title, t::TITLE, "semi", t::text());
             let close = Rect::from_min_size(pos2(inner.right() - 30.0, inner.top() - 4.0), vec2(30.0, 30.0));
@@ -62,6 +64,7 @@ impl App {
                 Overlay::Set => self.set_page(desk, ui, &pp, body),
                 Overlay::Controllers => self.controllers_page(desk, ui, &pp, body),
                 Overlay::Fx => self.fx_panel(desk, ui, &pp, Rect::from_min_size(body.min, vec2(body.width(), 64.0))),
+                Overlay::Rekordbox => self.rekordbox_page(desk, ui, &pp, body),
             }
         });
     }
@@ -164,6 +167,17 @@ impl App {
             kit::clipped(p, pos2(x + 16.0, cy), &words, 13.0, "", t::soft(), r.right() - x - 16.0);
         }
         y += 52.0;
+        row(p, y, "rekordbox", "");
+        let follow_words = match desk.following() {
+            Some(v) => crate::rekordbox::summary(&v).1,
+            None => "Off: the show can follow rekordbox".to_owned(),
+        };
+        kit::clipped(p, pos2(x, y + 13.0), &follow_words, 13.0, "", t::soft(), r.right() - x - 130.0);
+        let rb = Rect::from_min_size(pos2(r.right() - 120.0, y), vec2(120.0, 28.0));
+        if Btn::new("rekordbox…").size(11.0).show(ui, p, rb, "set-rekordbox").on_hover_text("Follow a set played in rekordbox: on and off, what it needs").clicked() {
+            self.overlay = Some(Overlay::Rekordbox);
+        }
+        y += 44.0;
         row(p, y, "The house", "");
         match desk.house().map(|(s, u)| (s.trim_start_matches("https://").to_owned(), u.map(str::to_owned))) {
             Some((server, user)) => {
