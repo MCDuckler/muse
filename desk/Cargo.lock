@@ -5442,6 +5442,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wo-rekordbox"
+version = "0.1.0"
+dependencies = [
+ "symphonia",
+ "wo-usb",
+]
+
+[[package]]
 name = "wo-render"
 version = "0.1.0"
 dependencies = [

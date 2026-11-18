@@ -50,6 +50,9 @@ pub struct Anlz {
     pub cues_ext: Vec<Cue>,
     pub waves: Waves,
     pub phrases: Option<Phrases>,
+    /// The audio file's path (PPTH). On a stick the whole path under its root; in
+    /// rekordbox's own library only `?/<file name>`.
+    pub path: Option<String>,
 }
 
 /// rekordbox's scrolling waveforms, one entry a column, 150 columns a second (empty where
@@ -206,6 +209,15 @@ fn wave_entries(s: &[u8], head: usize, size: usize) -> Option<&[u8]> {
     s.get(head..end.min(s.len()))
 }
 
+/// The PPTH section's UTF-16 path.
+fn path(s: &[u8]) -> Option<String> {
+    let head = s.u32_at(4)? as usize;
+    let len = s.u32_at(12)? as usize;
+    let text = s.get(head..head + len)?;
+    let units: Vec<u16> = text.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
+    Some(String::from_utf16_lossy(&units).trim_end_matches('\0').to_owned())
+}
+
 /// The sections of an analysis file, by tag.
 fn sections(b: &[u8]) -> Vec<([u8; 4], &[u8])> {
     let mut out = vec![];
@@ -269,6 +281,7 @@ pub fn read(b: &[u8]) -> Anlz {
                     a.waves.band_scale = Some([x, y, z]);
                 }
             }
+            b"PPTH" => a.path = path(s),
             b"PSSI" => a.phrases = phrases(s),
             _ => {}
         }
@@ -494,6 +507,39 @@ mod tests {
         assert_eq!(mid.list.iter().map(|p| p.kind.name()).collect::<Vec<_>>(), ["Intro", "Verse 2", "Bridge"]);
         // phrases going backwards: not believed
         assert!(read(&file(&[pssi(2, &[(40, 1), (17, 3)], true)])).phrases.is_none());
+    }
+
+    #[test]
+    fn the_path_reads_from_ppth() {
+        let text: Vec<u8> = "?/03 XXL.m4a\0".encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let head = (text.len() as u32).to_be_bytes();
+        let a = read(&file(&[section(b"PPTH", &head, &text)]));
+        assert_eq!(a.path.as_deref(), Some("?/03 XXL.m4a"));
+    }
+
+    /// The head of "03 XXL"'s PSSI as rekordbox 7.2.2 wrote it into its own library (plain,
+    /// mid mood, ending on beat 305).
+    #[test]
+    fn rekordbox_libraries_plain_phrases_read() {
+        let entries = [(1u16, 1u16), (16, 9), (80, 9), (112, 8)];
+        let mut head = 24u32.to_be_bytes().to_vec();
+        head.extend((entries.len() as u16).to_be_bytes());
+        head.extend(2u16.to_be_bytes());
+        head.extend([0, 0, 0, 0, 0, 0]);
+        head.extend(0x131u16.to_be_bytes());
+        head.extend([1, 1, 0, 0]);
+        let mut body = vec![];
+        for (i, (beat, kind)) in entries.iter().enumerate() {
+            let mut e = ((i + 1) as u16).to_be_bytes().to_vec();
+            e.extend(beat.to_be_bytes());
+            e.extend(kind.to_be_bytes());
+            e.resize(24, 0);
+            body.extend(e);
+        }
+        let p = read(&file(&[section(b"PSSI", &head, &body)])).phrases.expect("phrases");
+        assert_eq!((p.mood, p.end_beat), (2, 305));
+        let got: Vec<_> = p.list.iter().map(|x| (x.beat, x.kind)).collect();
+        assert_eq!(got, [(1, PhraseKind::Intro), (16, PhraseKind::Chorus), (80, PhraseKind::Chorus), (112, PhraseKind::Bridge)]);
     }
 
     #[test]
