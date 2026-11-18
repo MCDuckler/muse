@@ -8,6 +8,7 @@ use crate::ui::kit::{self, Btn};
 use crate::ui::motion;
 use crate::ui::tokens::{self as t, Tone};
 use crate::{App, Overlay};
+use wo_deskcore::{DeskLayout, WaveStyle};
 
 /// The keys, by where they act.
 const KEYS: [(&str, &[(&str, &str)]); 4] = [
@@ -402,6 +403,32 @@ impl App {
             self.save_prefs(ui.ctx());
         }
         y += 34.0;
-        words(p, y, "Hidden: the stage and the Auto DJ fold away and the crate takes the width (C on the keyboard, or the panel button by the Auto DJ).", t::faint());
+        y += words(p, y, "Hidden: the stage and the Auto DJ fold away and the crate takes the width (C on the keyboard, or the panel button by the Auto DJ).", t::faint()) + 22.0;
+
+        kit::section(p, pos2(r.left(), y), Align2::LEFT_TOP, "Waveforms and layout");
+        y += 26.0;
+        let seg = |y: f32, most: f32| Rect::from_min_size(pos2(x, y), vec2(w.min(most), 28.0));
+        row(p, y, "Layout");
+        let layouts = [DeskLayout::WetOwl, DeskLayout::Club];
+        let at = layouts.iter().position(|l| *l == self.prefs.layout);
+        if let Some(i) = kit::segmented(ui, p, seg(y, 300.0), &["WetOwl", "rekordbox"], at, Tone::Neutral, "set-layout") {
+            self.prefs.layout = layouts[i];
+            self.save_prefs(ui.ctx());
+        }
+        y += 40.0;
+        row(p, y, "Colours");
+        let at = WaveStyle::ALL.iter().position(|w| *w == self.prefs.wave_style);
+        if let Some(i) = kit::segmented(ui, p, seg(y, 340.0), &WaveStyle::ALL.map(WaveStyle::name), at, Tone::Neutral, "set-wave") {
+            self.prefs.wave_style = WaveStyle::ALL[i];
+            self.save_prefs(ui.ctx());
+        }
+        y += 40.0;
+        row(p, y, "Bar groups");
+        if let Some(i) = kit::segmented(ui, p, seg(y, 300.0), &["Marked", "Beats only"], Some(!self.prefs.bar_groups as usize), Tone::Neutral, "set-groups") {
+            self.prefs.bar_groups = i == 0;
+            self.save_prefs(ui.ctx());
+        }
+        y += 34.0;
+        words(p, y, "rekordbox's layout and its waveform colours (3Band, RGB, Blue); a rekordbox stick's records show rekordbox's own waveforms. Ctrl L swaps the layout.", t::faint());
     }
 }

@@ -85,6 +85,9 @@ pub struct Analysis {
     pub bar_one: usize,
     /// The extended list where the `.EXT` has one, else the `.DAT`'s; sorted by time.
     pub cues: Vec<Cue>,
+    /// rekordbox's own waveforms (`.EXT`, `.2EX`).
+    pub waves: anlz::Waves,
+    pub phrases: Option<anlz::Phrases>,
 }
 
 #[derive(Debug)]
@@ -285,10 +288,14 @@ impl Track {
     }
 }
 
-/// The grid and cues in a record's analysis, from the path of its `.DAT`.
+/// The grid, cues, waveforms and phrases in a record's analysis, from the path of its
+/// `.DAT` (its `.EXT` and `.2EX` beside it, where rekordbox wrote them).
 pub fn analysis_of(dat: &Path) -> Result<Analysis, Error> {
     let a = anlz::read(&std::fs::read(dat)?);
-    let ext = std::fs::read(dat.with_extension("EXT")).map(|b| anlz::read(&b)).unwrap_or_default();
+    let mut ext = std::fs::read(dat.with_extension("EXT")).map(|b| anlz::read(&b)).unwrap_or_default();
+    let two = std::fs::read(dat.with_extension("2EX")).map(|b| anlz::read(&b)).unwrap_or_default();
+    anlz::merge_waves(&mut ext, two);
+    let (waves, phrases) = (std::mem::take(&mut ext.waves), ext.phrases.take());
     let mut cues = if !ext.cues_ext.is_empty() {
         ext.cues_ext
     } else if !a.cues.is_empty() {
@@ -298,7 +305,7 @@ pub fn analysis_of(dat: &Path) -> Result<Analysis, Error> {
     };
     cues.sort_by_key(|c| c.ms);
     let (beats, bar_one) = grid(&a.beats);
-    Ok(Analysis { beats, bar_one, cues })
+    Ok(Analysis { beats, bar_one, cues, waves, phrases })
 }
 
 // ---------------------------------------------------------------- the grid
@@ -459,6 +466,37 @@ mod tests {
                 println!("  #{} {} — {} · {} · {:.2} BPM · {} s · {} beats (one at {}) · cues {:?}", t.id, t.title, t.artist, t.key, t.bpm, t.seconds, a.beats.len(), a.bar_one, a.cues.iter().map(|c| (c.kind, c.ms)).collect::<Vec<_>>());
             }
             assert_eq!(missing, 0);
+        }
+    }
+
+    /// rekordbox's waveforms on a real stick (or a copy of its PIONEER folder named by
+    /// WO_USB; the audio need not be there): each kind one column every 1/150 s of the
+    /// record, the three kinds the same length. `cargo test -p wo-usb -- --ignored waves`
+    #[test]
+    #[ignore]
+    fn the_waves_of_a_stick_agree() {
+        let roots = find();
+        assert!(!roots.is_empty(), "no stick found (plug one in or set WO_USB)");
+        for root in roots {
+            let s = Stick::open(&root).unwrap();
+            let (mut with, mut phrased) = (0, 0);
+            for t in &s.tracks {
+                let a = t.analysis().unwrap();
+                let w = &a.waves;
+                if w.is_empty() {
+                    continue;
+                }
+                with += 1;
+                phrased += a.phrases.is_some() as usize;
+                assert_eq!(w.blue.len(), w.rgb.len(), "{}: blue and colour differ", t.title);
+                if !w.bands.is_empty() {
+                    assert_eq!(w.bands.len(), w.rgb.len(), "{}: bands and colour differ", t.title);
+                }
+                let expect = t.seconds as f64 * 150.0;
+                assert!((w.rgb.len() as f64 - expect).abs() <= 150.0 + expect * 0.002, "{}: {} columns for {} s", t.title, w.rgb.len(), t.seconds);
+            }
+            println!("{}: {with} of {} records with waves, {phrased} with phrases", s.name, s.tracks.len());
+            assert!(with > 0);
         }
     }
 }

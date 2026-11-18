@@ -9,12 +9,14 @@ use std::time::{Duration, Instant};
 
 use wo_engine::{Bus, Channels, DeckId, Engine, Eq, Gains, Output, Source};
 use wo_wave::{Analyser, Tee, Wave};
-pub use wo_wave::Bin;
+pub use wo_wave::{Bin, RbBin};
+pub use marks::{Marks, PadLook, Phrase, PhraseKind};
 
 pub mod backdrop;
 pub mod bench;
 pub mod covers;
 pub mod library;
+pub mod marks;
 pub mod milk;
 pub mod move_player;
 pub mod autodj;
@@ -40,7 +42,7 @@ pub mod videos;
 
 pub use backdrop::Backdrop;
 pub use covers::Cover;
-pub use prefs::Prefs;
+pub use prefs::{DeskLayout, Prefs, WaveStyle};
 pub use player::PlayerView;
 pub use library::{GRID_VERDICTS, Library, Shelf, StickView, verdict_word};
 pub use records::{Audio, Loudness, Record};
@@ -111,6 +113,12 @@ pub struct DeckView {
     pub loading: bool,
     /// In the headphones (pre-fader listening).
     pub headphones: bool,
+    /// Each pad's look off a stick (A–H: colour, name).
+    pub looks: [Option<PadLook>; 8],
+    /// rekordbox's memory cues, seconds.
+    pub memory: Vec<f64>,
+    /// The record's waveform is rekordbox's own (off its stick).
+    pub exact: bool,
     /// The hands' state: CUE, the loop, the pitch fader.
     pub cue: Option<f64>,
     pub looped: Option<(f64, f64)>,
@@ -188,13 +196,20 @@ pub struct Lines {
     pub fours: Vec<(f32, i64)>,
     /// x, the pad's index, the pad.
     pub pads: Vec<(f32, usize, Pad)>,
+    /// rekordbox's memory cues, and the deck's CUE point.
+    pub memory: Vec<f32>,
+    pub cue: Option<f32>,
+    /// The phrases across the lane: x from, x to, the phrase.
+    pub phrases: Vec<(f32, f32, Phrase)>,
 }
 
 /// A deck's waveform lane: bins fixed to the record's own columns (so as it scrolls its
 /// shape holds still), where each falls, and the lines over it. x from the lane's left.
 #[derive(Clone, Debug, Default)]
 pub struct LaneWave {
+    /// The Desk's own picture (WetOwl style), or rekordbox's (`rb`); whichever was asked.
     pub bins: Vec<Option<Bin>>,
+    pub rb: Vec<Option<RbBin>>,
     /// The first bin's left edge, and each bin's width.
     pub x0: f32,
     pub bin_w: f32,
@@ -289,6 +304,8 @@ struct Slot {
     shift: f32,
     /// Where the record sings (the house's vocal map), for the planner.
     vocals: Option<wo_booth::planner::VocalMap>,
+    /// Its memory cues, hot cue looks and phrases off a stick.
+    marks: Marks,
 }
 
 /// A transition the Auto DJ has planned (and, once `started`, is making).
@@ -474,6 +491,7 @@ impl Desk {
             gate: (0.0, 2),
             shift: 0.0,
             vocals: None,
+            marks: Marks::default(),
         };
         let (done_tx, done_rx) = mpsc::channel();
         let mut desk = Desk {
@@ -676,7 +694,13 @@ impl Desk {
                 }
                 // rekordbox's grid and cues first (a few KB off the stick), then the audio
                 Audio::Usb { path, anlz, .. } => {
-                    let result = library::analyse_usb(anlz.as_deref(), seconds).map(Box::new);
+                    let mut result = library::analyse_usb(anlz.as_deref(), seconds).map(Box::new);
+                    // rekordbox's own waveform: the whole record drawn at once
+                    if let Ok(a) = &mut result
+                        && !a.waves.is_empty()
+                    {
+                        analyser.wave().lock().unwrap().set_exact(std::mem::take(&mut a.waves));
+                    }
                     let _ = tx.send(library::Done::Analysed { slot, turn, result });
                     let mut tee = Tee { sink: &mut source, analyser: &mut analyser };
                     // decoded as rekordbox does, so its grid and cues sit on the beats
@@ -724,6 +748,7 @@ impl Desk {
         s.wave = wave;
         s.loader = Some(loader);
         s.vocals = None;
+        s.marks = Marks::default();
         if s.shift != 0.0 {
             s.shift = 0.0;
             self.engine.deck(DeckId::new(slot).unwrap()).set_shift(0.0);
@@ -1066,6 +1091,9 @@ impl Desk {
                 marks: [s.stems.state.ready(), !s.hands.grid.is_empty(), !s.timing.sections.is_empty(), s.vocals.as_ref().is_some_and(|v| v.bars.is_some())],
                 loading: s.loader.as_ref().is_some_and(|h| !h.is_finished()),
                 headphones: self.audio.cue[i],
+                looks: s.marks.looks.clone(),
+                memory: s.marks.memory.clone(),
+                exact: wave.is_exact(),
             }
         };
         let decks = [view(0), view(1)];
@@ -1164,10 +1192,14 @@ impl Desk {
     /// record's columns and starts on a multiple of it: the same columns make the same bin
     /// every frame, wherever the playhead is, so the picture scrolls without re-shaping (a
     /// zoom changes the bins only where it crosses a power of two).
-    pub fn lane_wave(&self, deck: usize, heard: f64, width: f32, step: f32, beat_px: f32) -> LaneWave {
+    pub fn lane_wave(&self, deck: usize, heard: f64, width: f32, step: f32, beat_px: f32, rb: bool) -> LaneWave {
+        let px_per_s = beat_px as f64 / self.spb(deck);
+        self.lane_wave_at(deck, heard, width, step, px_per_s, rb)
+    }
+
+    /// The same at `px_per_s` pixels a second of the record (rekordbox's zoom is by time).
+    pub fn lane_wave_at(&self, deck: usize, heard: f64, width: f32, step: f32, px_per_s: f64, rb: bool) -> LaneWave {
         let s = &self.slots[deck];
-        let spb = self.spb(deck);
-        let px_per_s = beat_px as f64 / spb;
         let px_per_col = px_per_s / wo_wave::RATE;
         let want = (step as f64 / px_per_col).max(1.0);
         let k = 1usize << (want.log2().round().clamp(0.0, 12.0) as u32);
@@ -1178,10 +1210,11 @@ impl Desk {
         let x0 = x_of(first as f64 / wo_wave::RATE);
         let bin_w = (k as f64 * px_per_col) as f32;
         let n = ((width - x0) / bin_w).ceil().max(0.0) as usize + 1;
-        let wave = s.wave.lock().unwrap();
-        let bins = wave.bins(first, k, n);
+        let mut wave = s.wave.lock().unwrap();
+        let (bins, rb_bins) = if rb { (vec![], wave.rb_bins(first, k, n)) } else { (wave.bins(first, k, n), vec![]) };
         let length = if s.record.seconds > 0 { s.record.seconds as f64 } else { wave.seconds() };
-        let arriving = (!wave.done).then(|| x_of(wave.seconds()));
+        // rekordbox's own waveform is all there from the start
+        let arriving = (!wave.done && !(rb && wave.is_exact())).then(|| x_of(wave.seconds()));
         drop(wave);
         let t1 = t0 + width as f64 / px_per_s;
         let mut lines = Lines::default();
@@ -1206,7 +1239,25 @@ impl Desk {
                 lines.pads.push((x_of(p.at), i, *p));
             }
         }
-        LaneWave { bins, x0, bin_w, px_per_s, heard, lines, start: x_of(0.0), end: x_of(length), arriving }
+        lines.memory = s.marks.memory.iter().filter(|&&m| m >= t0 && m <= t1).map(|&m| x_of(m)).collect();
+        lines.cue = s.hands.cue.filter(|&c| c >= t0 && c <= t1).map(x_of);
+        lines.phrases = s.marks.phrases_or(&s.timing).into_iter().filter(|p| p.end >= t0 && p.start <= t1).map(|p| (x_of(p.start), x_of(p.end), p)).collect();
+        LaneWave { bins, rb: rb_bins, x0, bin_w, px_per_s, heard, lines, start: x_of(0.0), end: x_of(length), arriving }
+    }
+
+    /// The whole record in `n` bins the rekordbox way (each the mean of its columns).
+    pub fn rb_overview(&self, deck: usize, n: usize) -> Vec<Option<RbBin>> {
+        let s = &self.slots[deck];
+        let mut wave = s.wave.lock().unwrap();
+        let len = if s.record.seconds > 0 { s.record.seconds as f64 } else { wave.rb_len() as f64 / wo_wave::RATE };
+        wave.rb_overview(len, n)
+    }
+
+    /// A deck's record's phrases: rekordbox's own off a stick, else the house's sections
+    /// in rekordbox's words.
+    pub fn phrases(&self, deck: usize) -> Vec<Phrase> {
+        let s = &self.slots[deck];
+        s.marks.phrases_or(&s.timing)
     }
 
     /// Every second bar of a deck's record, for its overview: when, and whether it starts
@@ -1234,13 +1285,26 @@ impl Desk {
     /// How much of a deck's record has come in (its waveform's columns; changes as it
     /// decodes): what an overview's picture is kept by.
     pub fn wave_len(&self, deck: usize) -> usize {
-        self.slots[deck].wave.lock().unwrap().cols.len()
+        let w = self.slots[deck].wave.lock().unwrap();
+        w.cols.len().max(w.rb_len())
     }
 
     /// A deck's record's sections and drops (the house's structure; empty without it).
     pub fn form(&self, deck: usize) -> Form {
         let t = &self.slots[deck].timing;
         Form { sections: t.sections.iter().map(|x| (x.label.clone(), x.start, x.end)).collect(), drops: t.drops.clone() }
+    }
+
+    /// Where `t` is in bars, rekordbox's beat count: the bar (from 1 at the grid's one)
+    /// and the beat in it (1–4). None without a grid.
+    pub fn bar_at(&self, deck: usize, t: f64) -> Option<(i64, usize)> {
+        let g = &self.slots[deck].hands.grid;
+        if g.beats.is_empty() {
+            return None;
+        }
+        let i = g.beats.partition_point(|&b| b <= t).max(1) as i64 - 1;
+        let from_one = i - g.bar_one as i64;
+        Some((from_one.div_euclid(4) + 1, from_one.rem_euclid(4) as usize + 1))
     }
 
     /// Where `t` falls on a deck's grid: how far into its beat (0..1) and which beat of its
@@ -1612,6 +1676,7 @@ impl Desk {
                     s.hands = hands;
                     s.timing = a.timing;
                     s.vocals = a.vocals;
+                    s.marks = a.marks;
                     if let Some(k) = a.camelot {
                         s.record.key = k;
                     }

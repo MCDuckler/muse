@@ -7,7 +7,9 @@
 //! mids, toward white for the highs — and what has been heard drawn dimmer in the same
 //! mesh. Lines sit on whole pixels, so they do not shimmer as they pass.
 use eframe::egui::{self, Align2, Color32, CornerRadius, Mesh, Painter, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
-use wo_deskcore::{Bin, Desk, DeckView, LaneWave, Snapshot, theme};
+use wo_deskcore::{Bin, Desk, DeckView, LaneWave, RbBin, Snapshot, WaveStyle, theme};
+
+use crate::wave::{self, Anchor, Columns};
 
 use crate::App;
 use crate::paint::{col, label_sized, label_width, mmss, pad_colour, pad_name, white};
@@ -170,6 +172,7 @@ fn section_colour(label: &str) -> Option<Color32> {
 
 /// An overview kept: its record, its width in bins, how much of the record had come in.
 pub(crate) type OverviewKept = Option<(i64, usize, usize, Vec<Option<Bin>>)>;
+pub(crate) type RbOverviewKept = Option<(i64, usize, usize, Vec<Option<RbBin>>)>;
 
 impl App {
     /// The two overviews: each whole record, its sections under it, what was heard dimmed,
@@ -187,28 +190,44 @@ impl App {
             let v = &s.decks[d];
             let len = v.length.max(1.0);
             let n = (bar.width() / 2.0).max(1.0) as usize;
+            let style = self.prefs.wave_style;
+            let rb = style != WaveStyle::WetOwl;
             let key = (v.record.id, n, desk.wave_len(d));
-            let fresh = matches!(&self.overview_kept[d], Some((id, m, w, _)) if (*id, *m, *w) == key);
-            if !fresh {
-                self.overview_kept[d] = Some((key.0, key.1, key.2, desk.overview(d, n)));
-            }
-            let bins = &self.overview_kept[d].as_ref().unwrap().3;
             let x_of = |t: f64| bar.left() + bar.width() * (t / len).clamp(0.0, 1.0) as f32;
-            let clip = p.with_clip_rect(bar.expand2(vec2(2.0, 3.0)));
-            // the record's form under it
-            for (label, a, b) in desk.form(d).sections {
-                if let Some(c) = section_colour(&label) {
-                    clip.rect_filled(Rect::from_min_max(pos2(x_of(a), bar.top()), pos2(x_of(b), bar.bottom())), CornerRadius::same(2), alpha_of(c, 0.09));
-                }
-            }
+            let clip = p.with_clip_rect(bar.expand2(vec2(2.0, 4.0)));
             let at = x_of(v.heard);
             let k = motion::appear(ui.ctx(), ui.scope_id().with(("overview-in", d, v.record.id)), motion::EMPHASIS);
             let mut cp = clip.clone();
             cp.multiply_opacity(k);
-            draw_bins(&cp, bar, bins, bar.left(), bar.width() / n as f32, strip_h / 2.0 - 1.0, d, at, 16.0);
+            if rb {
+                let fresh = matches!(&self.rb_overview_kept[d], Some((id, m, w, _)) if (*id, *m, *w) == key);
+                if !fresh {
+                    self.rb_overview_kept[d] = Some((key.0, key.1, key.2, desk.rb_overview(d, n)));
+                }
+                // rekordbox's: on its foot, what was heard darker, the phrases under it
+                let bins = &self.rb_overview_kept[d].as_ref().unwrap().3;
+                let band = Rect::from_min_max(pos2(bar.left(), bar.bottom() - 3.0), bar.max);
+                let phrases: Vec<_> = desk.phrases(d).into_iter().map(|ph| (x_of(ph.start), x_of(ph.end), ph)).collect();
+                wave::phrase_band(&cp, band, &phrases, 0.9, false);
+                let cols = Rect::from_min_max(bar.min, pos2(bar.right(), band.top() - 1.0));
+                wave::columns(&cp, cols, bins, bar.left(), bar.width() / n as f32, Columns { style, anchor: Anchor::Up(1.0), gain: 1.45, reflect: 0.0, heard: Some((at, 2.0)) });
+            } else {
+                let fresh = matches!(&self.overview_kept[d], Some((id, m, w, _)) if (*id, *m, *w) == key);
+                if !fresh {
+                    self.overview_kept[d] = Some((key.0, key.1, key.2, desk.overview(d, n)));
+                }
+                let bins = &self.overview_kept[d].as_ref().unwrap().3;
+                // the record's form under it
+                for (label, a, b) in desk.form(d).sections {
+                    if let Some(c) = section_colour(&label) {
+                        clip.rect_filled(Rect::from_min_max(pos2(x_of(a), bar.top()), pos2(x_of(b), bar.bottom())), CornerRadius::same(2), alpha_of(c, 0.09));
+                    }
+                }
+                draw_bins(&cp, bar, bins, bar.left(), bar.width() / n as f32, strip_h / 2.0 - 1.0, d, at, 16.0);
+            }
             // every second bar: ticks at the edges, taller where a four-bar group starts (the
             // twos left out where they would crowd, then the fours)
-            let twos = desk.two_bars(d);
+            let twos = if rb && !self.prefs.bar_groups { vec![] } else { desk.two_bars(d) };
             if let (Some(a), Some(b)) = (twos.first(), twos.last())
                 && twos.len() > 1
             {
@@ -223,20 +242,43 @@ impl App {
                     vline(&cp, tx, bar.bottom() - h, bar.bottom(), 1.0, ppp, c);
                 }
             }
-            if let Some((a, b)) = v.looped {
+            if let Some((a, b)) = v.looped.filter(|_| rb) {
+                wave::loop_band(&clip, bar, x_of(a), x_of(b).max(x_of(a) + 2.0), 1.0, ppp);
+            } else if let Some((a, b)) = v.looped {
                 let (xa, xb) = (x_of(a), x_of(b).max(x_of(a) + 2.0));
                 clip.rect_filled(Rect::from_min_max(pos2(xa, bar.top()), pos2(xb, bar.bottom())), CornerRadius::same(2), alpha_of(t::deck(d), 0.22));
                 for x in [xa, xb] {
                     vline(&clip, x, bar.top(), bar.bottom(), 1.0, ppp, alpha_of(t::tint(d), 0.9));
                 }
             }
-            for pad in v.pads.iter().flatten() {
-                let x = snap(x_of(pad.at), ppp);
-                let c = col(pad_colour(pad.auto));
-                vline(&clip, x, bar.top(), bar.bottom(), 1.0, ppp, alpha_of(c, 0.45));
-                clip.add(Shape::convex_polygon(vec![pos2(x - 4.0, bar.top() - 2.0), pos2(x + 4.0, bar.top() - 2.0), pos2(x, bar.top() + 4.0)], c, Stroke::NONE));
+            if rb {
+                for &m in &v.memory {
+                    let x = snap(x_of(m), ppp);
+                    clip.add(Shape::convex_polygon(vec![pos2(x - 3.5, bar.top() - 2.0), pos2(x + 3.5, bar.top() - 2.0), pos2(x, bar.top() + 3.0)], wave::MEMORY, Stroke::NONE));
+                }
+                for (i, pad) in v.pads.iter().enumerate() {
+                    let Some(pad) = pad else { continue };
+                    let x = snap(x_of(pad.at), ppp);
+                    let c = wave::hot_cue_colour(i, v.looks[i].as_ref());
+                    vline(&clip, x, bar.top(), bar.bottom(), 1.0, ppp, alpha_of(c, 0.6));
+                    let sq = Rect::from_min_size(pos2(x, bar.top() - 2.0), vec2(9.0, 9.0));
+                    clip.rect_filled(sq, CornerRadius::same(1), c);
+                    kit::text(&clip, sq.center(), Align2::CENTER_CENTER, &(i + 1).to_string(), 7.5, "semi", Color32::WHITE);
+                }
+                if let Some(c) = v.cue {
+                    let x = snap(x_of(c), ppp);
+                    clip.add(Shape::convex_polygon(vec![pos2(x - 4.0, bar.bottom() + 2.0), pos2(x, bar.bottom() - 4.0), pos2(x + 4.0, bar.bottom() + 2.0)], wave::CUE_POINT, Stroke::NONE));
+                }
+                wave::playhead(&clip, at, bar.top() - 2.0, bar.bottom() + 2.0, ppp);
+            } else {
+                for pad in v.pads.iter().flatten() {
+                    let x = snap(x_of(pad.at), ppp);
+                    let c = col(pad_colour(pad.auto));
+                    vline(&clip, x, bar.top(), bar.bottom(), 1.0, ppp, alpha_of(c, 0.45));
+                    clip.add(Shape::convex_polygon(vec![pos2(x - 4.0, bar.top() - 2.0), pos2(x + 4.0, bar.top() - 2.0), pos2(x, bar.top() + 4.0)], c, Stroke::NONE));
+                }
+                playhead(&clip, at, bar.top() - 2.0, bar.bottom() + 2.0, 0.0, ppp);
             }
-            playhead(&clip, at, bar.top() - 2.0, bar.bottom() + 2.0, 0.0, ppp);
             // hover: a ghost playhead and its time; a click (or a drag let go) goes there
             let resp = ui.interact(bar.expand2(vec2(0.0, 2.0)), ui.scope_id().with(("overview", d)), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::PointingHand);
             let ghost = resp.hover_pos().or(resp.interact_pointer_pos()).filter(|_| resp.hovered() || resp.dragged()).map(|pos| pos.x.clamp(bar.left(), bar.right()));
@@ -278,8 +320,12 @@ impl App {
         for d in 0..2 {
             let w = Rect::from_min_size(pos2(inner.left(), r.top() + 6.0 + d as f32 * (lane_h + phase_h)), vec2(inner.width(), lane_h));
             let v = &s.decks[d];
-            let lw = desk.lane_wave(d, v.heard, w.width(), 3.0, zoom);
-            self.wave_lane(desk, ui, p, w, &lw, v, d, ppp);
+            let rb = self.prefs.wave_style != WaveStyle::WetOwl;
+            let lw = desk.lane_wave(d, v.heard, w.width(), if rb { 2.0 } else { 3.0 }, zoom, rb);
+            // rekordbox's dual player: the two face each other across the phase, each on a
+            // baseline by the middle with its phrases between
+            let anchor = if d == 0 { Anchor::Up(0.86) } else { Anchor::Down(0.14) };
+            self.wave_lane(desk, ui, p, w, &lw, v, d, ppp, anchor);
         }
         // the hairline and the phase between the lanes
         let c = pos2(r.center().x, r.top() + 6.0 + lane_h + phase_h / 2.0);
@@ -314,7 +360,12 @@ impl App {
     /// record (as it comes in),
     /// the loop, the pads' flags, the playhead; its glass tab.
     #[allow(clippy::too_many_arguments)]
-    fn wave_lane(&mut self, desk: &Desk, ui: &Ui, p: &Painter, w: Rect, lw: &LaneWave, v: &DeckView, d: usize, ppp: f32) {
+    fn wave_lane(&mut self, desk: &Desk, ui: &Ui, p: &Painter, w: Rect, lw: &LaneWave, v: &DeckView, d: usize, ppp: f32, anchor: Anchor) {
+        if self.prefs.wave_style != WaveStyle::WetOwl {
+            self.rb_lane(desk, ui, p, w, lw, v, d, ppp, anchor);
+            self.lane_tab(p, w, v, d, anchor.grows_down());
+            return;
+        }
         let clip = p.with_clip_rect(w.intersect(p.clip_rect()));
         let x = |lx: f32| w.left() + lx;
         let play = w.center().x;
@@ -409,6 +460,81 @@ impl App {
             label_sized(&clip, pos2(flag.left() + 5.0, flag.center().y), Align2::LEFT_CENTER, &words, 9.5, alpha_of(col(theme::GROUND), k));
         }
         playhead(&clip, play, w.top(), w.bottom(), downbeat(desk, d, v), ppp);
+        self.lane_tab(p, w, v, d, false);
+    }
+
+    /// One lane the rekordbox way: its columns on their baseline, the phrases on the far
+    /// side of it, rekordbox's grid, the loop, cues and memory cues, the playhead, the
+    /// beat count.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn rb_lane(&mut self, desk: &Desk, ui: &Ui, p: &Painter, w: Rect, lw: &LaneWave, v: &DeckView, d: usize, ppp: f32, anchor: Anchor) {
+        let clip = p.with_clip_rect(w.intersect(p.clip_rect()));
+        let x = |lx: f32| w.left() + lx;
+        let play = w.center().x;
+        let loaded = v.record.id != 0 || v.length > 0.0;
+        if loaded {
+            hatch(&clip, w, w.left(), x(lw.start));
+            hatch(&clip, w, x(lw.end), w.right());
+        }
+        let down = anchor.grows_down();
+        // the phrases on the far side of the baseline
+        let under = anchor.under(w);
+        let phrases: Vec<_> = lw.lines.phrases.iter().map(|(a, b, ph)| (x(*a), x(*b), ph.clone())).collect();
+        wave::phrase_band(&clip, under, &phrases, 0.82, true);
+        let k = motion::appear(ui.ctx(), ui.scope_id().with(("wave", d, v.record.id)), motion::EMPHASIS);
+        let mut wp = clip.clone();
+        wp.multiply_opacity(k);
+        let reflect = if under.height() > 24.0 { 0.45 } else { 0.0 };
+        wave::columns(&wp, w, &lw.rb, w.left() + lw.x0, lw.bin_w, Columns { style: self.prefs.wave_style, anchor, gain: 1.0, reflect, heard: None });
+        wave::grid(&clip, w, &lw.lines, ppp, self.prefs.bar_groups);
+        // still coming in: its front edge, quietly
+        if let Some(a) = lw.arriving.map(x).filter(|a| *a > w.left() && *a < w.right()) {
+            clip.rect_filled(Rect::from_min_max(pos2(a, w.top()), w.max), CornerRadius::ZERO, Color32::from_black_alpha(60));
+            vline(&clip, a, w.top(), w.bottom(), 1.0, ppp, Color32::from_white_alpha(70));
+        }
+        // the loop (kept while it fades out)
+        let looped = motion::tween_bool(ui.ctx(), ui.scope_id().with(("looped", d)), v.looped.is_some(), motion::STANDARD, motion::STANDARD);
+        let kept = ui.ctx().data_mut(|m| {
+            let k = m.get_temp_mut_or_insert_with(ui.scope_id().with(("loop-was", d)), || (0.0f64, 0.0f64));
+            if let Some(l) = v.looped {
+                *k = l;
+            }
+            *k
+        });
+        if looped > 0.0 && kept.1 > kept.0 {
+            let tx = |t: f64| play + ((t - lw.heard) * lw.px_per_s) as f32;
+            wave::loop_band(&clip, w, tx(kept.0), tx(kept.1), looped, ppp);
+            if let Some(b) = v.loop_beats {
+                let words = loop_words(b);
+                let tw = label_width(p, &words, 9.5) + 12.0;
+                let y = if down { w.bottom() - 22.0 } else { w.top() + 6.0 };
+                let tab = Rect::from_min_size(pos2(snap(tx(kept.0), ppp) + 6.0, y), vec2(tw, 16.0));
+                clip.rect_filled(tab, CornerRadius::same(3), alpha_of(wave::LOOP, 0.9 * looped));
+                label_sized(&clip, tab.center(), Align2::CENTER_CENTER, &words, 9.5, alpha_of(col(theme::GROUND), looped));
+            }
+        }
+        for &m in &lw.lines.memory {
+            wave::memory_cue(&clip, w, x(m), down, ppp);
+        }
+        if let Some(c) = lw.lines.cue {
+            wave::cue_point(&clip, w, x(c), down, ppp);
+        }
+        for (px, i, pad) in &lw.lines.pads {
+            let k = motion::appear(ui.ctx(), ui.scope_id().with(("flag", d, *i, (pad.at * 1000.0) as i64)), motion::STANDARD);
+            let look = v.looks[*i].as_ref();
+            let name = look.map(|l| l.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| pad_name(pad.auto).to_uppercase());
+            wave::hot_cue(&clip, w, x(*px), &(i + 1).to_string(), Some(&name), wave::hot_cue_colour(*i, look), down, ppp, k);
+        }
+        wave::playhead(&clip, play, w.top(), w.bottom(), ppp);
+        if let Some((bar, beat)) = desk.bar_at(d, v.heard).filter(|_| loaded) {
+            let y = if down { w.bottom() - 19.0 } else { w.top() + 3.0 };
+            wave::beat_count(&clip, pos2(play + 44.0, y), bar, beat);
+        }
+    }
+
+    /// The lane's tab: its deck, how it is (at the bottom where the lane grows down).
+    fn lane_tab(&self, p: &Painter, w: Rect, v: &DeckView, d: usize, low: bool) {
+        let loaded = v.record.id != 0 || v.length > 0.0;
         // the lane's tab: its deck, how it is
         let (icon, word, lit) = if v.decoded <= 0.0 && loaded {
             (None, "Loading".to_owned(), false)
@@ -424,7 +550,7 @@ impl App {
             (Some(Icon::Pause), "Parked".to_owned(), false)
         };
         let ww = label_width(p, &word, 10.0);
-        let tab = Rect::from_min_size(pos2(w.left() + 10.0, w.top() + 7.0), vec2(30.0 + if icon.is_some() { 16.0 } else { 0.0 } + ww + 10.0, 22.0));
+        let tab = Rect::from_min_size(pos2(w.left() + 10.0, if low { w.bottom() - 29.0 } else { w.top() + 7.0 }), vec2(30.0 + if icon.is_some() { 16.0 } else { 0.0 } + ww + 10.0, 22.0));
         kit::glass_tab(p, tab);
         kit::deck_chip(p, pos2(tab.left() + 3.0, tab.center().y), d);
         let mut tx = tab.left() + 30.0;

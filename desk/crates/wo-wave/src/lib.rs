@@ -7,6 +7,9 @@
 //! paler, highs white; the RMS as the body, the peaks as its outline.
 use std::sync::{Arc, Mutex};
 
+pub mod rb;
+pub use rb::{Fold, RbBin, RbCol};
+
 /// Columns a second.
 pub const RATE: f64 = 150.0;
 
@@ -52,11 +55,18 @@ pub struct Wave {
     pub done: bool,
     /// How many columns had each loudest-band peak byte: the ceiling's count.
     hist: [u32; 256],
+    /// The same, each band's own (rb.rs: each band against its own ceiling).
+    band_hist: [[u32; 256]; 3],
+    /// rekordbox's own columns, where the record came with them (rb.rs).
+    exact: Vec<RbCol>,
+    /// Else rekordbox's made from these, and the ceilings they were made against.
+    made: Vec<RbCol>,
+    made_ceil: Option<rb::Ceilings>,
 }
 
 impl Default for Wave {
     fn default() -> Self {
-        Wave { cols: vec![], done: false, hist: [0; 256] }
+        Wave { cols: vec![], done: false, hist: [0; 256], band_hist: [[0; 256]; 3], exact: vec![], made: vec![], made_ceil: None }
     }
 }
 
@@ -67,6 +77,9 @@ impl Wave {
 
     fn push(&mut self, c: Col) {
         self.hist[*c.peak.iter().max().unwrap() as usize] += 1;
+        for k in 0..3 {
+            self.band_hist[k][c.peak[k] as usize] += 1;
+        }
         self.cols.push(c);
     }
 

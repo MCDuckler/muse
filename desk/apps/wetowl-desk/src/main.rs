@@ -36,6 +36,7 @@ mod set_page;
 mod pages;
 mod show;
 mod tracks;
+mod wave;
 mod type3d;
 mod video;
 mod ui;
@@ -138,6 +139,8 @@ pub(crate) struct App {
     pub(crate) zoom: f32,
     /// Each deck's overview, kept until its record, width or decoding changes.
     pub(crate) overview_kept: [tracks::OverviewKept; 2],
+    /// The same, rekordbox's (each bin the mean of its columns).
+    pub(crate) rb_overview_kept: [tracks::RbOverviewKept; 2],
     /// The decks' platters: how each turns, its pictures.
     pub(crate) platters: platter::Platters,
     /// Where each deck's platter was last drawn, and records flying from the crate to a deck.
@@ -280,6 +283,13 @@ impl App {
                 _ => d.open_shelf(wo_deskcore::Shelf::Playlist { id: 1, name: "Warm up".into() }),
             }
         }
+        // --seek 60,90: the decks moved there, seconds (screenshots)
+        if let Some(at) = arg("--seek") {
+            let mut d = app.desk.lock().unwrap();
+            for (i, t) in at.split(',').filter_map(|t| t.trim().parse::<f64>().ok()).take(2).enumerate() {
+                d.seek_to(i, t);
+            }
+        }
         // --play: the crate's shelf played in order (screenshots)
         if std::env::args().any(|a| a == "--play") {
             app.desk.lock().unwrap().play_shelf(None);
@@ -348,6 +358,7 @@ impl App {
             pad_fired: [[0; 8]; 2],
             zoom: 110.0,
             overview_kept: [None, None],
+            rb_overview_kept: [None, None],
             platters: Default::default(),
             platter_at: [Rect::NOTHING; 2],
             flights: vec![],

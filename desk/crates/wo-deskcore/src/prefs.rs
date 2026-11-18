@@ -14,11 +14,51 @@ pub struct Prefs {
     pub disc_label: f32,
     /// The booth's side panels (the stage and the Auto DJ) folded away: the crate wide.
     pub wide_crate: bool,
+    /// How the waveforms are coloured (rekordbox's three, or the WetOwl's own).
+    pub wave_style: WaveStyle,
+    /// The booth's layout: the WetOwl's own, or rekordbox's (Club).
+    pub layout: DeskLayout,
+    /// The four-bar groups marked and numbered on the waveforms (the WetOwl's own
+    /// marks, over rekordbox's grid).
+    pub bar_groups: bool,
+}
+
+/// rekordbox's waveform colours (Preferences → View → Waveform color), and the Desk's own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum WaveStyle {
+    #[default]
+    ThreeBand,
+    Rgb,
+    Blue,
+    /// The deck's own colour, mirrored and soft (the Desk's look before rekordbox's).
+    WetOwl,
+}
+
+impl WaveStyle {
+    pub const ALL: [WaveStyle; 4] = [WaveStyle::ThreeBand, WaveStyle::Rgb, WaveStyle::Blue, WaveStyle::WetOwl];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            WaveStyle::ThreeBand => "3Band",
+            WaveStyle::Rgb => "RGB",
+            WaveStyle::Blue => "Blue",
+            WaveStyle::WetOwl => "WetOwl",
+        }
+    }
+}
+
+/// The booth's layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DeskLayout {
+    #[default]
+    WetOwl,
+    /// rekordbox's PERFORMANCE layout (2 Deck Horizontal).
+    Club,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { reduced_motion: false, still_backdrop: false, backdrop_light: 1.0, disc_label: 0.31, wide_crate: false }
+        Prefs { reduced_motion: false, still_backdrop: false, backdrop_light: 1.0, disc_label: 0.31, wide_crate: false, wave_style: WaveStyle::ThreeBand, layout: DeskLayout::WetOwl, bar_groups: true }
     }
 }
 

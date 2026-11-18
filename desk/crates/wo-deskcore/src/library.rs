@@ -125,6 +125,10 @@ pub(crate) struct Analysed {
     pub vocals: Option<wo_booth::planner::VocalMap>,
     /// Where CUE goes back to (a stick's first memory cue).
     pub cue: Option<f64>,
+    /// A stick's memory cues, hot cue looks and phrases.
+    pub marks: crate::marks::Marks,
+    /// A stick's own waveform columns (taken by the loader into the deck's wave).
+    pub waves: Vec<wo_wave::RbCol>,
 }
 
 /// What a worker thread hands back.
@@ -282,7 +286,7 @@ pub(crate) fn analyse(house: &House, id: i64) -> Result<Analysed, String> {
     let a = house.analysis(id).map_err(|e| e.to_string())?;
     let hand = house.hand_pads(id).unwrap_or_default();
     let vocals = house.vocals(id).ok();
-    Ok(Analysed { grid: a.grid(), timing: a.timing(), auto: a.auto_pads(), hand, camelot: a.camelot.clone(), bpm: a.bpm, vocals, cue: None })
+    Ok(Analysed { grid: a.grid(), timing: a.timing(), auto: a.auto_pads(), hand, camelot: a.camelot.clone(), bpm: a.bpm, vocals, cue: None, marks: Default::default(), waves: vec![] })
 }
 
 /// A stick's record's analysis, rekordbox's: its grid; hot cues A–H on pads 1–8 (a hot
@@ -298,6 +302,8 @@ pub(crate) fn analyse_usb(dat: Option<&std::path::Path>, seconds: f64) -> Result
 
 fn usb_analysed(a: wo_usb::Analysis, seconds: f64) -> Analysed {
     let grid = Grid::new(a.beats.clone(), a.bar_one);
+    let marks = crate::marks::Marks::from_usb(&a, &a.beats, seconds);
+    let waves = stick_columns(&a.waves);
     let mut hand: HandPads = vec![];
     for c in &a.cues {
         if let wo_usb::CueKind::Hot(n) = c.kind
@@ -322,7 +328,13 @@ fn usb_analysed(a: wo_usb::Analysis, seconds: f64) -> Analysed {
             .collect()
     };
     let timing = wo_booth::Timing::from_grid(grid.clone(), seconds);
-    Analysed { grid, timing, auto, hand, camelot: None, bpm: None, vocals: None, cue }
+    Analysed { grid, timing, auto, hand, camelot: None, bpm: None, vocals: None, cue, marks, waves }
+}
+
+/// A stick's waveforms as rekordbox's columns (as many as its longest kind has).
+fn stick_columns(w: &wo_usb::anlz::Waves) -> Vec<wo_wave::RbCol> {
+    let n = w.blue.len().max(w.rgb.len()).max(w.bands.len());
+    (0..n).map(|i| wo_wave::RbCol::from_stick(w.blue.get(i).copied(), w.rgb.get(i).copied(), w.bands.get(i).copied())).collect()
 }
 
 /// A stick's record's cover, for the stage (as [cover] makes the house's).
@@ -387,6 +399,7 @@ mod usb_tests {
             beats,
             bar_one: 1,
             cues: vec![cue(CueKind::Memory, 15_050), cue(CueKind::Hot(0), 30_050), cue(CueKind::Hot(2), 60_050), Cue { loop_end_ms: Some(92_000), ..cue(CueKind::Hot(4), 90_050) }],
+            ..Default::default()
         };
         let got = usb_analysed(a, 240.0);
         assert_eq!(got.grid.bar_one, 1);
