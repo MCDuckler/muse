@@ -238,7 +238,15 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // --bench plays and mixes by itself; a desk opened by hand stays quiet
         let bench = Bench::from_args(if glow() { "egui-glow" } else { "egui-wgpu" });
-        let mut desk = Desk::open(bench.is_some());
+        // --follow rekordbox [--music <dir>]… [--rkbx <addr>]: the Desk follows a set played
+        // in rekordbox (rkbx_link's OSC), silently, and the show with it
+        let mut desk = match follow_options() {
+            Some(o) => Desk::open_following(o).unwrap_or_else(|e| {
+                eprintln!("follow: {e}; opening as usual");
+                Desk::open(false)
+            }),
+            None => Desk::open(bench.is_some()),
+        };
         // --stage: the show's window from the start
         if std::env::args().any(|a| a == "--stage") {
             desk.open_stage();
@@ -625,6 +633,25 @@ impl App {
 }
 
 /// The window's icon (the launcher's, for X11 and Windows; Wayland takes the launcher's).
+/// `--follow rekordbox`, with any `--music <dir>` (each searched for rekordbox's audio; the
+/// usual Music folder when none) and `--rkbx <addr>` (where rkbx_link sends).
+fn follow_options() -> Option<wo_deskcore::FollowOptions> {
+    let a: Vec<String> = std::env::args().collect();
+    let after = |name: &str| a.windows(2).filter(|w| w[0] == name).map(|w| w[1].clone()).collect::<Vec<_>>();
+    if !after("--follow").iter().any(|v| v == "rekordbox") {
+        return None;
+    }
+    let mut o = wo_deskcore::FollowOptions::default();
+    let music: Vec<std::path::PathBuf> = after("--music").into_iter().map(Into::into).collect();
+    if !music.is_empty() {
+        o.music = music;
+    }
+    if let Some(addr) = after("--rkbx").pop() {
+        o.addr = addr;
+    }
+    Some(o)
+}
+
 fn icon() -> egui::IconData {
     let img = image::load_from_memory(include_bytes!("../../../deploy/icon-64.png")).expect("the icon").to_rgba8();
     egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() }

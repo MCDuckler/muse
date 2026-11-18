@@ -233,6 +233,26 @@ impl App {
             x = tr.left() - 2.0;
             ui.interact(tr, ui.scope_id().with("dsp-tip"), Sense::hover()).on_hover_text(tip);
         }
+        // following rekordbox: whether rkbx_link is heard, the library read, each deck found
+        if let Some(fv) = desk.following() {
+            let heard = if fv.live { "rkbx on" } else { "rkbx silent" };
+            let lib = fv.library.map_or("library…".to_owned(), |n| format!("{n} records"));
+            let missing = fv.decks.iter().any(|d| d.found == Some(false));
+            let colour = if fv.trouble.is_some() || !fv.live || missing { t::warm() } else { t::soft() };
+            let tr = kit::text(p, pos2(x - 6.0, right.y), Align2::RIGHT_CENTER, &format!("rekordbox · {heard} · {lib}"), 11.5, "mono", colour);
+            let mut tip = vec![fv.trouble.clone().unwrap_or_else(|| format!("Following rekordbox: {} messages from rkbx_link", fv.packets))];
+            for (i, d) in fv.decks.iter().enumerate() {
+                let found = match d.found {
+                    None => "nothing loaded".to_owned(),
+                    Some(true) => format!("{}{}", if d.playing { "playing" } else { "stopped" }, d.drift_ms.map_or(String::new(), |ms| format!(", {ms:+.0} ms off"))),
+                    Some(false) => "not found in rekordbox's library and the music folders".to_owned(),
+                };
+                let lead = if fv.lead == Some(i) { "  (the show follows it)" } else { "" };
+                tip.push(format!("Deck {}: {} — {found}{lead}", i + 1, if d.title.is_empty() { "—" } else { &d.title }));
+            }
+            ui.interact(tr, ui.scope_id().with("follow-tip"), Sense::hover()).on_hover_text(tip.join("\n"));
+            x = tr.left() - 8.0;
+        }
         x
     }
 

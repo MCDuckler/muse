@@ -5391,6 +5391,8 @@ dependencies = [
  "wo-decode",
  "wo-engine",
  "wo-house",
+ "wo-rekordbox",
+ "wo-rkbx",
  "wo-show",
  "wo-usb",
  "wo-video",

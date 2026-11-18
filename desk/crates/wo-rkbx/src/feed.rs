@@ -225,15 +225,12 @@ impl Feed {
             }
             ["track", "title"] => {
                 let s = m.text().unwrap_or_default().to_owned();
+                // a new record: its place is not known until rkbx_link sends it (the beat and
+                // phrase are kept: rkbx_link sends the new record's just before its title)
                 if s != d.title || d.loads == 0 {
                     d.loads += 1;
                     d.time_raw = None;
                     d.moved = None;
-                    d.beat = None;
-                    d.bar = None;
-                    d.countin = None;
-                    d.phrase = None;
-                    d.phrase_next = None;
                 }
                 d.title = s;
             }

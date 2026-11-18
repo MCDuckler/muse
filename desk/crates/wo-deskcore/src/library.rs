@@ -297,7 +297,23 @@ pub(crate) fn analyse_usb(dat: Option<&std::path::Path>, seconds: f64) -> Result
         Some(d) => wo_usb::analysis_of(d).map_err(|e| format!("its rekordbox analysis: {e}"))?,
         None => wo_usb::Analysis::default(),
     };
-    Ok(usb_analysed(a, seconds))
+    // rekordbox's phrases (the `.EXT` beside it), for the show's sections and drops
+    let phrases = dat.and_then(|d| std::fs::read(d.with_extension("EXT")).ok()).and_then(|b| wo_usb::anlz::read(&b).phrases);
+    let placed = phrases.map(|p| wo_rekordbox::sections::place(&p, &a.beats));
+    let mut analysed = usb_analysed(a, seconds);
+    if let Some(p) = placed.filter(|p| !p.sections.is_empty()) {
+        phrased(&mut analysed.timing, &p);
+    }
+    Ok(analysed)
+}
+
+/// rekordbox's phrases into a record's timing: its sections, where each starts, and the
+/// drops (the show's and the booth's).
+fn phrased(t: &mut wo_booth::Timing, p: &wo_rekordbox::Phrased) {
+    t.sections = p.sections.iter().map(|s| wo_booth::mix::Section { label: s.label.to_owned(), start: s.start_ms / 1000.0, end: s.end_ms / 1000.0 }).collect();
+    t.phrases = t.sections.iter().map(|s| s.start).collect();
+    t.drops = p.drops_ms.iter().map(|d| d / 1000.0).collect();
+    t.show_drops = t.drops.clone();
 }
 
 fn usb_analysed(a: wo_usb::Analysis, seconds: f64) -> Analysed {

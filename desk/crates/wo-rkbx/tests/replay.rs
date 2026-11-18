@@ -30,6 +30,8 @@ fn the_transition_reads_as_it_happened() {
     let v = r.until(158.3).view(158.3);
     assert_eq!(v.decks[1].title, "Go Solo [Tekk]");
     assert_eq!(v.decks[1].loads, 2);
+    // its phrase came just before its title, and is kept
+    assert_eq!(v.decks[1].phrase, Some(wo_rkbx::PhraseKind::Intro));
     assert!(!v.decks[1].playing);
     assert_eq!(v.master, Some(1));
     assert_eq!(v.lead, Some(0));

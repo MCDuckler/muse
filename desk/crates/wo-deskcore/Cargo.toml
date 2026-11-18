@@ -18,6 +18,8 @@ wo-show = { path = "../wo-show" }
 wo-video = { path = "../wo-video" }
 wo-dance = { path = "../wo-dance" }
 wo-usb = { path = "../wo-usb" }
+wo-rkbx = { path = "../wo-rkbx" }
+wo-rekordbox = { path = "../wo-rekordbox" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 memory-stats = "1.2.0"
 cpu-time = "1.0.0"

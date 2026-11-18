@@ -28,6 +28,7 @@ pub mod beat_fx;
 pub mod audio;
 pub mod elsewhere;
 pub mod fetch;
+pub mod follow;
 mod crate_;
 pub mod plan_view;
 pub mod player;
@@ -58,6 +59,7 @@ pub use wo_show::shares::share_word;
 pub use wo_show::type3d as type3d;
 pub use wo_show::video as video;
 pub use videos::VideoShelf;
+pub use follow::{FollowDeck, FollowOptions, FollowView};
 pub use wo_show::Mix as ShowMix;
 /// The scenes the Rust stage draws so far.
 pub use wo_show::scenes::DRAWN as RUST_SCENES;
@@ -446,6 +448,8 @@ pub struct Desk {
     idle_since: Option<Instant>,
     resume: [Option<(f64, bool)>; 2],
     resumed: Option<String>,
+    /// Following rekordbox (follow.rs): its decks drive these, silently.
+    follow: Option<follow::Follow>,
 }
 
 /// An offline engine rendered in real time on its own thread: a computer with no
@@ -470,8 +474,14 @@ impl Desk {
     /// `autoplay` (benches, demos) the first plays from just before its drop and the
     /// Auto DJ is on; without, nothing sounds until a hand asks.
     pub fn open(autoplay: bool) -> Desk {
+        Self::open_as(autoplay, false)
+    }
+
+    /// `follow`: for following rekordbox (follow.rs): no sound card (rekordbox has it),
+    /// no controllers of its own, no set taken up again.
+    fn open_as(autoplay: bool, follow: bool) -> Desk {
         // WO_AUDIO=off: no sound card even where there is one (tests, CI).
-        let device = if std::env::var("WO_AUDIO").as_deref() == Ok("off") { Output::Offline } else { Output::Device };
+        let device = if follow || std::env::var("WO_AUDIO").as_deref() == Ok("off") { Output::Offline } else { Output::Device };
         let started = if device == Output::Device { Engine::start(Some(RATE), Output::Device) } else { Err(wo_engine::Error::NotOffline) };
         let (engine, pacer) = match started {
             Ok(e) => (e, None),
@@ -551,7 +561,7 @@ impl Desk {
             shelf_gen: 0,
             load_gen: [0; 2],
             // WO_CONTROLLERS=off: none (tests)
-            controls: (std::env::var("WO_CONTROLLERS").as_deref() != Ok("off")).then(|| {
+            controls: (!follow && std::env::var("WO_CONTROLLERS").as_deref() != Ok("off")).then(|| {
                 let s = scratcher.clone();
                 wo_control::Manager::start_with(Arc::new(move |e: &wo_control::Event| s.heard(e)))
             }),
@@ -584,6 +594,7 @@ impl Desk {
             idle_since: None,
             resume: [None, None],
             resumed: None,
+            follow: None,
             dice: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_nanos() as u64) | 1,
         };
         // the Desk's own saved sign-in; WO_APP_SIGN_IN=1 borrows the WetOwl app's for
@@ -604,7 +615,7 @@ impl Desk {
         desk.set_crossfader(0.0);
         // the set that was playing when the Desk last closed, taken up again (not for a
         // bench or a test's demo; WO_RESUME=off: never)
-        if !autoplay && std::env::var("WO_RESUME").as_deref() != Ok("off") {
+        if !autoplay && !follow && std::env::var("WO_RESUME").as_deref() != Ok("off") {
             desk.resume_session();
         }
         if autoplay {
@@ -819,7 +830,12 @@ impl Desk {
         self.fx_tick();
         self.audio_tick();
         self.elsewhere_tick();
-        self.session_tick();
+        // following rekordbox, its set is not this Desk's to keep
+        if self.follow.is_some() {
+            self.follow_tick();
+        } else {
+            self.session_tick();
+        }
         self.stems_tick();
         self.mind_tick();
         self.feed_stage();
