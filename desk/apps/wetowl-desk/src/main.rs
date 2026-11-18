@@ -21,6 +21,7 @@ use wo_deskcore::bench::Bench;
 use wo_deskcore::{Desk, Prefs, ShowHand};
 
 mod booth;
+mod club;
 mod controllers;
 mod faves;
 mod gallery;
@@ -141,6 +142,8 @@ pub(crate) struct App {
     pub(crate) overview_kept: [tracks::OverviewKept; 2],
     /// The same, rekordbox's (each bin the mean of its columns).
     pub(crate) rb_overview_kept: [tracks::RbOverviewKept; 2],
+    /// A hand on a lane (its drag), per deck.
+    pub(crate) lane_held: [bool; 2],
     /// The decks' platters: how each turns, its pictures.
     pub(crate) platters: platter::Platters,
     /// Where each deck's platter was last drawn, and records flying from the crate to a deck.
@@ -359,6 +362,7 @@ impl App {
             zoom: 110.0,
             overview_kept: [None, None],
             rb_overview_kept: [None, None],
+            lane_held: [false; 2],
             platters: Default::default(),
             platter_at: [Rect::NOTHING; 2],
             flights: vec![],
@@ -411,6 +415,21 @@ impl App {
     pub(crate) fn toggle_wide_crate(&mut self, ctx: &egui::Context) {
         self.prefs.wide_crate = !self.prefs.wide_crate;
         self.save_prefs(ctx);
+    }
+
+    /// The WetOwl's layout or rekordbox's, the other one; kept.
+    pub(crate) fn toggle_layout(&mut self, ctx: &egui::Context) {
+        use wo_deskcore::DeskLayout;
+        self.prefs.layout = if self.prefs.layout == DeskLayout::Club { DeskLayout::WetOwl } else { DeskLayout::Club };
+        self.save_prefs(ctx);
+    }
+
+    /// The waveforms zoomed a step in (1) or out (−1), along rekordbox's halvings.
+    pub(crate) fn zoom_step(&mut self, dir: i32) {
+        const STEPS: [f32; 7] = [40.0, 56.0, 80.0, 112.0, 160.0, 224.0, 320.0];
+        let at = STEPS.iter().position(|&z| z >= self.zoom - 1.0).unwrap_or(STEPS.len() - 1) as i32;
+        let at = if dir > 0 && STEPS[at as usize] > self.zoom + 1.0 { at } else { at + dir };
+        self.zoom = STEPS[at.clamp(0, STEPS.len() as i32 - 1) as usize];
     }
 
     pub(crate) fn save_prefs(&mut self, ctx: &egui::Context) {
@@ -682,6 +701,9 @@ impl App {
             K::Comma => d.show(ShowHand::Previous),
             K::Period => d.show(ShowHand::Next),
             K::J => d.show(ShowHand::Mosh),
+            K::L if m.command => self.toggle_layout(ctx),
+            K::Plus | K::Equals => self.zoom_step(1),
+            K::Minus => self.zoom_step(-1),
             K::L => {
                 let held = d.stage().held;
                 d.show(ShowHand::Hold(!held));

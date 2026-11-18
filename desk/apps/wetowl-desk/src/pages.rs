@@ -1,10 +1,10 @@
 //! Every page and every overlay drawn headless — no window, no GPU, the shapes tessellated —
 //! at the window sizes the Desk meets (a laptop zoomed, the smallest laid out, 1080p, 1440p),
-//! with a set playing: nothing panics, nothing leaves the window, and a frame stays cheap.
+//! in both layouts (the WetOwl's and rekordbox's), with a set playing: nothing panics, nothing leaves the window, and a frame stays cheap.
 use std::time::Instant;
 
 use eframe::egui::{self, Rect, pos2, vec2};
-use wo_deskcore::Desk;
+use wo_deskcore::{Desk, DeskLayout};
 
 use crate::show::Page;
 use crate::{App, Overlay};
@@ -39,8 +39,13 @@ fn every_page_and_overlay_draws_at_every_size() {
     let mut frames = 0;
     // words that did not fit, and where
     let mut misses: Vec<String> = vec![];
-    for size in [vec2(1280.0, 720.0), vec2(1400.0, 840.0), vec2(1920.0, 1080.0), vec2(2560.0, 1440.0)] {
+    for (layout, size) in [DeskLayout::WetOwl, DeskLayout::Club].into_iter().flat_map(|l| [vec2(1280.0, 720.0), vec2(1400.0, 840.0), vec2(1920.0, 1080.0), vec2(2560.0, 1440.0)].map(|s| (l, s))) {
+        // both layouts: the WetOwl's own and rekordbox's
+        app.prefs.layout = layout;
         for page in [Page::Booth, Page::Show, Page::Kit] {
+            if page == Page::Kit && layout == DeskLayout::Club {
+                continue;
+            }
             for overlay in [None, Some(Overlay::Keys), Some(Overlay::Settings), Some(Overlay::Set), Some(Overlay::Controllers)] {
                 if page == Page::Kit && overlay.is_some() {
                     continue;
@@ -76,7 +81,7 @@ fn every_page_and_overlay_draws_at_every_size() {
                     let missed = crate::ui::fit::take();
                     if n >= 3 {
                         for m in missed {
-                            let line = format!("{page:?} {overlay:?} at {}×{} (frame {n}): {m}", size.x, size.y);
+                            let line = format!("{layout:?} {page:?} {overlay:?} at {}×{} (frame {n}): {m}", size.x, size.y);
                             if !misses.iter().any(|x| x.split(": ").nth(1) == line.split(": ").nth(1) && x.starts_with(&line[..line.find(" (frame").unwrap_or(0)])) {
                                 misses.push(line);
                             }
@@ -84,7 +89,7 @@ fn every_page_and_overlay_draws_at_every_size() {
                     }
                     let meshes = ctx.tessellate(out.shapes, ppp);
                     let ms = t0.elapsed().as_secs_f32() * 1000.0;
-                    let what = format!("{page:?} {overlay:?} at {}×{}", size.x, size.y);
+                    let what = format!("{layout:?} {page:?} {overlay:?} at {}×{}", size.x, size.y);
                     assert!(!meshes.is_empty(), "{what}: nothing drawn");
                     // the window is the screen (zoomed below the smallest laid out: from the frame
                     // after a resize on)

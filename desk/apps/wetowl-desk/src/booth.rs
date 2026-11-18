@@ -21,6 +21,10 @@ const ROW: f32 = 36.0;
 impl App {
     /// The whole booth over the glass, for this frame's snapshot.
     pub(crate) fn draw(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, full: Rect, s: &Snapshot) {
+        if self.prefs.layout == wo_deskcore::DeskLayout::Club {
+            self.club(desk, ui, p, full, s);
+            return;
+        }
         let wide = self.prefs.wide_crate;
         let l = crate::ui::layout(full, wide);
         self.top_bar(desk, ui, p, l.top, s);
@@ -175,7 +179,7 @@ impl App {
 
     /// The house, the controllers and the stage as icons, right to left from `right`; the
     /// sound's load too while it works hard. Their left edge.
-    fn status_icons(&mut self, desk: &Desk, ui: &mut Ui, p: &Painter, right: egui::Pos2, s: &Snapshot) -> f32 {
+    pub(crate) fn status_icons(&mut self, desk: &Desk, ui: &mut Ui, p: &Painter, right: egui::Pos2, s: &Snapshot) -> f32 {
         use crate::ui::kit::State;
         let house = desk.house().map(|(sv, u)| (sv.trim_start_matches("https://").to_owned(), u.map(str::to_owned)));
         let controllers = desk.controllers();
@@ -558,7 +562,7 @@ impl App {
 
     /// The pitch fader: Technics way round (up is slower), a detent mark at the centre,
     /// double-click centres; the range above it cycles ±8 / 16 / 50.
-    fn pitch(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
+    pub(crate) fn pitch(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
         let v = &s.decks[d];
         let range = Rect::from_min_size(pos2(r.left() + 2.0, r.top()), vec2(r.width() - 4.0, 20.0));
         if kit::chip(ui, p, range, &format!("±{:.0}", v.range * 100.0), false, Tone::Neutral, true, (d, "range")).on_hover_text("The fader's range").clicked() {
@@ -999,7 +1003,7 @@ impl App {
         }
     }
 
-    fn crate_(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot) {
+    pub(crate) fn crate_(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot) {
         kit::panel(p, r, true);
         // what the house says as songs from elsewhere come and go
         for said in desk.take_elsewhere_said() {
@@ -1443,7 +1447,7 @@ impl App {
     }
 
     /// The record being dragged to a deck, following the pointer.
-    fn drag_ghost(&mut self, desk: &mut Desk, ui: &mut Ui) {
+    pub(crate) fn drag_ghost(&mut self, desk: &mut Desk, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let Some(rec) = egui::DragAndDrop::payload::<Record>(&ctx) else { return };
         let Some(pos) = ctx.pointer_latest_pos() else { return };
@@ -1629,7 +1633,7 @@ impl App {
     }
 
     /// The show's window, small: its picture under a glass caption, and four hands.
-    fn stage_card(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect) {
+    pub(crate) fn stage_card(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect) {
         kit::panel(p, r, false);
         let inner = r.shrink(t::INSET);
         let v = desk.stage();
