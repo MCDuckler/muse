@@ -39,6 +39,8 @@ fn decode(q: u8) -> f32 {
 pub struct Col {
     pub peak: [u8; 3],
     pub rms: [u8; 3],
+    /// The whole signal's peak (no band's gain): rekordbox's RGB and BLUE heights (rb.rs).
+    pub all: u8,
 }
 
 /// Columns drawn as one: each band's peak and RMS, 0..1 against the record's ceiling, on
@@ -55,18 +57,16 @@ pub struct Wave {
     pub done: bool,
     /// How many columns had each loudest-band peak byte: the ceiling's count.
     hist: [u32; 256],
-    /// The same, each band's own (rb.rs: each band against its own ceiling).
-    band_hist: [[u32; 256]; 3],
     /// rekordbox's own columns, where the record came with them (rb.rs).
     exact: Vec<RbCol>,
-    /// Else rekordbox's made from these, and the ceilings they were made against.
+    /// Else rekordbox's made from these, and where its bands are held after the last.
     made: Vec<RbCol>,
-    made_ceil: Option<rb::Ceilings>,
+    made_held: rb::Held,
 }
 
 impl Default for Wave {
     fn default() -> Self {
-        Wave { cols: vec![], done: false, hist: [0; 256], band_hist: [[0; 256]; 3], exact: vec![], made: vec![], made_ceil: None }
+        Wave { cols: vec![], done: false, hist: [0; 256], exact: vec![], made: vec![], made_held: rb::Held::default() }
     }
 }
 
@@ -77,9 +77,6 @@ impl Wave {
 
     fn push(&mut self, c: Col) {
         self.hist[*c.peak.iter().max().unwrap() as usize] += 1;
-        for k in 0..3 {
-            self.band_hist[k][c.peak[k] as usize] += 1;
-        }
         self.cols.push(c);
     }
 
@@ -200,6 +197,7 @@ pub struct Analyser {
     at: usize,
     peak: [f32; 3],
     sq: [f32; 3],
+    all: f32,
     low: Biquad,
     mid_hp: Biquad,
     mid_lp: Biquad,
@@ -216,6 +214,7 @@ impl Analyser {
             at: 0,
             peak: [0.0; 3],
             sq: [0.0; 3],
+            all: 0.0,
             low: Biquad::new(true, 200.0, r),
             mid_hp: Biquad::new(false, 200.0, r),
             mid_lp: Biquad::new(true, 2500.0, r),
@@ -232,6 +231,7 @@ impl Analyser {
         for f in stereo.as_chunks::<2>().0 {
             let x = (f[0] as f32 + f[1] as f32) * (0.5 / 32768.0);
             let b = [self.low.run(x), self.mid_lp.run(self.mid_hp.run(x)), self.high.run(x)];
+            self.all = self.all.max(x.abs());
             for k in 0..3 {
                 self.peak[k] = self.peak[k].max(b[k].abs());
                 self.sq[k] += b[k] * b[k];
@@ -239,7 +239,8 @@ impl Analyser {
             self.at += 1;
             if self.at == self.per_col {
                 let n = self.per_col as f32;
-                let col = Col { peak: [0, 1, 2].map(|k| encode(self.peak[k] * GAIN[k])), rms: [0, 1, 2].map(|k| encode((self.sq[k] / n).sqrt() * GAIN[k])) };
+                let col = Col { peak: [0, 1, 2].map(|k| encode(self.peak[k] * GAIN[k])), rms: [0, 1, 2].map(|k| encode((self.sq[k] / n).sqrt() * GAIN[k])), all: encode(self.all) };
+                self.all = 0.0;
                 self.batch.push(col);
                 self.peak = [0.0; 3];
                 self.sq = [0.0; 3];

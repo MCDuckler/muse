@@ -25,6 +25,40 @@ pub fn panel(p: &Painter, r: Rect, dense: bool) {
     p.line_segment([pos2(r.left() + 12.0, r.top() + 1.5), pos2(r.right() - 12.0, r.top() + 1.5)], Stroke::new(1.0, col(theme::GLASS_HIGHLIGHT)));
 }
 
+/// The WET◉WL mark on its red: the letters' capitals `height` × 0.48 tall (Archivo's own
+/// metrics: capitals 686, ascent 878, descent 210 a thousand), the disco ball as an O as
+/// tall as them and a little more (an O overshoots), centred on their middle, the red
+/// sized round the letters so nothing spills. Its left edge at `left_center`; its rect.
+pub fn mark(p: &Painter, ball: egui::TextureId, left_center: Pos2, height: f32) -> Rect {
+    const CAP: f32 = 0.686;
+    const ASC: f32 = 0.878;
+    const LINE: f32 = 0.878 + 0.210;
+    let f = |size: f32| FontId::new(size, family("mark"));
+    // the size whose capitals are as tall as wanted: the row's height is the font's line
+    let probe = p.layout_no_wrap("WET".into(), f(100.0), Color32::WHITE).size().y;
+    let em_per_size = probe / LINE / 100.0;
+    let cap = height * 0.48;
+    let size = cap / (CAP * em_per_size);
+    let em = size * em_per_size;
+    let wet = p.layout_no_wrap("WET".into(), f(size), Color32::WHITE);
+    let wl = p.layout_no_wrap("WL".into(), f(size), Color32::WHITE);
+    let pad = height * 0.26;
+    let gap = cap * 0.07;
+    let d = cap * 1.1;
+    let w = pad + wet.size().x + gap + d + gap + wl.size().x + pad;
+    let r = Rect::from_min_size(pos2(left_center.x, left_center.y - height / 2.0), vec2(w, height));
+    p.rect_filled(r, CornerRadius::same((height * 0.2) as u8), col(theme::RED));
+    // the capitals' middle on the red's: the row's top an ascent above the baseline
+    let baseline = r.center().y + cap / 2.0;
+    let top = baseline - ASC * em;
+    let x = r.left() + pad;
+    p.galley(pos2(x, top), wet.clone(), Color32::WHITE);
+    let bx = x + wet.size().x + gap;
+    p.image(ball, Rect::from_center_size(pos2(bx + d / 2.0, r.center().y), vec2(d, d)), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    p.galley(pos2(bx + d + gap, top), wl, Color32::WHITE);
+    r
+}
+
 /// A section's title: condensed caps, in `soft` — a step above a label.
 pub fn section(p: &Painter, pos: Pos2, anchor: Align2, s: &str) -> Rect {
     label_sized(p, pos, anchor, s, t::SECTION, t::soft())

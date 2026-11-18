@@ -166,12 +166,7 @@ impl App {
         p.rect_filled(r, CornerRadius::ZERO, rgb(0x141415));
         fit::panel(r);
         // the mark, small
-        let logo = Rect::from_min_size(pos2(r.left() + 6.0, r.center().y - 12.0), vec2(74.0, 24.0));
-        p.rect_filled(logo, CornerRadius::same(4), col(theme::RED));
-        let w = kit::text(p, pos2(logo.left() + 7.0, logo.center().y + 1.0), Align2::LEFT_CENTER, "WET", 19.0, "mark", Color32::WHITE);
-        let ball = Rect::from_min_size(pos2(w.right() + 1.0, logo.center().y - 8.0), vec2(16.0, 16.0));
-        p.image(self.ball.id(), ball, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-        kit::text(p, pos2(ball.right() + 1.0, logo.center().y + 1.0), Align2::LEFT_CENTER, "WL", 19.0, "mark", Color32::WHITE);
+        let logo = kit::mark(p, self.ball.id(), pos2(r.left() + 6.0, r.center().y), 26.0);
         let mut x = logo.right() + 14.0;
         let y = r.center().y;
         for (word, page) in [("PERFORMANCE", Page::Booth), ("SHOW", Page::Show)] {

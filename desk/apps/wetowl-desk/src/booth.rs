@@ -62,12 +62,7 @@ impl App {
     fn top_bar(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot) {
         kit::panel(p, r, false);
         // the mark: the one loud thing
-        let logo = Rect::from_min_size(pos2(r.left() + 9.0, r.center().y - 17.0), vec2(104.0, 34.0));
-        p.rect_filled(logo, CornerRadius::same(7), col(theme::RED));
-        let w = kit::text(p, pos2(logo.left() + 10.0, logo.center().y + 1.0), Align2::LEFT_CENTER, "WET", 27.0, "mark", Color32::WHITE);
-        let ball = Rect::from_min_size(pos2(w.right() + 1.0, logo.center().y - 11.0), vec2(22.0, 22.0));
-        p.image(self.ball.id(), ball, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-        kit::text(p, pos2(ball.right() + 1.0, logo.center().y + 1.0), Align2::LEFT_CENTER, "WL", 27.0, "mark", Color32::WHITE);
+        let logo = kit::mark(p, self.ball.id(), pos2(r.left() + 9.0, r.center().y), 34.0);
 
         // the rooms, an underline gliding to the one up
         let mut x = logo.right() + 18.0;

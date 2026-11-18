@@ -695,9 +695,11 @@ impl Desk {
                 // rekordbox's grid and cues first (a few KB off the stick), then the audio
                 Audio::Usb { path, anlz, .. } => {
                     let mut result = library::analyse_usb(anlz.as_deref(), seconds).map(Box::new);
-                    // rekordbox's own waveform: the whole record drawn at once
+                    // rekordbox's own waveform: the whole record drawn at once (WO_RB_EXACT=off:
+                    // made from the audio as any other record's, to hold the two side by side)
                     if let Ok(a) = &mut result
                         && !a.waves.is_empty()
+                        && std::env::var("WO_RB_EXACT").map_or(true, |v| v != "off")
                     {
                         analyser.wave().lock().unwrap().set_exact(std::mem::take(&mut a.waves));
                     }

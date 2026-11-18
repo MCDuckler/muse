@@ -4,11 +4,15 @@
 //!
 //! A record off a rekordbox stick brings rekordbox's own columns ([`Wave::set_exact`]),
 //! drawn as they are. Any other record's are made from the Desk's own columns as it
-//! decodes: the bands against one ceiling of the record's own (rekordbox's lows sit with
-//! their loudest 1 % near 3/4 of full on every record, the mids and highs as they come
-//! under them: one gain a record, not one a band), the colour looked up from the bands in
-//! a table measured on a real stick (`data/rb_colour.lut`: rekordbox's own RGB and BLUE
-//! columns against its own bands, 2.4 million columns, 75 records).
+//! decodes, on curves fitted to rekordbox's own (rb_fit.rs, made by data/make_rb_fit.py
+//! from a real stick: 75 records, 2.4 million columns, each record's audio decoded as
+//! rekordbox decodes it beside rekordbox's columns for it). rekordbox's heights follow
+//! the absolute level (no record is scaled to its own loudest); each band is the Desk's
+//! band's peak held with a release (lows 0.95 a column, mids 0.92, highs 0.88: the tails
+//! rekordbox's waveforms have), through its fitted curve; RGB's and BLUE's heights the
+//! whole signal's peak through theirs. Off by 4.5, 6.0 and 4.2 of 127 on the bands and
+//! 1.2 and 0.65 of 31 on the heights, on average. The colour is looked up from the bands
+//! in a table measured on the same stick (`data/rb_colour.lut`).
 use crate::{Col, Wave, decode};
 
 /// One column, in rekordbox's own units.
@@ -85,53 +89,44 @@ pub fn colour_of(bands: [u8; 3]) -> [u8; 4] {
     [LUT[i], LUT[i + 1], LUT[i + 2], LUT[i + 3]]
 }
 
-/// Where the ceiling lands: rekordbox keeps the loudest band's loudest 1 % about here.
-const BAND_TOP: f32 = 96.0;
-
-/// The curve a band is drawn on, over its ceiling.
-const BAND_CURVE: f32 = 0.85;
-
-/// The RGB and BLUE heights' curve over the record's ceiling.
-const HEIGHT_CURVE: f32 = 0.8;
-
-/// The ceilings a record's columns are made against: the bands' (the loudest band's
-/// loudest 1 %), and the RGB and BLUE heights' (linear, the bands' gains applied).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Ceilings {
-    pub bands: f32,
-    pub all: f32,
+/// A fitted curve: a level (linear), held with `release` a column, its log placed between
+/// `lo` and `hi` on 64 steps, read off `at` (rekordbox's own units).
+pub(crate) struct Curve {
+    pub release: f32,
+    pub lo: f32,
+    pub hi: f32,
+    pub at: [u8; 64],
 }
 
-/// A column of the Desk's own made into rekordbox's.
-pub fn emulate(c: &Col, ceil: &Ceilings) -> RbCol {
-    let band = |k: usize| {
-        let x = (decode(c.peak[k]) / ceil.bands).max(0.0).powf(BAND_CURVE) * BAND_TOP;
-        x.round().min(127.0) as u8
-    };
-    let bands = [band(0), band(1), band(2)];
-    let loud = c.peak.iter().map(|&q| decode(q)).fold(0.0f32, f32::max);
-    let h = ((loud / ceil.all).clamp(0.0, 1.0).powf(HEIGHT_CURVE) * 31.0).round() as u8;
+impl Curve {
+    pub(crate) fn of(&self, x: f32) -> u8 {
+        let pos = ((x.max(1e-5).ln() - self.lo) / (self.hi - self.lo) * 64.0 - 0.5).clamp(0.0, 63.0);
+        let i = pos.floor() as usize;
+        let j = (i + 1).min(63);
+        let f = pos - i as f32;
+        (self.at[i] as f32 * (1.0 - f) + self.at[j] as f32 * f).round() as u8
+    }
+}
+
+/// Where a made record's bands are held (their releases run on from column to column).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Held([f32; 3]);
+
+/// A column of the Desk's own made into rekordbox's, `held` carried from the one before.
+pub(crate) fn emulate(c: &Col, held: &mut Held) -> RbCol {
+    let curves = [&fit::LOW, &fit::MID, &fit::HIGH];
+    let mut bands = [0u8; 3];
+    for k in 0..3 {
+        held.0[k] = decode(c.peak[k]).max(held.0[k] * curves[k].release);
+        bands[k] = curves[k].of(held.0[k]).min(127);
+    }
+    let all = decode(c.all);
     let l = colour_of(bands);
-    RbCol { bands, rgb: [l[0] / 32, l[1] / 32, l[2] / 32], height: h, blue: h, white: l[3] / 32 }
+    RbCol { bands, rgb: [l[0] / 32, l[1] / 32, l[2] / 32], height: fit::HEIGHT.of(all).min(31), blue: fit::BLUE.of(all).min(31), white: l[3] / 32 }
 }
 
-/// A band's ceiling: the level its loudest 1 % of columns pass, never under a twentieth
-/// of full scale (a silent record is not blown up).
-pub(crate) fn band_ceiling(hist: &[u32; 256]) -> f32 {
-    let n: u32 = hist.iter().sum();
-    if n == 0 {
-        return 1.0;
-    }
-    let over = (n as f32 * 0.01).ceil() as u32;
-    let mut seen = 0;
-    for q in (0..256).rev() {
-        seen += hist[q];
-        if seen > over {
-            return decode(q as u8).max(0.05);
-        }
-    }
-    0.05
-}
+#[path = "rb_fit.rs"]
+mod fit;
 
 impl Wave {
     /// rekordbox's own columns for the record (off its stick): drawn from now on in place
@@ -151,26 +146,16 @@ impl Wave {
         if self.is_exact() { self.exact.len() } else { self.cols.len() }
     }
 
-    pub fn ceilings(&self) -> Ceilings {
-        Ceilings { bands: (0..3).map(|k| band_ceiling(&self.band_hist[k])).fold(0.05, f32::max), all: self.ceiling() }
-    }
-
-    /// The made columns brought up to date: those decoded since, and all of them again
-    /// where the record's ceilings have moved (by more than 2 %: they settle as it decodes).
+    /// The made columns brought up to date: those decoded since.
     fn refresh(&mut self) {
         if self.is_exact() {
             return;
         }
-        let ceil = self.ceilings();
-        let moved = self.made_ceil.is_none_or(|m| (m.bands / ceil.bands - 1.0).abs() > 0.02 || (m.all / ceil.all - 1.0).abs() > 0.02);
-        if moved {
-            self.made.clear();
-            self.made_ceil = Some(ceil);
-        }
-        let ceil = self.made_ceil.unwrap();
+        let mut held = self.made_held;
         let from = self.made.len();
-        let more: Vec<RbCol> = self.cols[from..].iter().map(|c| emulate(c, &ceil)).collect();
+        let more: Vec<RbCol> = self.cols[from..].iter().map(|c| emulate(c, &mut held)).collect();
         self.made.extend(more);
+        self.made_held = held;
     }
 
     /// Column `i` as rekordbox's (after [`Wave::refresh`]).
@@ -286,13 +271,23 @@ mod tests {
         assert!(highs[2] > lows[2] && highs[3] > lows[3], "highs bluer and whiter: {highs:?} vs {lows:?}");
     }
 
-    /// A made record: a bass tone lands in the lows, near rekordbox's level for the
-    /// loudest band; a hi-hat tone in the highs; what leaks into the other bands stays low.
+    /// A made record: a bass tone lands in the lows, a voice's in the mids, a hi-hat's in
+    /// the highs, well up near full scale; what leaks into the other bands stays low; and
+    /// as rekordbox's, the heights follow the level (a quieter tone, a lower picture).
     #[test]
     fn a_made_record_lands_in_its_bands() {
         for (hz, band) in [(60.0, 0), (800.0, 1), (8000.0, 2)] {
+            let quiet = {
+                let mut a = Analyser::new(48_000);
+                a.feed(&tone(hz, 2.0, 0.3));
+                a.finish();
+                let w = a.wave();
+                let mut w = w.lock().unwrap();
+                w.refresh();
+                w.rb_bin(60, 240, Fold::Mean).unwrap()
+            };
             let mut a = Analyser::new(48_000);
-            a.feed(&tone(hz, 2.0, 0.6));
+            a.feed(&tone(hz, 2.0, 0.97));
             a.finish();
             let w = a.wave();
             let mut w = w.lock().unwrap();
@@ -300,9 +295,10 @@ mod tests {
             let b = w.rb_bin(60, 240, Fold::Mean).unwrap();
             let loudest = (0..3).max_by(|&i, &j| b.bands[i].total_cmp(&b.bands[j])).unwrap();
             assert_eq!(loudest, band, "{hz} Hz: {b:?}");
-            assert!((b.bands[band] * 127.0 - BAND_TOP).abs() < 12.0, "{hz} Hz at its ceiling: {b:?}");
+            assert!(b.bands[band] * 127.0 > 40.0, "{hz} Hz well up: {b:?}");
             assert!((0..3).filter(|&k| k != band).all(|k| b.bands[k] < 0.5 * b.bands[band]), "{hz} Hz leaks: {b:?}");
-            assert!(b.height > 0.9, "{hz} Hz full height: {b:?}");
+            assert!(b.height > 0.6, "{hz} Hz near full scale stands tall: {b:?}");
+            assert!(quiet.height < b.height && quiet.bands[band] < b.bands[band], "{hz} Hz quieter, lower: {quiet:?} vs {b:?}");
         }
     }
 
