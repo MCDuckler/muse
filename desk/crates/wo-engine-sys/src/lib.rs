@@ -142,6 +142,9 @@ unsafe extern "C" {
     pub fn we_deck_echo(deck: i32, send: f32, dry: f32, beat: f64);
     pub fn we_deck_brake(deck: i32, seconds: f64);
     pub fn we_master_level(gain: f32);
+    pub fn we_beat_fx(unit: i32, kind: i32, on: i32, level: f32, beats: f64, param: f32, target: i32, tempo_deck: i32, bpm: f64);
+    pub fn we_release_fx(unit: i32, kind: i32, hold: i32, beats: f64);
+    pub fn we_color_fx(deck: i32, kind: i32, knob: f32, param: f32);
     pub fn we_pad_play(slot: i32, source: i32, at: f64, from: f64, to: f64, looped: i32, gain: f32);
     pub fn we_pad_stop(slot: i32, fade: f64);
     pub fn we_pad_gain(slot: i32, gain: f32, ramp: f64);

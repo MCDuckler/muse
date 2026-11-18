@@ -1,6 +1,6 @@
 //! A pretend Pioneer DDJ-400 on a virtual ALSA MIDI port driving the real desk (silently,
 //! on the synthesised records): its own SHIFT, 14-bit knobs (MSB then LSB), hot cues 5–8,
-//! the beat-loop pads, the touched platter and the Beat FX as the echo. Its own test
+//! the beat-loop pads, the touched platter and rekordbox's Beat FX. Its own test
 //! binary: the engine is one per process, and the RMX's test has a pretend port of its own.
 //! Linux only.
 #![cfg(target_os = "linux")]
@@ -114,11 +114,19 @@ fn the_ddj_400_plays_the_booth() {
     send(&[0xB1, 0x22, 0x40 + 9]);
     assert!(until(&mut d, 1.0, |d| did(d, "deck.b.jog.scratch").iter().any(|a| a.contains("scratch: true") && a.contains("ticks: 1.6"))), "{:?}", did(&d, "deck.b.jog.scratch"));
 
-    // Beat FX: on → the echo on both decks (MASTER), CH SELECT 2 → B's only
+    // Beat FX: ON/OFF, CH SELECT 2, FX SELECT, BEAT ▶: FX1 on deck B, the effect after ECHO
     send(&[0x94, 0x47, 0x7F]);
-    assert!(until(&mut d, 1.0, |d| did(d, "fx.on").iter().any(|a| a == "Echo(0, 0.5)")), "{:?}", did(&d, "fx.on"));
     send(&[0x94, 0x11, 0x7F]);
-    assert!(until(&mut d, 1.0, |d| did(d, "fx.to.b") == ["Echo(0, 0.0)", "Echo(1, 0.5)"]), "{:?}", did(&d, "fx.to.b"));
+    send(&[0x94, 0x63, 0x7F]);
+    send(&[0x94, 0x4B, 0x7F]);
+    assert!(
+        until(&mut d, 1.0, |d| {
+            let u = &d.fx_units()[0];
+            u.on && u.target == wo_deskcore::beat_fx::Target::Deck(1) && u.kind == wo_deskcore::beat_fx::BeatFxKind::PingPong && u.beats == 2.0
+        }),
+        "{:?}",
+        d.fx_units()[0]
+    );
 
     // the monitor names a 14-bit control's first half as its own, not as unknown
     let (packets, _) = d.control_monitor();

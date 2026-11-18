@@ -24,6 +24,7 @@ mod booth;
 mod club;
 mod controllers;
 mod faves;
+mod fx_panel;
 mod gallery;
 mod overlays;
 mod paint;
@@ -55,6 +56,8 @@ pub(crate) enum Overlay {
     Set,
     /// The controllers: what is plugged in, its controls, the monitor.
     Controllers,
+    /// rekordbox's effects (the WetOwl's layout; rekordbox's has them under the decks).
+    Fx,
 }
 
 /// How the crate is sorted: by fit (the booth's own order), title, artist, tempo or key;
@@ -242,6 +245,7 @@ impl App {
             Some("settings") => Some(Overlay::Settings),
             Some("set") => Some(Overlay::Set),
             Some("controllers") => Some(Overlay::Controllers),
+            Some("fx") => Some(Overlay::Fx),
             _ => None,
         };
         // --search <words> [--found-tab 0|1|2]: the crate opens on that search (screenshots)
@@ -291,6 +295,14 @@ impl App {
             let mut d = app.desk.lock().unwrap();
             for (i, t) in at.split(',').filter_map(|t| t.trim().parse::<f64>().ok()).take(2).enumerate() {
                 d.seek_to(i, t);
+            }
+        }
+        // --fx echo: FX1 on with that effect (screenshots)
+        if let Some(name) = arg("--fx") {
+            let mut d = app.desk.lock().unwrap();
+            if let Some(k) = wo_deskcore::beat_fx::BeatFxKind::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(&name.replace('-', " "))) {
+                d.set_fx_kind(0, k);
+                d.set_fx_on(0, true);
             }
         }
         // --play: the crate's shelf played in order (screenshots)
@@ -422,6 +434,17 @@ impl App {
         use wo_deskcore::DeskLayout;
         self.prefs.layout = if self.prefs.layout == DeskLayout::Club { DeskLayout::WetOwl } else { DeskLayout::Club };
         self.save_prefs(ctx);
+    }
+
+    /// The effects: rekordbox's layout's row under the decks shown or hidden (kept); the
+    /// WetOwl's, their panel over the booth.
+    pub(crate) fn toggle_fx_panel(&mut self, ctx: &egui::Context) {
+        if self.prefs.layout == wo_deskcore::DeskLayout::Club {
+            self.prefs.club_fx = !self.prefs.club_fx;
+            self.save_prefs(ctx);
+        } else {
+            self.overlay = if self.overlay == Some(Overlay::Fx) { None } else { Some(Overlay::Fx) };
+        }
     }
 
     /// The waveforms zoomed a step in (1) or out (−1), along rekordbox's halvings.
@@ -702,6 +725,7 @@ impl App {
             K::Period => d.show(ShowHand::Next),
             K::J => d.show(ShowHand::Mosh),
             K::L if m.command => self.toggle_layout(ctx),
+            K::E => self.toggle_fx_panel(ctx),
             K::Plus | K::Equals => self.zoom_step(1),
             K::Minus => self.zoom_step(-1),
             K::L => {

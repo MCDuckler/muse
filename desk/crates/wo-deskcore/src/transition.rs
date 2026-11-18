@@ -87,7 +87,7 @@ impl Desk {
         // what the last plan opened on the incoming is undone first
         self.slots[to].stems.mix = None;
         self.set_eq_db(to, EqSet::FLAT, 0.0);
-        self.set_filter(to, 0.5);
+        self.set_filter_raw(to, 0.5);
         if let Some(m) = self.mix.as_mut() {
             m.kind = kind;
             m.bars = bars;
@@ -173,7 +173,7 @@ impl Desk {
             if let Some(f) = steps::filter_at(&run.steps, side, k) {
                 let knob = 0.5 + f / 2.0;
                 if (self.slots[d].filter - knob).abs() > 1e-3 {
-                    self.set_filter(d, knob);
+                    self.set_filter_raw(d, knob);
                 }
             }
             if let Some(e) = steps::eq_at(&run.steps, side, k, began, beat_k) {
@@ -280,7 +280,7 @@ impl Desk {
     /// no echo, no shift, the stems back to its part.
     pub(crate) fn plain(&mut self, d: usize) {
         self.unloop(d);
-        self.set_filter(d, 0.5);
+        self.set_filter_raw(d, 0.5);
         self.set_eq_db(d, EqSet::FLAT, 0.0);
         if self.slots[d].gate.0 > 0.0 {
             self.set_gate(d, 0.0, 2);

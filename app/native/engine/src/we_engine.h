@@ -178,6 +178,18 @@ WE_API void we_deck_echo(int deck, float send, float dry, double beat);
 // The brake: the record slowed to a stop over seconds, pitch going down with it.
 WE_API void we_deck_brake(int deck, double seconds);
 WE_API void we_master_level(float gain);
+// rekordbox's BEAT FX (fx.h): `unit` 0 or 1; `kind` DELAY 0, ECHO, PING PONG, SPIRAL,
+// REVERB, TRANS, FILTER, FLANGER, PHASER, PITCH, SLIP ROLL, ROLL, VINYL BRAKE, HELIX 13;
+// `level` its LEVEL/DEPTH 0..1; `beats` its length (or LFO cycle) in beats; `param` the
+// effect's own (the reverb's size); `target` a deck or -1 the master; in time with
+// `tempo_deck`'s beat, or `bpm` where it is over 1 (a tapped tempo).
+WE_API void we_beat_fx(int unit, int kind, int on, float level, double beats, float param, int target, int tempo_deck, double bpm);
+// Its RELEASE FX, held (1) or let go of: ECHO 0, VINYL BRAKE 1, BACKSPIN 2, over `beats`.
+// Held, it turns the unit's BEAT FX off.
+WE_API void we_release_fx(int unit, int kind, int hold, double beats);
+// A deck's SOUND COLOR FX: `kind` SPACE 1, DUB ECHO 2, SWEEP 3, NOISE 4, CRUSH 5 (FILTER 0
+// is we_deck_filter's), `knob` -1..1 (the middle none), `param` its PARAMETER 0..1.
+WE_API void we_color_fx(int deck, int kind, float knob, float param);
 
 // ---- pads (the board) ------------------------------------------------------------
 

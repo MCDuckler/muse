@@ -46,6 +46,8 @@ pub(crate) struct ClubLayout {
     pub decks: [Rect; 2],
     pub mixer: Rect,
     pub strip: Rect,
+    /// rekordbox's effect panel, when shown.
+    pub fx: Option<Rect>,
     pub browser: Rect,
     /// The stage and the Auto DJ: none when folded away.
     pub side: Option<Rect>,
@@ -53,7 +55,7 @@ pub(crate) struct ClubLayout {
 
 /// The grid for a window: the rows rekordbox's screenshot has at 1920×1016 (bar 45, the
 /// waveforms 145, the decks 270, the strip 40, the browser the rest), scaled to the height.
-pub(crate) fn layout(full: Rect, side: bool) -> ClubLayout {
+pub(crate) fn layout(full: Rect, side: bool, fx: bool) -> ClubLayout {
     let r = full.shrink(4.0);
     let h = r.height();
     let top = Rect::from_min_size(r.min, vec2(r.width(), 38.0));
@@ -68,11 +70,12 @@ pub(crate) fn layout(full: Rect, side: bool) -> ClubLayout {
     let decks = [Rect::from_min_size(pos2(r.left(), deck_top), vec2(dw, decks_h)), Rect::from_min_size(pos2(r.right() - dw, deck_top), vec2(dw, decks_h))];
     let mixer = Rect::from_min_max(pos2(decks[0].right() + G, deck_top), pos2(decks[1].left() - G, deck_top + decks_h));
     let strip = Rect::from_min_size(pos2(r.left(), deck_top + decks_h + G), vec2(r.width(), 40.0));
-    let rest = Rect::from_min_max(pos2(r.left(), strip.bottom() + G), r.max);
+    let fx = fx.then(|| Rect::from_min_size(pos2(r.left(), strip.bottom() + G), vec2(r.width(), 64.0)));
+    let rest = Rect::from_min_max(pos2(r.left(), fx.map_or(strip.bottom(), |f| f.bottom()) + G), r.max);
     let side_w = if side { (r.width() * 0.2).clamp(320.0, 420.0) } else { 0.0 };
     let browser = Rect::from_min_max(rest.min, pos2(rest.right() - if side { side_w + G } else { 0.0 }, rest.bottom()));
     let side = side.then(|| Rect::from_min_max(pos2(rest.right() - side_w, rest.top()), rest.max));
-    ClubLayout { top, lanes: [l0, l1], decks, mixer, strip, browser, side }
+    ClubLayout { top, lanes: [l0, l1], decks, mixer, strip, fx, browser, side }
 }
 
 /// A rekordbox panel: flat, opaque, a hairline edge.
@@ -81,12 +84,12 @@ pub(crate) fn panel(p: &Painter, r: Rect) {
     p.rect(r, CornerRadius::same(2), PANEL, Stroke::new(1.0, LINE), StrokeKind::Inside);
 }
 
-fn words(p: &Painter, at: Pos2, a: Align2, s: &str, size: f32, fam: &str, c: Color32) -> Rect {
+pub(crate) fn words(p: &Painter, at: Pos2, a: Align2, s: &str, size: f32, fam: &str, c: Color32) -> Rect {
     p.text(at, a, s, FontId::new(size, family(fam)), c)
 }
 
 /// A small flat button the rekordbox way: dark, its word light; lit, filled in `lit`.
-fn button(ui: &mut Ui, p: &Painter, r: Rect, word: &str, on: bool, lit: Color32, id: impl std::hash::Hash + std::fmt::Debug) -> egui::Response {
+pub(crate) fn button(ui: &mut Ui, p: &Painter, r: Rect, word: &str, on: bool, lit: Color32, id: impl std::hash::Hash + std::fmt::Debug) -> egui::Response {
     let resp = ui.interact(r, ui.scope_id().with(id), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let h = motion::tween_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), motion::QUICK, motion::STANDARD);
     let fill = if on { lit } else { mix(RAISED, rgb(0x34343A), h) };
@@ -97,7 +100,7 @@ fn button(ui: &mut Ui, p: &Painter, r: Rect, word: &str, on: bool, lit: Color32,
 }
 
 /// A small knob: an arc, a pointer; dragged up and down, double-click to its rest.
-fn knob(ui: &mut Ui, p: &Painter, c: Pos2, v: f32, bipolar: bool, rest: f32, id: impl std::hash::Hash + std::fmt::Debug) -> Option<f32> {
+pub(crate) fn knob(ui: &mut Ui, p: &Painter, c: Pos2, v: f32, bipolar: bool, rest: f32, id: impl std::hash::Hash + std::fmt::Debug) -> Option<f32> {
     let id = ui.scope_id().with(id);
     let resp = ui.interact(Rect::from_center_size(c, vec2(26.0, 26.0)), id, Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::ResizeVertical);
     let rr = 9.0;
@@ -137,7 +140,7 @@ impl App {
     pub(crate) fn club(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, full: Rect, s: &Snapshot) {
         // matte: the glass's light does not come through
         p.rect_filled(full, CornerRadius::ZERO, GROUND);
-        let l = layout(full, !self.prefs.wide_crate);
+        let l = layout(full, !self.prefs.wide_crate, self.prefs.club_fx);
         self.club_top(desk, ui, p, l.top, s);
         if self.page == Page::Show {
             let page = Rect::from_min_max(pos2(full.left() + 4.0, l.top.bottom() + G), full.max - vec2(4.0, 4.0));
@@ -150,11 +153,19 @@ impl App {
         }
         self.club_mixer(desk, ui, p, l.mixer, s);
         self.club_strip(desk, ui, p, l.strip, s);
+        if let Some(fx) = l.fx {
+            self.fx_panel(desk, ui, p, fx);
+        }
         self.crate_(desk, ui, p, l.browser, s);
         if let Some(side) = l.side {
-            let stage_h = (side.width() * 9.0 / 16.0 + 64.0).min(side.height() * 0.45);
-            self.stage_card(desk, ui, p, Rect::from_min_size(side.min, vec2(side.width(), stage_h)));
-            self.auto_dj(desk, ui, p, Rect::from_min_max(pos2(side.left(), side.top() + stage_h + G), side.max), s);
+            // short (a laptop's, the effects out): the Auto DJ alone, the stage on SHOW
+            if side.height() < 540.0 {
+                self.auto_dj(desk, ui, p, side, s);
+            } else {
+                let stage_h = (side.width() * 9.0 / 16.0 + 64.0).min(side.height() - 330.0);
+                self.stage_card(desk, ui, p, Rect::from_min_size(side.min, vec2(side.width(), stage_h)));
+                self.auto_dj(desk, ui, p, Rect::from_min_max(pos2(side.left(), side.top() + stage_h + G), side.max), s);
+            }
         }
         self.drag_ghost(desk, ui);
         self.flights(desk, ui);
@@ -183,6 +194,12 @@ impl App {
             self.toggle_wide_crate(ui.ctx());
         }
         x += 100.0;
+        let units = desk.fx_units();
+        let fx_lit = units.iter().any(|u| u.on);
+        if button(ui, p, Rect::from_min_size(pos2(x, y - 11.0), vec2(44.0, 22.0)), "FX", self.prefs.club_fx || fx_lit, if fx_lit { CUE } else { rgb(0x3A3A40) }, "club-fx").on_hover_text("rekordbox's effects under the decks  (E)").clicked() {
+            self.toggle_fx_panel(ui.ctx());
+        }
+        x += 48.0;
         if button(ui, p, Rect::from_min_size(pos2(x, y - 11.0), vec2(96.0, 22.0)), "WETOWL LAYOUT", false, LIT, "club-back").on_hover_text("The WetOwl's own layout  (Ctrl L)").clicked() {
             self.toggle_layout(ui.ctx());
         }
@@ -620,9 +637,12 @@ mod tests {
     fn the_club_layout_fits_every_window() {
         for size in [crate::ui::MIN, vec2(1440.0, 860.0), vec2(1920.0, 1080.0), vec2(2560.0, 1440.0), vec2(3840.0, 2160.0)] {
             let full = Rect::from_min_size(pos2(0.0, 0.0), size);
-            for side in [true, false] {
-                let l = layout(full, side);
+            for (side, fx) in [(true, true), (true, false), (false, true), (false, false)] {
+                let l = layout(full, side, fx);
                 let mut panels = vec![("top", l.top), ("lane 1", l.lanes[0]), ("lane 2", l.lanes[1]), ("deck 1", l.decks[0]), ("deck 2", l.decks[1]), ("mixer", l.mixer), ("strip", l.strip), ("browser", l.browser)];
+                if let Some(f) = l.fx {
+                    panels.push(("fx", f));
+                }
                 if let Some(s) = l.side {
                     panels.push(("side", s));
                 }
@@ -635,7 +655,7 @@ mod tests {
                         assert!(!ra.shrink(0.5).intersects(rb.shrink(0.5)), "{a} and {b} overlap at {size:?}");
                     }
                 }
-                assert!(l.browser.height() >= 200.0, "the browser keeps room at {size:?}: {:?}", l.browser);
+                assert!(l.browser.height() >= 150.0, "the browser keeps room at {size:?}: {:?}", l.browser);
             }
         }
     }

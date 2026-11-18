@@ -62,8 +62,8 @@ pub enum Action {
     /// A loop of so many beats from the bar (the same again lets go).
     LoopBeats(usize, f64),
     Unloop(usize),
-    /// The deck's echo send, 0 for none (its tail rings out).
-    Echo(usize, f32),
+    /// The BEAT FX section (its first unit): rekordbox's, as a DJM's or a DDJ's.
+    Fx(FxHand),
     Crossfader(f32),
     /// The deck in the headphones, or out of them (its CUE / PFL button).
     Headphones(usize),
@@ -74,6 +74,23 @@ pub enum Action {
     Browse(i32, i32),
     /// The show (the stage's director), as the v1 booth binds it.
     Show(ShowCue),
+}
+
+/// A hand on the BEAT FX section.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FxHand {
+    /// ON/OFF.
+    Toggle,
+    /// CH SELECT: a deck, or the master (None).
+    To(Option<usize>),
+    /// LEVEL/DEPTH, 0..1.
+    Level(f32),
+    /// BEAT ◀ ▶: the beats a step down or up.
+    Beats(i32),
+    /// FX SELECT: the next effect (−1 with SHIFT: the one before).
+    Select(i32),
+    /// The RELEASE FX held (SHIFT + ON/OFF) or let go of.
+    Release(bool),
 }
 
 /// What a controller does to the show. SOURCE has no use in the booth, so it is the
@@ -137,9 +154,8 @@ pub struct Binding {
     pub scratch: bool,
     takeover: SoftTakeover,
     /// The FX section: on, how much, on which deck (None: both).
-    pub fx_on: bool,
-    pub fx_level: f32,
-    pub fx_to: Option<usize>,
+    /// SHIFT + ON/OFF held: the RELEASE FX on until it is let go of.
+    releasing: bool,
     /// The booth has headphones (a second output): PFL cues decks into them.
     pub headphones: bool,
 }
@@ -151,9 +167,7 @@ impl Default for Binding {
             shift_used: false,
             scratch: false,
             takeover: SoftTakeover::default(),
-            fx_on: false,
-            fx_level: 0.5,
-            fx_to: None,
+            releasing: false,
             headphones: false,
         }
     }
@@ -215,22 +229,23 @@ impl Binding {
                 "show.blackout" if pressed => vec![Action::Show(ShowCue::Blackout)],
                 "show.freeze" if pressed => vec![Action::Show(ShowCue::Freeze)],
                 "show.strobe" if e.kind == Kind::Button => vec![Action::Show(ShowCue::Strobe(pressed))],
-                "fx.on" if pressed => {
-                    self.fx_on = !self.fx_on;
-                    self.echo()
+                // SHIFT + ON/OFF: the RELEASE FX while held (its let-go may come on either note)
+                "fx.on" if pressed && self.shift() => {
+                    self.releasing = true;
+                    vec![Action::Fx(FxHand::Release(true))]
                 }
-                "fx.to.a" | "fx.to.b" | "fx.to.master" if pressed => {
-                    self.fx_to = match name {
-                        "fx.to.a" => Some(0),
-                        "fx.to.b" => Some(1),
-                        _ => None,
-                    };
-                    if self.fx_on { self.echo() } else { vec![] }
+                "fx.on" if pressed => vec![Action::Fx(FxHand::Toggle)],
+                "fx.on" if e.kind == Kind::Button && self.releasing => {
+                    self.releasing = false;
+                    vec![Action::Fx(FxHand::Release(false))]
                 }
-                "fx.level" => {
-                    self.fx_level = e.value as f32;
-                    if self.fx_on { self.echo() } else { vec![] }
-                }
+                "fx.to.a" if pressed => vec![Action::Fx(FxHand::To(Some(0)))],
+                "fx.to.b" if pressed => vec![Action::Fx(FxHand::To(Some(1)))],
+                "fx.to.master" if pressed => vec![Action::Fx(FxHand::To(None))],
+                "fx.level" => vec![Action::Fx(FxHand::Level(e.value as f32))],
+                "fx.beat.left" if pressed => vec![Action::Fx(FxHand::Beats(-1))],
+                "fx.beat.right" if pressed => vec![Action::Fx(FxHand::Beats(1))],
+                "fx.select" if pressed => vec![Action::Fx(FxHand::Select(if self.shift() { -1 } else { 1 }))],
                 _ => vec![],
             };
         };
@@ -346,10 +361,6 @@ impl Binding {
     }
 
     /// The echo as the FX section says: its send on the deck(s) it is on, none elsewhere.
-    fn echo(&self) -> Vec<Action> {
-        (0..2).map(|d| Action::Echo(d, if self.fx_on && self.fx_to.is_none_or(|t| t == d) { self.fx_level } else { 0.0 })).collect()
-    }
-
     fn take(&mut self, e: &Event, sw: f64) -> bool {
         !e.kind.positional() || self.takeover.accept(&e.id, e.value, sw)
     }
@@ -454,14 +465,22 @@ mod tests {
     }
 
     #[test]
-    fn the_fx_section_is_the_echo() {
+    fn the_fx_section_is_rekordbox_s_beat_fx() {
         let (mut b, at) = (Binding::default(), Positions::default());
         let level = |v: f64| Event { id: "fx.level".into(), kind: Kind::Pot, value: v };
-        assert!(b.handle(&level(0.8), &at).is_empty(), "off: the knob only waits");
-        assert_eq!(b.handle(&button("fx.on", true), &at), vec![Action::Echo(0, 0.8), Action::Echo(1, 0.8)], "MASTER: both");
-        assert_eq!(b.handle(&button("fx.to.b", true), &at), vec![Action::Echo(0, 0.0), Action::Echo(1, 0.8)]);
-        assert_eq!(b.handle(&level(0.4), &at), vec![Action::Echo(0, 0.0), Action::Echo(1, 0.4)]);
-        assert_eq!(b.handle(&button("fx.on", true), &at), vec![Action::Echo(0, 0.0), Action::Echo(1, 0.0)], "off: the tails ring out");
+        assert_eq!(b.handle(&level(0.8), &at), vec![Action::Fx(FxHand::Level(0.8))]);
+        assert_eq!(b.handle(&button("fx.on", true), &at), vec![Action::Fx(FxHand::Toggle)]);
+        assert!(b.handle(&button("fx.on", false), &at).is_empty(), "ON/OFF acts on its press");
+        assert_eq!(b.handle(&button("fx.to.b", true), &at), vec![Action::Fx(FxHand::To(Some(1)))]);
+        assert_eq!(b.handle(&button("fx.to.master", true), &at), vec![Action::Fx(FxHand::To(None))]);
+        assert_eq!(b.handle(&button("fx.beat.right", true), &at), vec![Action::Fx(FxHand::Beats(1))]);
+        assert_eq!(b.handle(&button("fx.select", true), &at), vec![Action::Fx(FxHand::Select(1))]);
+        // with SHIFT: the effect before; ON/OFF the RELEASE FX while held
+        b.handle(&button("deck.a.shift", true), &at);
+        assert_eq!(b.handle(&button("fx.select", true), &at), vec![Action::Fx(FxHand::Select(-1))]);
+        assert_eq!(b.handle(&button("fx.on", true), &at), vec![Action::Fx(FxHand::Release(true))]);
+        b.handle(&button("deck.a.shift", false), &at);
+        assert_eq!(b.handle(&button("fx.on", false), &at), vec![Action::Fx(FxHand::Release(false))], "let go of, even after SHIFT");
     }
 
     #[test]

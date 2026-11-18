@@ -21,6 +21,8 @@ pub struct Prefs {
     /// The four-bar groups marked and numbered on the waveforms (the WetOwl's own
     /// marks, over rekordbox's grid).
     pub bar_groups: bool,
+    /// rekordbox's layout shows its effect panel under the decks.
+    pub club_fx: bool,
 }
 
 /// rekordbox's waveform colours (Preferences → View → Waveform color), and the Desk's own.
@@ -58,7 +60,7 @@ pub enum DeskLayout {
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { reduced_motion: false, still_backdrop: false, backdrop_light: 1.0, disc_label: 0.31, wide_crate: false, wave_style: WaveStyle::ThreeBand, layout: DeskLayout::WetOwl, bar_groups: true }
+        Prefs { reduced_motion: false, still_backdrop: false, backdrop_light: 1.0, disc_label: 0.31, wide_crate: false, wave_style: WaveStyle::ThreeBand, layout: DeskLayout::WetOwl, bar_groups: true, club_fx: true }
     }
 }
 

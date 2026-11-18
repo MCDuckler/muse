@@ -476,6 +476,20 @@ impl Engine {
         Ok(())
     }
 
+    /// A BEAT FX unit (0 or 1) as it is to be: rekordbox's (fx.h).
+    pub fn set_beat_fx(&self, unit: usize, fx: &BeatFx) {
+        let target = match fx.target {
+            FxTarget::Deck(d) => d.index() as i32,
+            FxTarget::Master => -1,
+        };
+        unsafe { sys::we_beat_fx(unit.min(1) as i32, fx.kind as i32, fx.on as i32, fx.level, fx.beats, fx.param, target, fx.tempo.index() as i32, fx.bpm.unwrap_or(0.0)) }
+    }
+
+    /// A unit's RELEASE FX held (it turns the unit's BEAT FX off) or let go of.
+    pub fn release_fx(&self, unit: usize, kind: ReleaseFxKind, hold: bool, beats: f64) {
+        unsafe { sys::we_release_fx(unit.min(1) as i32, kind as i32, hold as i32, beats) }
+    }
+
     pub fn set_master_level(&self, gain: f32) {
         unsafe { sys::we_master_level(gain) }
     }
@@ -622,6 +636,158 @@ impl Hand {
     }
 }
 
+/// rekordbox's BEAT FX (the engine's fx.h, in its order).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum BeatFxKind {
+    Delay = 0,
+    Echo,
+    PingPong,
+    Spiral,
+    Reverb,
+    Trans,
+    Filter,
+    Flanger,
+    Phaser,
+    Pitch,
+    SlipRoll,
+    Roll,
+    VinylBrake,
+    Helix,
+}
+
+impl BeatFxKind {
+    pub const ALL: [BeatFxKind; 14] = [
+        BeatFxKind::Delay,
+        BeatFxKind::Echo,
+        BeatFxKind::PingPong,
+        BeatFxKind::Spiral,
+        BeatFxKind::Reverb,
+        BeatFxKind::Trans,
+        BeatFxKind::Filter,
+        BeatFxKind::Flanger,
+        BeatFxKind::Phaser,
+        BeatFxKind::Pitch,
+        BeatFxKind::SlipRoll,
+        BeatFxKind::Roll,
+        BeatFxKind::VinylBrake,
+        BeatFxKind::Helix,
+    ];
+
+    /// Its name as rekordbox shows it.
+    pub fn name(self) -> &'static str {
+        match self {
+            BeatFxKind::Delay => "DELAY",
+            BeatFxKind::Echo => "ECHO",
+            BeatFxKind::PingPong => "PING PONG",
+            BeatFxKind::Spiral => "SPIRAL",
+            BeatFxKind::Reverb => "REVERB",
+            BeatFxKind::Trans => "TRANS",
+            BeatFxKind::Filter => "FILTER",
+            BeatFxKind::Flanger => "FLANGER",
+            BeatFxKind::Phaser => "PHASER",
+            BeatFxKind::Pitch => "PITCH",
+            BeatFxKind::SlipRoll => "SLIP ROLL",
+            BeatFxKind::Roll => "ROLL",
+            BeatFxKind::VinylBrake => "VINYL BRAKE",
+            BeatFxKind::Helix => "HELIX",
+        }
+    }
+
+    /// The beats its buttons offer (as a DJM's): fractions of a beat for the echoes and
+    /// rolls, the LFO's cycle for the sweeps; none where the knob is all (PITCH, REVERB).
+    pub fn beats(self) -> &'static [f64] {
+        match self {
+            BeatFxKind::Delay | BeatFxKind::Echo | BeatFxKind::PingPong | BeatFxKind::Spiral | BeatFxKind::Helix => &[0.125, 0.25, 0.5, 0.75, 1.0, 2.0, 4.0, 8.0, 16.0],
+            BeatFxKind::Trans | BeatFxKind::SlipRoll | BeatFxKind::Roll => &[0.0625, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0],
+            BeatFxKind::Filter | BeatFxKind::Flanger | BeatFxKind::Phaser => &[0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0],
+            BeatFxKind::VinylBrake => &[0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
+            BeatFxKind::Reverb | BeatFxKind::Pitch => &[],
+        }
+    }
+
+    /// The beats it starts on.
+    pub fn first_beats(self) -> f64 {
+        match self {
+            BeatFxKind::Filter | BeatFxKind::Flanger | BeatFxKind::Phaser => 16.0,
+            BeatFxKind::Trans | BeatFxKind::SlipRoll | BeatFxKind::Roll => 0.5,
+            BeatFxKind::Delay | BeatFxKind::PingPong => 0.5,
+            _ => 1.0,
+        }
+    }
+}
+
+/// rekordbox's SOUND COLOR FX (FILTER is the deck's own filter).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ColorFxKind {
+    #[default]
+    Filter = 0,
+    Space,
+    DubEcho,
+    Sweep,
+    Noise,
+    Crush,
+}
+
+impl ColorFxKind {
+    pub const ALL: [ColorFxKind; 6] = [ColorFxKind::Space, ColorFxKind::DubEcho, ColorFxKind::Sweep, ColorFxKind::Noise, ColorFxKind::Crush, ColorFxKind::Filter];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ColorFxKind::Filter => "FILTER",
+            ColorFxKind::Space => "SPACE",
+            ColorFxKind::DubEcho => "DUB ECHO",
+            ColorFxKind::Sweep => "SWEEP",
+            ColorFxKind::Noise => "NOISE",
+            ColorFxKind::Crush => "CRUSH",
+        }
+    }
+}
+
+/// rekordbox's RELEASE FX.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ReleaseFxKind {
+    #[default]
+    Echo = 0,
+    VinylBrake,
+    Backspin,
+}
+
+impl ReleaseFxKind {
+    pub const ALL: [ReleaseFxKind; 3] = [ReleaseFxKind::Echo, ReleaseFxKind::VinylBrake, ReleaseFxKind::Backspin];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ReleaseFxKind::Echo => "ECHO",
+            ReleaseFxKind::VinylBrake => "VINYL BRAKE",
+            ReleaseFxKind::Backspin => "BACKSPIN",
+        }
+    }
+}
+
+/// Where a BEAT FX unit is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FxTarget {
+    Deck(DeckId),
+    Master,
+}
+
+/// A BEAT FX unit as it is to be.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BeatFx {
+    pub kind: BeatFxKind,
+    pub on: bool,
+    /// LEVEL/DEPTH, 0..1.
+    pub level: f32,
+    /// Its length (or its LFO's cycle), beats.
+    pub beats: f64,
+    /// The effect's own (the reverb's size), 0..1.
+    pub param: f32,
+    pub target: FxTarget,
+    /// The deck whose beat it keeps to, or a tapped tempo.
+    pub tempo: DeckId,
+    pub bpm: Option<f64>,
+}
+
 /// One deck's controls.
 pub struct Deck<'e> {
     _engine: &'e Engine,
@@ -761,6 +927,12 @@ impl Deck<'_> {
     /// -1 (low pass) .. 1 (high pass).
     pub fn set_filter(&self, knob: f32) {
         unsafe { sys::we_deck_filter(self.d, knob) }
+    }
+
+    /// The channel's SOUND COLOR FX: `kind` (FILTER is [Deck::set_filter]'s), its knob
+    /// -1..1 (the middle none), its PARAMETER 0..1.
+    pub fn set_color_fx(&self, kind: ColorFxKind, knob: f32, param: f32) {
+        unsafe { sys::we_color_fx(self.d, kind as i32, knob, param) }
     }
 
     /// The chop: a cosine dip `depth` deep every `period` seconds of the record, from `origin`.

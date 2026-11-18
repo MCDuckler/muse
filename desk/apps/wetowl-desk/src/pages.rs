@@ -46,7 +46,7 @@ fn every_page_and_overlay_draws_at_every_size() {
             if page == Page::Kit && layout == DeskLayout::Club {
                 continue;
             }
-            for overlay in [None, Some(Overlay::Keys), Some(Overlay::Settings), Some(Overlay::Set), Some(Overlay::Controllers)] {
+            for overlay in [None, Some(Overlay::Keys), Some(Overlay::Settings), Some(Overlay::Set), Some(Overlay::Controllers), Some(Overlay::Fx)] {
                 if page == Page::Kit && overlay.is_some() {
                     continue;
                 }

@@ -15,7 +15,7 @@ const KEYS: [(&str, &[(&str, &str)]); 4] = [
     ("Decks", &[("1 2", "Play A / B"), ("Q W", "Sync A / B"), ("Z X", "Start A / B in step"), ("F G", "The bass off and on, A / B"), ("[ ]", "A 16-beat loop on A / B")]),
     ("Mixer and Auto DJ", &[("← →", "The crossfader"), ("⇧← ⇧→", "Nudge the master"), ("A", "The Auto DJ on and off"), ("M Space", "Mix now"), ("S N", "Not that: another record next"), ("P", "The plan: the move drawn out")]),
     ("Show", &[("K", "The Show page and the booth"), ("H B", "A hit · the blackout"), (", .", "The scene before / after"), ("J", "Mosh into the next"), ("L V", "Hold the scene · freeze")]),
-    ("Desk", &[("?", "These keys"), ("Ctrl ,", "The settings"), ("C", "The stage and the Auto DJ folded away"), ("Ctrl L", "The WetOwl's layout or rekordbox's"), ("+ −", "The waveforms zoomed in / out"), ("Esc", "Close what is over the page")]),
+    ("Desk", &[("?", "These keys"), ("Ctrl ,", "The settings"), ("C", "The stage and the Auto DJ folded away"), ("Ctrl L", "The WetOwl's layout or rekordbox's"), ("E", "The effects (rekordbox's)"), ("+ −", "The waveforms zoomed in / out"), ("Esc", "Close what is over the page")]),
 ];
 
 impl App {
@@ -31,6 +31,7 @@ impl App {
             Overlay::Settings => vec2((full.width() - 80.0).clamp(620.0, 1120.0), 612.0),
             Overlay::Set => vec2((full.width() - 80.0).min(1180.0), (full.height() - 80.0).min(720.0)),
             Overlay::Controllers => vec2((full.width() - 80.0).min(1080.0), (full.height() - 80.0).min(680.0)),
+            Overlay::Fx => vec2((full.width() - 80.0).min(1340.0), 150.0),
         };
         egui::Area::new(egui::Id::unique("overlay-area")).order(egui::Order::Foreground).fixed_pos(full.min).show(&ctx, |ui| {
             let (all, scrim) = ui.allocate_exact_size(full.size(), Sense::click());
@@ -47,6 +48,7 @@ impl App {
                 Overlay::Settings => "Settings",
                 Overlay::Set => "Plan a set",
                 Overlay::Controllers => "Controllers",
+                Overlay::Fx => "Effects",
             };
             kit::text(&pp, inner.left_top() + vec2(0.0, 2.0), Align2::LEFT_TOP, title, t::TITLE, "semi", t::text());
             let close = Rect::from_min_size(pos2(inner.right() - 30.0, inner.top() - 4.0), vec2(30.0, 30.0));
@@ -59,6 +61,7 @@ impl App {
                 Overlay::Settings => self.settings(desk, ui, &pp, body),
                 Overlay::Set => self.set_page(desk, ui, &pp, body),
                 Overlay::Controllers => self.controllers_page(desk, ui, &pp, body),
+                Overlay::Fx => self.fx_panel(desk, ui, &pp, Rect::from_min_size(body.min, vec2(body.width(), 64.0))),
             }
         });
     }

@@ -20,6 +20,7 @@
 // through tempo steps for R2 and R3 at 44.1/48 kHz).
 #include "we_engine.h"
 #include "dsp.h"
+#include "fx.h"
 #include "tap.h"
 
 #include "rubberband/RubberBandStretcher.h"
@@ -170,6 +171,7 @@ struct Deck {
   Ramp level;
   Bands bands;
   Filter filter;
+  ColorFx color;       // the channel's SOUND COLOR FX (FILTER is `filter`, as ever)
   Echo echo;
   float gateDepth = 0;
   double gatePeriod = 0, gateOrigin = 0;
@@ -187,7 +189,8 @@ struct Deck {
 enum CmdKind {
   kSource, kSourceGain, kPlay, kSeek, kRate, kBend, kKeylock, kShift, kBeats, kSync, kBarOne, kStart,
   kLoop, kLoopBeats, kLevel, kEq, kFilter, kGate, kEcho, kBrake, kMaster, kFreeSource, kSyncOffset, kAlign, kSyncOctave,
-  kPadPlay, kPadStop, kPadGain, kPadsLevel, kScratch, kScratchBy, kCue, kCueMix
+  kPadPlay, kPadStop, kPadGain, kPadsLevel, kScratch, kScratchBy, kCue, kCueMix,
+  kBeatFx, kReleaseFx, kColorFx
 };
 
 // ------------------------------------------------------------------ pads (the board)
@@ -319,6 +322,13 @@ struct Engine {
   std::atomic<double> padPos[WE_PADS]{};
   Ramp master;
   Limiter limiter;
+  // rekordbox's BEAT FX: two units, each on a deck (0, 1) or the master (-1), in time with
+  // a deck's beat (`fxTempo`) or a tapped tempo (`fxBpm` > 0); each with its RELEASE FX
+  BeatFx fx[2];
+  ReleaseFx release[2];
+  int fxTarget[2] = {0, 1}, fxTempo[2] = {0, 1};
+  double fxBpm[2] = {0, 0};
+  double fxPos[2] = {0, 0};   // beats counted where no deck gives them (a tapped tempo)
   // commands, from Dart to the audio thread
   std::mutex cmdLock;
   std::vector<Cmd> cmds, taking;
@@ -939,7 +949,30 @@ void renderPads(float* out, int n, double at) {
   }
 }
 
+// rekordbox's BEAT FX and RELEASE FX: the units' own, not a deck's.
+void applyFx(const Cmd& c) {
+  switch (c.kind) {
+    case kBeatFx: {
+      const int u = std::clamp(c.i0, 0, 1);
+      E->fxTarget[u] = std::clamp(c.deck, -1, WE_DECKS - 1);
+      E->fxTempo[u] = std::clamp(c.i1 >> 8, 0, WE_DECKS - 1);
+      E->fxBpm[u] = c.d1;
+      E->fx[u].set(c.i1 & 0xFF, c.i2 != 0, c.f0, c.d0, c.f1);
+      break;
+    }
+    case kReleaseFx: {
+      const int u = std::clamp(c.i0, 0, 1);
+      E->release[u].set(c.i1, c.i2 != 0, c.d0);
+      // held, it lets go of the unit's BEAT FX
+      if (c.i2) E->fx[u].set(-1, false, E->fx[u].level, 0, E->fx[u].param);
+      break;
+    }
+    default: break;
+  }
+}
+
 void apply(const Cmd& c) {
+  if (c.kind == kBeatFx || c.kind == kReleaseFx) { applyFx(c); return; }
   if (c.kind == kMaster) { E->master.set(c.f0, (int)(E->rate * 0.02)); return; }
   if (c.kind == kCueMix) { E->cueMix.set(c.f0, (int)(E->rate * 0.02)); E->cueLevel.set(c.f1, (int)(E->rate * 0.02)); return; }
   if (c.kind == kPadPlay || c.kind == kPadStop || c.kind == kPadGain || c.kind == kPadsLevel) { applyPad(c); return; }
@@ -1069,6 +1102,7 @@ void apply(const Cmd& c) {
     case kFilter: d.filter.set(c.f0); break;
     case kGate: d.gateDepth = c.f0; d.gatePeriod = c.d1; d.gateOrigin = c.d2; break;
     case kEcho: d.echo.set(c.f0, c.f1, c.d1, (int)(E->rate * 0.03)); break;
+    case kColorFx: d.color.setKind(c.i0, c.f1); d.color.knob = std::clamp(c.f0, -1.f, 1.f); break;
     case kScratch: handOn(d, c.i0 != 0); break;
     case kScratchBy:
       if (d.hand == 1) d.hTarget = std::clamp(d.hTarget + secToFrame(c.d0), 0.0, std::max(0.0, deckLength(d)));
@@ -1079,6 +1113,42 @@ void apply(const Cmd& c) {
       jump(d, heardOf(d), (int)(E->rate * 0.005));  // onto a resampler: the pitch must fall
       break;
     default: break;
+  }
+}
+
+// ------------------------------------------------------------------ the effects
+// A deck's beat as heard now (seconds) and the beats counted from its bar's one.
+void deckBeat(const Deck& d, double& beatSec, double& beatPos) {
+  if (!hasGrid(d)) { beatSec = 0.5; beatPos = 0; return; }
+  const double sec = frameToSec(d.heardNow);
+  beatSec = periodAt(d, sec) / std::max(0.05, effRate(d));
+  beatPos = beatIndexAt(d, sec) - d.barOne;
+}
+
+// A unit's beat: its deck's, or the tapped tempo's.
+void unitBeat(int u, double& beatSec, double& beatPos) {
+  const Deck& t = E->decks[(size_t)E->fxTempo[u]];
+  if (E->fxBpm[u] > 1 || !hasGrid(t)) {
+    beatSec = E->fxBpm[u] > 1 ? 60.0 / E->fxBpm[u] : 0.5;
+    beatPos = E->fxPos[u];
+    return;
+  }
+  deckBeat(t, beatSec, beatPos);
+}
+
+bool unitOn(int u, int target) {
+  return E->fxTarget[u] == target && (E->fx[u].active() || E->release[u].active());
+}
+
+// The units on `target` (a deck, or -1 the master) over this block of it.
+void runUnits(int target, float* lr, int n) {
+  for (int u = 0; u < 2; u++) {
+    if (E->fxTarget[u] != target) continue;
+    double bs, bp;
+    unitBeat(u, bs, bp);
+    if (E->release[u].active() || E->release[u].kind == kRfxEcho) E->release[u].run(lr, n, bs);
+    if (E->fx[u].active()) E->fx[u].run(lr, n, bs, bp);
+    E->fxPos[u] += (double)n / (std::max(0.05, bs) * E->rate);
   }
 }
 
@@ -1111,7 +1181,9 @@ void renderDeck(Deck& d, int n) {
     d.bend = 0.02 + 0.98 * k * k;
     if (d.brakeLeft <= 0) { play(d, false); d.braking = false; d.bend = 1; }
   }
-  if (!d.playing && !d.handLive && !d.voices[0].used && !d.voices[1].used) return;
+  // (a deck stopped still sounds while an effect on it rings out)
+  const bool fxHere = unitOn(0, d.index) || unitOn(1, d.index) || d.color.busy();
+  if (!d.playing && !d.handLive && !d.voices[0].used && !d.voices[1].used && !fxHere) return;
   const double r = effRate(d);
   for (auto& v : d.voices) {
     if (!v.used) continue;
@@ -1141,6 +1213,11 @@ void renderDeck(Deck& d, int n) {
   d.echo.run(d.buf, n);
   d.bands.run(d.buf, n);
   d.filter.run(d.buf, n);
+  {
+    double bs, bp;
+    deckBeat(d, bs, bp);
+    d.color.run(d.buf, n, bs);
+  }
   // the headphones' copy: everything the deck does to its sound, but not its fader
   if (E->cueWanted && (d.cue.target > 0 || d.cue.now > 0 || d.cue.moving())) {
     for (int k = 0; k < n; k++) {
@@ -1149,12 +1226,15 @@ void renderDeck(Deck& d, int n) {
     }
     d.cueHeard = true;
   }
-  float pl = 0, pr = 0;
   for (int k = 0; k < n; k++) {
     const float g = d.level.next() * 0.5956621f;  // -4.5 dB headroom, as the old chain
     d.buf[k * 2] *= g; d.buf[k * 2 + 1] *= g;
-    pl = std::max(pl, std::fabs(d.buf[k * 2])); pr = std::max(pr, std::fabs(d.buf[k * 2 + 1]));
   }
+  // the BEAT FX on this deck, after its fader (as a DJM's: its echoes ring on as the fader
+  // comes down)
+  runUnits(d.index, d.buf, n);
+  float pl = 0, pr = 0;
+  for (int k = 0; k < n; k++) { pl = std::max(pl, std::fabs(d.buf[k * 2])); pr = std::max(pr, std::fabs(d.buf[k * 2 + 1])); }
   d.peakL = std::max(d.peakL, pl); d.peakR = std::max(d.peakR, pr);
 }
 
@@ -1239,6 +1319,7 @@ void block(float* out, int n, float** deckOut, double at, float* cue) {
     }
   } else {
     for (int k = 0; k < n; k++) { const float g = E->master.next(); out[k * 2] *= g; out[k * 2 + 1] *= g; }
+    runUnits(-1, out, n);
   }
   // the headphones: the cued decks (before their faders) and the master (after its
   // level, before its limiter), blended
@@ -1559,8 +1640,9 @@ WE_API int we_start(int rate, int device) {
     d.level.now = d.level.target = 1;
     d.cue.now = d.cue.target = 0;
     for (auto& s : d.slots) { s.gain.now = s.gain.target = 0; for (auto& p : s.pair) p.now = p.target = 1; }
-    d.bands.init(E->rate); d.filter.init(E->rate); d.echo.init(E->rate);
+    d.bands.init(E->rate); d.filter.init(E->rate); d.echo.init(E->rate); d.color.init(E->rate);
   }
+  for (int u = 0; u < 2; u++) { E->fx[u].init(E->rate); E->release[u].init(E->rate); }
   if (E->device && ma_device_start(&E->dev) != MA_SUCCESS) {
     E->devOpen = false;
     lastError = "the sound card would not start";
@@ -1862,6 +1944,15 @@ WE_API void we_deck_echo(int deck, float send, float dry, double beat) {
   Cmd c{kEcho}; c.deck = deck; c.f0 = send; c.f1 = dry; c.d1 = beat; push(c);
 }
 WE_API void we_deck_brake(int deck, double seconds) { Cmd c{kBrake}; c.deck = deck; c.d0 = seconds; push(c); }
+WE_API void we_beat_fx(int unit, int kind, int on, float level, double beats, float param, int target, int tempo_deck, double bpm) {
+  Cmd c{kBeatFx}; c.i0 = unit; c.i1 = (kind & 0xFF) | (tempo_deck << 8); c.i2 = on; c.f0 = level; c.f1 = param; c.d0 = beats; c.deck = target; c.d1 = bpm; push(c);
+}
+WE_API void we_release_fx(int unit, int kind, int hold, double beats) {
+  Cmd c{kReleaseFx}; c.i0 = unit; c.i1 = kind; c.i2 = hold; c.d0 = beats; push(c);
+}
+WE_API void we_color_fx(int deck, int kind, float knob, float param) {
+  Cmd c{kColorFx}; c.deck = deck; c.i0 = kind; c.f0 = knob; c.f1 = param; push(c);
+}
 WE_API void we_master_level(float gain) { Cmd c{kMaster}; c.f0 = gain; push(c); }
 
 WE_API void we_pad_play(int slot, int source, double at, double from, double to, int loop, float gain) {

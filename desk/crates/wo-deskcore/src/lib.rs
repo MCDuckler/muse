@@ -21,6 +21,7 @@ pub mod previews;
 pub mod milk;
 pub mod move_player;
 pub mod autodj;
+pub mod beat_fx;
 pub mod audio;
 pub mod elsewhere;
 pub mod fetch;
@@ -339,6 +340,8 @@ pub(crate) struct Plan {
 
 pub struct Desk {
     engine: Engine,
+    /// rekordbox's effects (beat_fx.rs).
+    beat_fx: beat_fx::Fx,
     /// The browser's previews (previews.rs).
     previews: previews::Previews,
     slots: [Slot; 2],
@@ -512,6 +515,7 @@ impl Desk {
             _pacer: pacer,
             house: None,
             previews: Default::default(),
+            beat_fx: Default::default(),
             done_tx,
             done_rx,
             library: Library::default(),
@@ -781,6 +785,7 @@ impl Desk {
         }
         self.controllers_tick();
         self.previews_tick();
+        self.fx_tick();
         self.audio_tick();
         self.elsewhere_tick();
         self.session_tick();
@@ -1383,7 +1388,24 @@ impl Desk {
         self.engine.deck(DeckId::new(deck).unwrap()).set_eq(eq_db(self.slots[deck].eq), 0.02);
     }
 
+    /// The channel's CFX knob: the SOUND COLOR FX chosen (FILTER, the filter itself).
     pub fn set_filter(&mut self, deck: usize, v: f32) {
+        self.slots[deck].filter = v.clamp(0.0, 1.0);
+        let k = (v - 0.5) * 2.0;
+        let k = if k.abs() < 0.04 { 0.0 } else { k };
+        let d = self.engine.deck(DeckId::new(deck).unwrap());
+        let c = self.beat_fx.color;
+        if c.kind == beat_fx::ColorFxKind::Filter {
+            d.set_filter(k);
+            d.set_color_fx(c.kind, 0.0, c.param);
+        } else {
+            d.set_filter(0.0);
+            d.set_color_fx(c.kind, k, c.param);
+        }
+    }
+
+    /// The filter itself, whatever the knobs turn (the Auto DJ's sweeps).
+    pub(crate) fn set_filter_raw(&mut self, deck: usize, v: f32) {
         self.slots[deck].filter = v.clamp(0.0, 1.0);
         let k = (v - 0.5) * 2.0;
         self.engine.deck(DeckId::new(deck).unwrap()).set_filter(if k.abs() < 0.04 { 0.0 } else { k });
@@ -1885,7 +1907,7 @@ impl Desk {
             A::DoubleLoop(d) => self.double_loop(d),
             A::LoopBeats(d, beats) => self.loop_beats(d, beats),
             A::Unloop(d) => self.unloop(d),
-            A::Echo(d, send) => self.set_echo(d, send, 1.0),
+            A::Fx(h) => self.fx_hand(h),
             A::Crossfader(x) => {
                 // a hand on the crossfader mid-mix takes the mix over
                 if self.mix.as_ref().is_some_and(|m| m.started) {
@@ -1984,7 +2006,7 @@ impl Desk {
         let show = self.stage.view();
         let mut want = vec![
             ("mixer.scratch".to_owned(), self.binding.scratch),
-            ("fx.on".to_owned(), self.binding.fx_on),
+            ("fx.on".to_owned(), self.beat_fx.units[0].on || self.beat_fx.units[0].releasing),
             ("show.blackout".to_owned(), show.blackout),
             ("show.freeze".to_owned(), show.freeze),
         ];
