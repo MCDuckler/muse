@@ -1078,7 +1078,12 @@ impl App {
         // the header: click a heading to sort by it, again the other way round (a narrow
         // crate drops the fit, then the time)
         let cols = Cols::for_width(main.width());
-        let cx = cols.x;
+        let mut cx = cols.x;
+        // rekordbox's layout, room enough: its Preview column (each record's waveform)
+        // before the title
+        let preview_w = if self.prefs.layout == wo_deskcore::DeskLayout::Club && main.width() >= 900.0 { 118.0 } else { 0.0 };
+        let preview_x = cx[2];
+        cx[2] += preview_w;
         let clip = p.with_clip_rect(main.shrink(1.0));
         let p = &clip;
         let strip = (matches!(lib.shelf, Shelf::Playlist { .. } | Shelf::Similar { .. } | Shelf::Check | Shelf::Search(_) | Shelf::Elsewhere(_)) && desk.house().is_some()) || matches!(lib.shelf, Shelf::Usb { playlist: Some(_), .. });
@@ -1108,6 +1113,9 @@ impl App {
             ("Time", None, 7, true),
             ("Fits", Some(Sort::Fits), 7, false),
         ];
+        if preview_w > 0.0 {
+            label_sized(p, pos2(main.left() + preview_x, hy), Align2::LEFT_CENTER, "Preview", 10.5, t::label());
+        }
         for (i, (h, sort, at, right)) in heads.into_iter().enumerate() {
             if h.is_empty() || (h == "Time" && !cols.time) || (h == "Fits" && !cols.fits) {
                 continue;
@@ -1240,6 +1248,14 @@ impl App {
                 let sl = Rect::from_min_size(pos2(at(1), y - 14.0), vec2(28.0, 28.0));
                 let tex = self.sleeves.of(&ctx, desk, &row.record);
                 kit::sleeve(ui, &p, sl, tex, &row.record.initials(), col(theme::sleeve(row.record.id)), 4, ("row-sleeve", row.record.id));
+                if preview_w > 0.0
+                    && let Some(pv) = desk.preview(&row.record)
+                {
+                    let pr = Rect::from_min_size(pos2(rr.left() + preview_x, y - 10.0), vec2(preview_w - 10.0, 20.0));
+                    p.rect_filled(pr, CornerRadius::same(1), Color32::from_black_alpha(90));
+                    let style = self.wave_style();
+                    crate::wave::columns(&p, pr, &pv, pr.left(), pr.width() / pv.len().max(1) as f32, crate::wave::Columns { style, anchor: crate::wave::Anchor::Up(1.0), gain: 1.45, reflect: 0.0, heard: None });
+                }
                 let mut tx = at(2);
                 if let Some(d) = row.on_deck {
                     let c = kit::deck_chip(&p, pos2(tx, y), d);

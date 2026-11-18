@@ -17,6 +17,7 @@ pub mod bench;
 pub mod covers;
 pub mod library;
 pub mod marks;
+pub mod previews;
 pub mod milk;
 pub mod move_player;
 pub mod autodj;
@@ -338,6 +339,8 @@ pub(crate) struct Plan {
 
 pub struct Desk {
     engine: Engine,
+    /// The browser's previews (previews.rs).
+    previews: previews::Previews,
     slots: [Slot; 2],
     master: usize,
     crossfader: f32,
@@ -508,6 +511,7 @@ impl Desk {
             auto: autoplay,
             _pacer: pacer,
             house: None,
+            previews: Default::default(),
             done_tx,
             done_rx,
             library: Library::default(),
@@ -776,6 +780,7 @@ impl Desk {
             self.changes += 1;
         }
         self.controllers_tick();
+        self.previews_tick();
         self.audio_tick();
         self.elsewhere_tick();
         self.session_tick();
@@ -1245,6 +1250,38 @@ impl Desk {
         lines.cue = s.hands.cue.filter(|&c| c >= t0 && c <= t1).map(x_of);
         lines.phrases = s.marks.phrases_or(&s.timing).into_iter().filter(|p| p.end >= t0 && p.start <= t1).map(|p| (x_of(p.start), x_of(p.end), p)).collect();
         LaneWave { bins, rb: rb_bins, x0, bin_w, px_per_s, heard, lines, start: x_of(0.0), end: x_of(length), arriving }
+    }
+
+    /// A record's preview for the browser (rekordbox's off a stick; the Desk's own once a
+    /// house record has decoded on a deck): None until it has come, or where there is none.
+    pub fn preview(&mut self, r: &Record) -> Option<previews::Preview> {
+        self.previews.of(r)
+    }
+
+    /// The previews' folder kept with the house signed in; a house record decoded whole on
+    /// a deck kept as a preview.
+    fn previews_tick(&mut self) {
+        let folder = self.house.as_ref().and_then(covers::folder).and_then(|c| Some(c.parent()?.parent()?.join("previews").join(c.file_name()?)));
+        self.previews.set_folder(folder);
+        if self.previews.drain() {
+            self.changes += 1;
+        }
+        for d in 0..2 {
+            let s = &self.slots[d];
+            let Audio::House { id } = s.record.audio else { continue };
+            if self.previews.kept.contains(&s.record.id) {
+                continue;
+            }
+            let mut w = s.wave.lock().unwrap();
+            if !w.done || w.is_exact() || w.cols.is_empty() {
+                continue;
+            }
+            let len = if s.record.seconds > 0 { s.record.seconds as f64 } else { w.seconds() };
+            let p = w.rb_overview(len, previews::BINS);
+            drop(w);
+            let rid = self.slots[d].record.id;
+            self.previews.keep(rid, id, p);
+        }
     }
 
     /// The whole record in `n` bins the rekordbox way (each the mean of its columns).
