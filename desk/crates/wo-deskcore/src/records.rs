@@ -19,6 +19,21 @@ pub struct Record {
     /// How loud it is, as the house measured it (none for a record of this computer's).
     #[serde(default)]
     pub loudness: Loudness,
+    /// What else is known of it (the browser's other columns, rekordbox's).
+    #[serde(default)]
+    pub tags: Tags,
+}
+
+/// A record's other facts, where they are known: a stick's (rekordbox's) and the house's.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Tags {
+    pub album: String,
+    pub genre: String,
+    /// rekordbox's stars, 0–5.
+    pub rating: u8,
+    pub comment: String,
+    /// When it was added, "YYYY-MM-DD".
+    pub added: String,
 }
 
 /// A record's loudness, as the box measured it: the gain that brings it to the house's
@@ -82,6 +97,7 @@ impl Record {
             cover: t.cover_url.is_some(),
             cover_rgb: t.cover_rgb(),
             loudness: Loudness { gain_db: t.gain_db.map(|g| g as f32), true_peak_db: t.true_peak_db.map(|p| p as f32) },
+            tags: Tags { album: t.album.clone().unwrap_or_default(), ..Default::default() },
         }
     }
 
@@ -100,6 +116,7 @@ impl Record {
             cover: t.artwork.is_some(),
             cover_rgb: None,
             loudness: Loudness::default(),
+            tags: Tags { album: t.album.clone(), genre: t.genre.clone(), rating: t.rating.min(5), comment: t.comment.clone(), added: t.date_added.clone() },
         }
     }
 
@@ -165,6 +182,7 @@ pub fn synth_rows() -> Vec<Record> {
             cover: false,
             cover_rgb: None,
             loudness: Loudness::default(),
+            tags: Tags::default(),
         })
         .collect()
 }
@@ -202,6 +220,7 @@ fn parse_fixture() -> Vec<Record> {
                 cover: false,
                 cover_rgb: None,
                 loudness: Loudness::default(),
+                tags: Tags::default(),
             });
         }
     }

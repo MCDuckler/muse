@@ -55,11 +55,13 @@ pub(crate) struct Fx {
     taps: [Vec<Instant>; 2],
     /// The master deck the master's units last kept to.
     master_was: usize,
+    /// FX2 as it was before a PAD FX borrowed it (given back on its let-go).
+    lent: Option<FxUnit>,
 }
 
 impl Default for Fx {
     fn default() -> Self {
-        Fx { units: [FxUnit::new(Target::Deck(0)), FxUnit::new(Target::Deck(1))], color: ColorFx { kind: ColorFxKind::Filter, param: 0.5 }, taps: [vec![], vec![]], master_was: 0 }
+        Fx { units: [FxUnit::new(Target::Deck(0)), FxUnit::new(Target::Deck(1))], color: ColorFx { kind: ColorFxKind::Filter, param: 0.5 }, taps: [vec![], vec![]], master_was: 0, lent: None }
     }
 }
 
@@ -214,6 +216,29 @@ impl Desk {
             let v = self.slots[d].filter;
             self.set_filter(d, v);
         }
+    }
+
+    /// PAD FX: an effect while a pad is held, on deck `d` (FX2 borrowed for it, given back
+    /// as it was on the let-go).
+    pub fn pad_fx(&mut self, d: usize, kind: BeatFxKind, beats: f64, hold: bool) {
+        if hold {
+            if self.beat_fx.lent.is_none() {
+                self.beat_fx.lent = Some(self.beat_fx.units[1].clone());
+            }
+            let u = &mut self.beat_fx.units[1];
+            u.kind = kind;
+            u.beats = beats;
+            u.level = if kind == BeatFxKind::Pitch { 0.85 } else { 0.75 };
+            u.target = Target::Deck(d.min(1));
+            u.bpm = None;
+            u.on = true;
+        } else if let Some(was) = self.beat_fx.lent.take() {
+            // off first (its echoes ring out), then FX2 as it was
+            self.beat_fx.units[1].on = false;
+            self.send_fx(1);
+            self.beat_fx.units[1] = FxUnit { on: was.on, ..was };
+        }
+        self.send_fx(1);
     }
 
     /// The units on the master keep to the master deck's beat: sent again when it moves.

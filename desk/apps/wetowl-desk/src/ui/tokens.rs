@@ -77,21 +77,40 @@ pub fn focus() -> Color32 {
     Color32::from_rgb(0x9F, 0xD3, 0xFF)
 }
 
-/// The fills a control mixes between: at rest, hovered, pressed (all over the glass).
+// ---- the skin: the WetOwl's glass, or rekordbox's matte (its layout)
+static CLUB: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The controls drawn as rekordbox's: square, solid, matte.
+pub fn club() -> bool {
+    CLUB.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Set each frame by the layout.
+pub fn set_club(on: bool) {
+    CLUB.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A control's corner: the WetOwl's rounded, rekordbox's all but square.
+pub fn r_control() -> u8 {
+    if club() { 2 } else { R_CONTROL }
+}
+
+/// The fills a control mixes between: at rest, hovered, pressed (all over the glass;
+/// rekordbox's solid greys).
 pub fn fill_rest() -> Color32 {
-    Color32::from_white_alpha(12)
+    if club() { Color32::from_rgb(0x2A, 0x2A, 0x2E) } else { Color32::from_white_alpha(12) }
 }
 pub fn fill_hover() -> Color32 {
-    Color32::from_white_alpha(22)
+    if club() { Color32::from_rgb(0x35, 0x35, 0x3A) } else { Color32::from_white_alpha(22) }
 }
 pub fn fill_press() -> Color32 {
-    Color32::from_white_alpha(6)
+    if club() { Color32::from_rgb(0x22, 0x22, 0x26) } else { Color32::from_white_alpha(6) }
 }
 pub fn edge_rest() -> Color32 {
-    Color32::from_white_alpha(24)
+    if club() { Color32::from_rgb(0x3A, 0x3A, 0x40) } else { Color32::from_white_alpha(24) }
 }
 pub fn edge_hover() -> Color32 {
-    Color32::from_white_alpha(40)
+    if club() { Color32::from_rgb(0x4C, 0x4C, 0x54) } else { Color32::from_white_alpha(40) }
 }
 
 /// What a lit control is lit as: a plain toggle's on is a brighter neutral (green means in
@@ -108,6 +127,18 @@ pub enum Tone {
 impl Tone {
     /// (fill, edge, ink) when lit.
     pub fn lit(self) -> (Color32, Color32, Color32) {
+        // rekordbox's: lit solid, its word white
+        if club() {
+            let c = match self {
+                Tone::Neutral => Color32::from_rgb(0x50, 0x50, 0x58),
+                Tone::Deck(0) => Color32::from_rgb(0x1C, 0x70, 0xDE),
+                Tone::Deck(_) => Color32::from_rgb(0xE8, 0x82, 0x2A),
+                Tone::Ok => Color32::from_rgb(0x1E, 0x8F, 0x55),
+                Tone::Warm => Color32::from_rgb(0xC9, 0x83, 0x2E),
+                Tone::Danger => Color32::from_rgb(0xC8, 0x34, 0x2C),
+            };
+            return (c, c, Color32::WHITE);
+        }
         match self {
             Tone::Neutral => (alpha(theme::CAP, 0.16), alpha(theme::CAP, 0.5), col(theme::HIGH)),
             Tone::Deck(d) => (alpha(theme::DECKS[d.min(1)], 0.16), alpha(theme::DECKS[d.min(1)], 0.62), col(theme::TINTS[d.min(1)])),

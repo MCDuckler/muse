@@ -999,18 +999,28 @@ impl App {
     }
 
     pub(crate) fn crate_(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot) {
-        kit::panel(p, r, true);
+        // rekordbox's layout: its browser (club_browser.rs), the same crate under it
+        let club = self.prefs.layout == wo_deskcore::DeskLayout::Club;
+        if club {
+            crate::club::panel(p, r);
+        } else {
+            kit::panel(p, r, true);
+        }
         // what the house says as songs from elsewhere come and go
         for said in desk.take_elsewhere_said() {
             self.toasts.say(said, Tone::Neutral);
         }
-        let tree = Rect::from_min_max(r.min, pos2(r.left() + 232.0, r.bottom()));
+        let tree = Rect::from_min_max(r.min, pos2(r.left() + if club { 200.0 } else { 232.0 }, r.bottom()));
         p.line_segment([pos2(tree.right(), r.top() + 12.0), pos2(tree.right(), r.bottom() - 12.0)], Stroke::new(1.0, white(0.06)));
         self.shelves(desk, ui, p, tree);
         let main = Rect::from_min_max(pos2(tree.right(), r.top()), r.max);
 
         // search
-        let field = Rect::from_min_size(pos2(main.left() + 14.0, main.top() + 10.0), vec2((main.width() * 0.45).clamp(240.0, 380.0), 32.0));
+        let field = if club {
+            Rect::from_min_size(pos2(main.left() + 10.0, main.top() + 6.0), vec2((main.width() * 0.3).clamp(220.0, 320.0), 26.0))
+        } else {
+            Rect::from_min_size(pos2(main.left() + 14.0, main.top() + 10.0), vec2((main.width() * 0.45).clamp(240.0, 380.0), 32.0))
+        };
         let on_usb = matches!(desk.library().shelf, Shelf::Usb { .. });
         let hint = if on_usb {
             "Search the stick"
@@ -1078,20 +1088,22 @@ impl App {
         // the header: click a heading to sort by it, again the other way round (a narrow
         // crate drops the fit, then the time)
         let cols = Cols::for_width(main.width());
-        let mut cx = cols.x;
-        // rekordbox's layout, room enough: its Preview column (each record's waveform)
-        // before the title
-        let preview_w = if self.prefs.layout == wo_deskcore::DeskLayout::Club && main.width() >= 900.0 { 118.0 } else { 0.0 };
-        let preview_x = cx[2];
-        cx[2] += preview_w;
+        let cx = cols.x;
         let clip = p.with_clip_rect(main.shrink(1.0));
         let p = &clip;
         let strip = (matches!(lib.shelf, Shelf::Playlist { .. } | Shelf::Similar { .. } | Shelf::Check | Shelf::Search(_) | Shelf::Elsewhere(_)) && desk.house().is_some()) || matches!(lib.shelf, Shelf::Usb { playlist: Some(_), .. });
         if strip {
             let shelf = lib.shelf.clone();
-            self.crate_strip(desk, ui, p, Rect::from_min_size(pos2(main.left() + 14.0, main.top() + 48.0), vec2(main.width() - 28.0, 26.0)), &shelf, s);
+            let at = if club { Rect::from_min_size(pos2(main.left() + 10.0, main.top() + 38.0), vec2(main.width() - 20.0, 24.0)) } else { Rect::from_min_size(pos2(main.left() + 14.0, main.top() + 48.0), vec2(main.width() - 28.0, 26.0)) };
+            self.crate_strip(desk, ui, p, at, &shelf, s);
         }
-        let hy = main.top() + if strip { 92.0 } else { 62.0 };
+        let hy = main.top() + match (club, strip) {
+            (true, true) => 78.0,
+            (true, false) => 50.0,
+            (false, true) => 92.0,
+            (false, false) => 62.0,
+        };
+        let club_cols = crate::club_browser::ClubCols::for_width(main.width());
         let elsewhere = match &desk.library().shelf {
             Shelf::Search(_) => self.found_tab > 0,
             Shelf::Elsewhere(_) => true,
@@ -1113,10 +1125,10 @@ impl App {
             ("Time", None, 7, true),
             ("Fits", Some(Sort::Fits), 7, false),
         ];
-        if preview_w > 0.0 {
-            label_sized(p, pos2(main.left() + preview_x, hy), Align2::LEFT_CENTER, "Preview", 10.5, t::label());
+        if club {
+            self.club_heads(ui, p, main, hy, &club_cols);
         }
-        for (i, (h, sort, at, right)) in heads.into_iter().enumerate() {
+        for (i, (h, sort, at, right)) in heads.into_iter().enumerate().filter(|_| !club) {
             if h.is_empty() || (h == "Time" && !cols.time) || (h == "Fits" && !cols.fits) {
                 continue;
             }
@@ -1139,8 +1151,11 @@ impl App {
                 self.sort = if self.sort.0 == sort { (sort, !self.sort.1) } else { (sort, false) };
             }
         }
-        p.line_segment([pos2(main.left(), hy + 14.0), pos2(main.right(), hy + 14.0)], Stroke::new(1.0, white(0.08)));
-        let list = Rect::from_min_max(pos2(main.left(), hy + 15.0), pos2(main.right(), main.bottom() - 4.0));
+        if !club {
+            p.line_segment([pos2(main.left(), hy + 14.0), pos2(main.right(), hy + 14.0)], Stroke::new(1.0, white(0.08)));
+        }
+        let list = Rect::from_min_max(pos2(main.left(), hy + if club { 10.0 } else { 15.0 }), pos2(main.right(), main.bottom() - 4.0));
+        let row_h = if club { crate::club_browser::ROW } else { ROW };
         let mut rows = desk.rows(&self.search, s.master_bpm);
         match self.sort {
             (Sort::Fits, false) => {}
@@ -1152,6 +1167,11 @@ impl App {
                         Sort::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
                         Sort::Artist => a.artist.to_lowercase().cmp(&b.artist.to_lowercase()),
                         Sort::Bpm => a.bpm.total_cmp(&b.bpm),
+                        Sort::Album => a.tags.album.to_lowercase().cmp(&b.tags.album.to_lowercase()),
+                        Sort::Genre => a.tags.genre.to_lowercase().cmp(&b.tags.genre.to_lowercase()),
+                        Sort::Time => a.seconds.cmp(&b.seconds),
+                        Sort::Rating => b.tags.rating.cmp(&a.tags.rating),
+                        Sort::Added => b.tags.added.cmp(&a.tags.added),
                         _ => camelot(&a.key).cmp(&camelot(&b.key)),
                     };
                     if back { o.reverse() } else { o }
@@ -1211,7 +1231,7 @@ impl App {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
         // a row's pitch: its height and the gap egui leaves under it (show_rows lays the
         // rows out so) — the cursor's highlight, placed by ROW alone, crept 3 px a row
-        let pitch = ROW + child.spacing().item_spacing.y;
+        let pitch = row_h + child.spacing().item_spacing.y;
         let mut area = egui::ScrollArea::vertical().id_salt("crate").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0));
         if let Some(i) = scroll_to {
             area = area.vertical_scroll_offset((i as f32 * pitch - list.height() / 2.0).max(0.0));
@@ -1219,13 +1239,13 @@ impl App {
         let cursor = self.cursor;
         let mut clicked = None;
         let ctx = ui.ctx().clone();
-        area.show_rows(&mut child, ROW, rows.len(), |ui, range| {
+        area.show_rows(&mut child, row_h, rows.len(), |ui, range| {
             near_end = range.end + 30 >= rows.len();
             let first = range.start;
             let mut origin = None;
             for i in range {
                 let row = &rows[i];
-                let (rr, resp) = ui.allocate_exact_size(vec2(list.width(), ROW), Sense::click_and_drag());
+                let (rr, resp) = ui.allocate_exact_size(vec2(list.width(), row_h), Sense::click_and_drag());
                 origin.get_or_insert(rr.top() - i as f32 * pitch);
                 let p = ui.painter().clone();
                 let k = row_k(i - first);
@@ -1242,59 +1262,56 @@ impl App {
                 if playable {
                     resp.dnd_set_drag_payload(row.record.clone());
                 }
-                let y = rr.center().y + 4.0 * (1.0 - k);
-                let at = |c: usize| rr.left() + cx[c];
-                kit::text(&p, pos2(at(0), y), Align2::LEFT_CENTER, &(i + 1).to_string(), 11.0, "mono", t::label());
-                let sl = Rect::from_min_size(pos2(at(1), y - 14.0), vec2(28.0, 28.0));
-                let tex = self.sleeves.of(&ctx, desk, &row.record);
-                kit::sleeve(ui, &p, sl, tex, &row.record.initials(), col(theme::sleeve(row.record.id)), 4, ("row-sleeve", row.record.id));
-                if preview_w > 0.0
-                    && let Some(pv) = desk.preview(&row.record)
-                {
-                    let pr = Rect::from_min_size(pos2(rr.left() + preview_x, y - 10.0), vec2(preview_w - 10.0, 20.0));
-                    p.rect_filled(pr, CornerRadius::same(1), Color32::from_black_alpha(90));
-                    let style = self.wave_style();
-                    crate::wave::columns(&p, pr, &pv, pr.left(), pr.width() / pv.len().max(1) as f32, crate::wave::Columns { style, anchor: crate::wave::Anchor::Up(1.0), gain: 1.45, reflect: 0.0, heard: None });
-                }
-                let mut tx = at(2);
-                if let Some(d) = row.on_deck {
-                    let c = kit::deck_chip(&p, pos2(tx, y), d);
-                    tx = c.right() + 8.0;
-                    // playing: three bars that move with what it plays
-                    if s.decks[d].playing {
-                        let lvl = (1.0 + 20.0 * s.decks[d].peak.max(1e-6).log10() / 48.0).clamp(0.0, 1.0);
-                        let shown = motion::spring(&ctx, ui.scope_id().with(("air-bars", d)), lvl, 0.12);
-                        for (i, k) in [0.7f32, 1.0, 0.55].into_iter().enumerate() {
-                            let h = 3.0 + 9.0 * (shown * k).clamp(0.0, 1.0);
-                            p.rect_filled(Rect::from_min_max(pos2(tx + i as f32 * 4.0, y + 6.0 - h), pos2(tx + i as f32 * 4.0 + 2.5, y + 6.0)), CornerRadius::same(1), t::tint(d));
+                let sl = if club {
+                    self.club_row(desk, ui, &p, rr, row, i, i == cursor, resp.hovered(), &club_cols, s)
+                } else {
+                    let y = rr.center().y + 4.0 * (1.0 - k);
+                    let at = |c: usize| rr.left() + cx[c];
+                    kit::text(&p, pos2(at(0), y), Align2::LEFT_CENTER, &(i + 1).to_string(), 11.0, "mono", t::label());
+                    let sl = Rect::from_min_size(pos2(at(1), y - 14.0), vec2(28.0, 28.0));
+                    let tex = self.sleeves.of(&ctx, desk, &row.record);
+                    kit::sleeve(ui, &p, sl, tex, &row.record.initials(), col(theme::sleeve(row.record.id)), 4, ("row-sleeve", row.record.id));
+                    let mut tx = at(2);
+                    if let Some(d) = row.on_deck {
+                        let c = kit::deck_chip(&p, pos2(tx, y), d);
+                        tx = c.right() + 8.0;
+                        // playing: three bars that move with what it plays
+                        if s.decks[d].playing {
+                            let lvl = (1.0 + 20.0 * s.decks[d].peak.max(1e-6).log10() / 48.0).clamp(0.0, 1.0);
+                            let shown = motion::spring(&ctx, ui.scope_id().with(("air-bars", d)), lvl, 0.12);
+                            for (i, k) in [0.7f32, 1.0, 0.55].into_iter().enumerate() {
+                                let h = 3.0 + 9.0 * (shown * k).clamp(0.0, 1.0);
+                                p.rect_filled(Rect::from_min_max(pos2(tx + i as f32 * 4.0, y + 6.0 - h), pos2(tx + i as f32 * 4.0 + 2.5, y + 6.0)), CornerRadius::same(1), t::tint(d));
+                            }
+                            tx += 18.0;
                         }
-                        tx += 18.0;
                     }
-                }
-                let ink = if row.on_deck.is_some() { t::muted() } else if row.record.playable() { t::text() } else { t::muted() };
-                kit::clipped(&p, pos2(tx, y), &row.record.title, 13.0, "", ink, at(3) - tx - 12.0);
-                match &row.note {
-                    Some(n) => {
-                        let ar = kit::clipped(&p, pos2(at(3), y - 7.0), &row.record.artist, 12.0, "", t::muted(), at(4) - at(3) - 12.0);
-                        let _ = ar;
-                        kit::clipped(&p, pos2(at(3), y + 8.0), n, 10.5, "", t::faint(), at(4) - at(3) - 12.0);
+                    let ink = if row.on_deck.is_some() { t::muted() } else if row.record.playable() { t::text() } else { t::muted() };
+                    kit::clipped(&p, pos2(tx, y), &row.record.title, 13.0, "", ink, at(3) - tx - 12.0);
+                    match &row.note {
+                        Some(n) => {
+                            let ar = kit::clipped(&p, pos2(at(3), y - 7.0), &row.record.artist, 12.0, "", t::muted(), at(4) - at(3) - 12.0);
+                            let _ = ar;
+                            kit::clipped(&p, pos2(at(3), y + 8.0), n, 10.5, "", t::faint(), at(4) - at(3) - 12.0);
+                        }
+                        None => {
+                            kit::clipped(&p, pos2(at(3), y), &row.record.artist, 13.0, "", t::muted(), at(4) - at(3) - 12.0);
+                        }
                     }
-                    None => {
-                        kit::clipped(&p, pos2(at(3), y), &row.record.artist, 13.0, "", t::muted(), at(4) - at(3) - 12.0);
+                    kit::text(&p, pos2(at(5) - 12.0, y), Align2::RIGHT_CENTER, &format!("{:.2}", row.record.bpm), 12.0, "mono", t::text());
+                    kit::text(&p, pos2(at(5), y), Align2::LEFT_CENTER, &row.record.key, 12.0, "mono", t::muted());
+                    if cols.time {
+                        kit::text(&p, pos2(at(7) - 12.0, y), Align2::RIGHT_CENTER, &format!("{}:{:02}", row.record.seconds / 60, row.record.seconds % 60), 12.0, "mono", t::muted());
                     }
-                }
-                kit::text(&p, pos2(at(5) - 12.0, y), Align2::RIGHT_CENTER, &format!("{:.2}", row.record.bpm), 12.0, "mono", t::text());
-                kit::text(&p, pos2(at(5), y), Align2::LEFT_CENTER, &row.record.key, 12.0, "mono", t::muted());
-                if cols.time {
-                    kit::text(&p, pos2(at(7) - 12.0, y), Align2::RIGHT_CENTER, &format!("{}:{:02}", row.record.seconds / 60, row.record.seconds % 60), 12.0, "mono", t::muted());
-                }
-                if row.on_deck.is_none() && cols.fits {
-                    let bar = Rect::from_min_size(pos2(at(7), y - 2.0), vec2(64.0, 4.0));
-                    p.rect_filled(bar, CornerRadius::same(2), col(theme::LINE));
-                    let fit = row.fits as f32 / 100.0;
-                    p.rect_filled(Rect::from_min_size(bar.min, vec2(64.0 * fit, 4.0)), CornerRadius::same(2), mix(Color32::from_rgb(0x6A, 0x6E, 0x77), t::ok(), (fit - 0.6).max(0.0) / 0.4));
-                    kit::text(&p, pos2(bar.right() + 8.0, y), Align2::LEFT_CENTER, &row.fits.to_string(), 11.0, "mono", t::muted());
-                }
+                    if row.on_deck.is_none() && cols.fits {
+                        let bar = Rect::from_min_size(pos2(at(7), y - 2.0), vec2(64.0, 4.0));
+                        p.rect_filled(bar, CornerRadius::same(2), col(theme::LINE));
+                        let fit = row.fits as f32 / 100.0;
+                        p.rect_filled(Rect::from_min_size(bar.min, vec2(64.0 * fit, 4.0)), CornerRadius::same(2), mix(Color32::from_rgb(0x6A, 0x6E, 0x77), t::ok(), (fit - 0.6).max(0.0) / 0.4));
+                        kit::text(&p, pos2(bar.right() + 8.0, y), Align2::LEFT_CENTER, &row.fits.to_string(), 11.0, "mono", t::muted());
+                    }
+                    sl
+                };
                 if resp.double_clicked() && playable {
                     load = Some(row.record.clone());
                     from = Some(sl);
@@ -1345,6 +1362,7 @@ impl App {
             // the cursor: one highlight that glides between rows
             if let Some(o) = origin
                 && !rows.is_empty()
+                && !club
             {
                 let gy = motion::spring(&ctx, ui.scope_id().with("cursor"), cursor as f32 * pitch, 0.14);
                 let hr = Rect::from_min_size(pos2(list.left() + 6.0, o + gy + 1.0), vec2(list.width() - 12.0, ROW - 2.0));
@@ -2009,14 +2027,24 @@ fn shelf_row(ui: &mut Ui, ctx: &egui::Context, tree: Rect, y: f32, name: &str, n
     let resp = ui.interact(rr, ui.scope_id().with(("shelf", id)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let h = motion::tween_bool(ctx, resp.id.with("h"), resp.hovered(), motion::QUICK, motion::STANDARD);
     let o = motion::tween_bool(ctx, resp.id.with("on"), on, motion::STANDARD, motion::STANDARD);
-    if h + o > 0.0 {
-        p.rect_filled(rr, CornerRadius::same(t::R_CONTROL), white(0.04 * h + 0.07 * o));
-    }
-    if o > 0.0 {
-        p.rect_filled(Rect::from_min_size(pos2(rr.left() + 1.0, rr.top() + 8.0), vec2(2.5, rr.height() - 16.0)), CornerRadius::same(1), alpha_of(t::soft(), o));
+    if t::club() {
+        // rekordbox's tree: the shelf open a blue band, the rest plain
+        let band = Rect::from_min_max(pos2(tree.left() + 1.0, rr.top() + 2.0), pos2(tree.right() - 1.0, rr.bottom() - 2.0));
+        if o > 0.0 {
+            p.rect_filled(band, CornerRadius::ZERO, alpha_of(Color32::from_rgb(0x0B, 0x4F, 0x86), o));
+        } else if h > 0.0 {
+            p.rect_filled(band, CornerRadius::ZERO, white(0.04 * h));
+        }
+    } else {
+        if h + o > 0.0 {
+            p.rect_filled(rr, CornerRadius::same(t::R_CONTROL), white(0.04 * h + 0.07 * o));
+        }
+        if o > 0.0 {
+            p.rect_filled(Rect::from_min_size(pos2(rr.left() + 1.0, rr.top() + 8.0), vec2(2.5, rr.height() - 16.0)), CornerRadius::same(1), alpha_of(t::soft(), o));
+        }
     }
     let ink = mix(Color32::from_rgb(0xB9, 0xBC, 0xC4), t::text(), o.max(h));
-    kit::clipped(&p, pos2(rr.left() + 12.0 + indent, rr.center().y), name, 13.0, "", ink, rr.width() - 60.0 - indent);
+    kit::clipped(&p, pos2(rr.left() + 12.0 + indent, rr.center().y), name, if t::club() { 12.0 } else { 13.0 }, "", ink, rr.width() - 60.0 - indent);
     kit::text(&p, pos2(rr.right() - 8.0, rr.center().y), Align2::RIGHT_CENTER, &n, 11.0, "mono", t::faint());
     resp.clicked()
 }

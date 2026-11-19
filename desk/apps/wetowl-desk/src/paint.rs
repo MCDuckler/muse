@@ -50,6 +50,12 @@ pub(crate) fn fonts(ctx: &egui::Context) {
 /// between letters — none after the last, so it centres true.
 pub(crate) fn label_job(s: &str, size: f32, spacing: f32, color: Color32) -> LayoutJob {
     let mut job = LayoutJob::default();
+    // rekordbox's layout: its plain sans, caps, a little smaller and barely spaced
+    if crate::ui::tokens::club() {
+        let font = FontId::new(size * 0.9, family("semi"));
+        job.append(&s.to_uppercase(), 0.0, TextFormat { font_id: font, color, extra_letter_spacing: size * spacing * 0.3, ..Default::default() });
+        return job;
+    }
     // (the condensed face's word space is narrower than its letters' gaps: doubled)
     let up = s.to_uppercase().replace(' ', "  ");
     let font = FontId::new(size, family("label"));

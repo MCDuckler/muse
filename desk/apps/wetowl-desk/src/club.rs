@@ -36,6 +36,44 @@ pub(crate) const PLAY: Color32 = rgb(0x2EC16B);
 pub(crate) const CUE: Color32 = rgb(0xE59A3E);
 pub(crate) const MASTER: Color32 = rgb(0xE8822A);
 
+/// What a deck's pads do (rekordbox's HOT CUE ▾ menu).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PadMode {
+    HotCue,
+    BeatLoop,
+    BeatJump,
+    PadFx,
+    MemoryCue,
+    Parts,
+}
+
+impl PadMode {
+    const ALL: [PadMode; 6] = [PadMode::HotCue, PadMode::BeatLoop, PadMode::BeatJump, PadMode::PadFx, PadMode::MemoryCue, PadMode::Parts];
+
+    /// A mode by its name, as `--pads` gives it ("beatloop", "pad-fx" …); HOT CUE else.
+    pub(crate) fn named(s: &str) -> PadMode {
+        let k: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_uppercase();
+        PadMode::ALL.into_iter().find(|m| m.name().replace(' ', "") == k).unwrap_or(PadMode::HotCue)
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            PadMode::HotCue => "HOT CUE",
+            PadMode::BeatLoop => "BEAT LOOP",
+            PadMode::BeatJump => "BEAT JUMP",
+            PadMode::PadFx => "PAD FX",
+            PadMode::MemoryCue => "MEMORY CUE",
+            PadMode::Parts => "STEMS",
+        }
+    }
+}
+
+/// PAD FX's eight (rekordbox's first bank, near enough): held, on the deck.
+const PAD_FX: [(wo_deskcore::beat_fx::BeatFxKind, f64, &str); 8] = {
+    use wo_deskcore::beat_fx::BeatFxKind as K;
+    [(K::Echo, 0.5, "ECHO 1/2"), (K::Echo, 0.75, "ECHO 3/4"), (K::Reverb, 60.0, "REVERB"), (K::Trans, 0.25, "TRANS 1/4"), (K::Roll, 0.25, "ROLL 1/4"), (K::Roll, 0.125, "ROLL 1/8"), (K::Filter, 4.0, "FILTER"), (K::VinylBrake, 1.0, "V.BRAKE")]
+};
+
 /// The gap between rekordbox's panels: a hairline.
 const G: f32 = 3.0;
 
@@ -340,45 +378,123 @@ impl App {
     fn club_cues(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
         let v = &s.decks[d];
         let shift = ui.input(|i| i.modifiers.shift);
+        let mode = self.pad_mode[d];
         let rows = 4;
-        let label_h = 16.0;
+        let label_h = 18.0;
         let row_h = ((r.height() - label_h - 4.0) / rows as f32).min(26.0);
         let col_w = (r.width() - 6.0) / 2.0;
-        for i in 0..8 {
-            let cell = Rect::from_min_size(pos2(r.left() + (i / rows) as f32 * (col_w + 6.0), r.top() + (i % rows) as f32 * row_h), vec2(col_w, row_h - 3.0));
-            let resp = ui.interact(cell, ui.scope_id().with(("club-cue", d, i)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let cell_of = |i: usize| Rect::from_min_size(pos2(r.left() + (i / rows) as f32 * (col_w + 6.0), r.top() + (i % rows) as f32 * row_h), vec2(col_w, row_h - 3.0));
+        let loops: [f64; 8] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
+        let jumps: [f64; 8] = [-1.0, 1.0, -2.0, 2.0, -4.0, 4.0, -8.0, 8.0];
+        let parts = wo_deskcore::parts::Part::ALL;
+        let n = if mode == PadMode::Parts { parts.len() } else { 8 };
+        for i in 0..n {
+            let cell = cell_of(i);
+            let resp = ui.interact(cell, ui.scope_id().with(("club-cue", d, i)), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::PointingHand);
             let fired = motion::flash(ui.ctx(), ui.scope_id().with(("club-cue-f", d, i)), self.pad_fired[d][i], 0.25);
             let h = motion::tween_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), motion::QUICK, motion::STANDARD);
-            p.rect_filled(cell, CornerRadius::same(2), mix(mix(RAISED, rgb(0x33333A), h), Color32::WHITE, fired * 0.25));
-            let letter = (b'A' + i as u8) as char;
-            let colour = wave::hot_cue_colour(i, v.looks[i].as_ref());
-            let sq = Rect::from_min_size(pos2(cell.left() + 3.0, cell.center().y - 7.0), vec2(14.0, 14.0));
-            match v.pads[i] {
-                Some(pad) => {
-                    p.rect_filled(sq, CornerRadius::same(2), colour);
-                    words(p, sq.center(), Align2::CENTER_CENTER, &letter.to_string(), 10.0, "semi", Color32::WHITE);
-                    let name = v.looks[i].as_ref().map(|l| l.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| match pad.auto {
-                        Some(k) => crate::paint::pad_name(Some(k)).to_uppercase(),
-                        None => mmss(pad.at),
-                    });
-                    kit::clipped(p, pos2(sq.right() + 6.0, cell.center().y), &name, 11.0, "semi", TEXT, cell.right() - sq.right() - 10.0);
+            // lit: the loop on, the effect held, the part playing
+            let lit = match mode {
+                PadMode::BeatLoop => v.looped.is_some() && v.loop_beats == Some(loops[i]),
+                PadMode::PadFx => self.pad_fx_held == Some((d, i)),
+                PadMode::Parts => v.part == parts[i],
+                _ => false,
+            };
+            let fill = if lit { mix(RAISED, LIT, 0.8) } else { mix(RAISED, rgb(0x33333A), h) };
+            p.rect_filled(cell, CornerRadius::same(2), mix(fill, Color32::WHITE, fired * 0.25));
+            let tag = |p: &Painter, s: &str, c: Color32| words(p, pos2(cell.left() + 8.0, cell.center().y), Align2::LEFT_CENTER, s, 11.0, "semi", c);
+            match mode {
+                PadMode::HotCue => {
+                    let letter = (b'A' + i as u8) as char;
+                    let colour = wave::hot_cue_colour(i, v.looks[i].as_ref());
+                    let sq = Rect::from_min_size(pos2(cell.left() + 3.0, cell.center().y - 7.0), vec2(14.0, 14.0));
+                    match v.pads[i] {
+                        Some(pad) => {
+                            p.rect_filled(sq, CornerRadius::same(2), colour);
+                            words(p, sq.center(), Align2::CENTER_CENTER, &letter.to_string(), 10.0, "semi", Color32::WHITE);
+                            let name = v.looks[i].as_ref().map(|l| l.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| match pad.auto {
+                                Some(k) => crate::paint::pad_name(Some(k)).to_uppercase(),
+                                None => mmss(pad.at),
+                            });
+                            kit::clipped(p, pos2(sq.right() + 6.0, cell.center().y), &name, 11.0, "semi", TEXT, cell.right() - sq.right() - 10.0);
+                        }
+                        None => {
+                            p.rect_stroke(sq, CornerRadius::same(2), Stroke::new(1.0, LINE), StrokeKind::Inside);
+                            words(p, sq.center(), Align2::CENTER_CENTER, &letter.to_string(), 10.0, "semi", rgb(0x5A5A60));
+                        }
+                    }
+                    let resp = resp.on_hover_text(if v.pads[i].is_some() { "Jump here · shift- or right-click clears" } else { "A hot cue here" });
+                    match v.pads[i] {
+                        Some(_) if resp.secondary_clicked() || (resp.clicked() && shift) => desk.clear_pad(d, i),
+                        _ if resp.clicked() => {
+                            self.pad_fired[d][i] += 1;
+                            desk.pad(d, i);
+                        }
+                        _ => {}
+                    }
                 }
-                None => {
-                    p.rect_stroke(sq, CornerRadius::same(2), Stroke::new(1.0, LINE), StrokeKind::Inside);
-                    words(p, sq.center(), Align2::CENTER_CENTER, &letter.to_string(), 10.0, "semi", rgb(0x5A5A60));
+                PadMode::BeatLoop => {
+                    tag(p, &crate::fx_panel::beat_words(loops[i]), if lit { Color32::WHITE } else { TEXT });
+                    if resp.clicked() {
+                        self.pad_fired[d][i] += 1;
+                        desk.loop_beats(d, loops[i]);
+                    }
                 }
-            }
-            let resp = resp.on_hover_text(if v.pads[i].is_some() { "Jump here · shift- or right-click clears" } else { "A hot cue here" });
-            match v.pads[i] {
-                Some(_) if resp.secondary_clicked() || (resp.clicked() && shift) => desk.clear_pad(d, i),
-                _ if resp.clicked() => {
-                    self.pad_fired[d][i] += 1;
-                    desk.pad(d, i);
+                PadMode::BeatJump => {
+                    let b = jumps[i];
+                    tag(p, &format!("{} {}", if b < 0.0 { "◀" } else { "▶" }, b.abs()), TEXT);
+                    if resp.clicked() {
+                        self.pad_fired[d][i] += 1;
+                        desk.jump(d, b);
+                    }
                 }
-                _ => {}
+                PadMode::PadFx => {
+                    let (kind, beats, name) = PAD_FX[i];
+                    tag(p, name, if lit { Color32::WHITE } else { TEXT });
+                    // held: the effect on this deck; let go: gone (its echo rings out)
+                    let down = resp.is_pointer_button_down_on();
+                    if down && self.pad_fx_held.is_none() {
+                        self.pad_fx_held = Some((d, i));
+                        desk.pad_fx(d, kind, beats, true);
+                    } else if !down && self.pad_fx_held == Some((d, i)) {
+                        self.pad_fx_held = None;
+                        desk.pad_fx(d, kind, beats, false);
+                    }
+                }
+                PadMode::MemoryCue => match v.memory.get(i) {
+                    Some(&at) => {
+                        p.add(Shape::convex_polygon(vec![pos2(cell.left() + 4.0, cell.center().y - 5.0), pos2(cell.left() + 14.0, cell.center().y - 5.0), pos2(cell.left() + 9.0, cell.center().y + 4.0)], wave::MEMORY, Stroke::NONE));
+                        kit::clipped(p, pos2(cell.left() + 20.0, cell.center().y), &mmss(at), 11.0, "mono", TEXT, cell.width() - 24.0);
+                        if resp.clicked() {
+                            self.pad_fired[d][i] += 1;
+                            desk.seek_to(d, at);
+                        }
+                    }
+                    None => {}
+                },
+                PadMode::Parts => {
+                    tag(p, &parts[i].word().to_uppercase(), if lit { Color32::WHITE } else { TEXT });
+                    if resp.clicked() {
+                        desk.set_part(d, parts[i]);
+                    }
+                }
             }
         }
-        words(p, pos2(r.left() + 2.0, r.bottom() - 7.0), Align2::LEFT_CENTER, "HOT CUE", 9.5, "semi", MUTED);
+        // the mode: rekordbox's HOT CUE ▾ (a click the next, a right-click all of them)
+        let mr = Rect::from_min_size(pos2(r.left(), r.bottom() - 16.0), vec2(104.0, 16.0));
+        let resp = button(ui, p, mr, &format!("{} ▾", mode.name()), false, LIT, ("club-pad-mode", d)).on_hover_text("The pads' mode · right-click: every one");
+        let at = PadMode::ALL.iter().position(|m| *m == mode).unwrap_or(0);
+        if resp.clicked() {
+            self.pad_mode[d] = PadMode::ALL[(at + 1) % PadMode::ALL.len()];
+        }
+        resp.context_menu(|ui| {
+            for m in PadMode::ALL {
+                if ui.selectable_label(m == mode, m.name()).clicked() {
+                    self.pad_mode[d] = m;
+                    ui.close();
+                }
+            }
+        });
     }
 
     /// The loop and the jumps: an auto loop of the length shown (‹ › halve and double it),
@@ -432,14 +548,27 @@ impl App {
         if button(ui, p, cell(2.0), "EXIT", false, CUE, ("club-exit", d)).clicked() {
             desk.unloop(d);
         }
-        // the jumps
+        // the jumps: ◀ its size ▶ (the size a click on it: 1, 2, 4 … 32 beats)
         let r3 = row(3.0);
-        let w2 = (r3.width() - 4.0) / 2.0;
-        if button(ui, p, Rect::from_min_size(r3.min, vec2(w2, rh)), "◀ 4", false, LIT, ("club-back", d)).on_hover_text("Back 4 beats").clicked() {
-            desk.jump(d, -4.0);
+        let jump_id = ui.scope_id().with(("club-jump-len", d));
+        let mut jump: f64 = ui.ctx().data(|m| m.get_temp(jump_id)).unwrap_or(4.0);
+        let bw = 28.0;
+        let back = Rect::from_min_size(r3.min, vec2(bw, rh));
+        let ahead = Rect::from_min_size(pos2(r3.right() - bw, r3.top()), vec2(bw, rh));
+        let size = Rect::from_min_max(pos2(back.right() + 3.0, r3.top()), pos2(ahead.left() - 3.0, r3.bottom()));
+        if button(ui, p, back, "◀", false, LIT, ("club-back", d)).on_hover_text("Back by the jump's size").clicked() {
+            desk.jump(d, -jump);
         }
-        if button(ui, p, Rect::from_min_size(pos2(r3.left() + w2 + 4.0, r3.top()), vec2(w2, rh)), "4 ▶", false, LIT, ("club-ahead", d)).on_hover_text("Ahead 4 beats").clicked() {
-            desk.jump(d, 4.0);
+        let sz = button(ui, p, size, &format!("JUMP {}", crate::fx_panel::beat_words(jump)), false, LIT, ("club-jump-size", d)).on_hover_text("The jump's size: a click the next · right-click the one before");
+        if sz.clicked() {
+            jump = if jump >= 32.0 { 1.0 } else { jump * 2.0 };
+        }
+        if sz.secondary_clicked() {
+            jump = if jump <= 1.0 { 32.0 } else { jump / 2.0 };
+        }
+        ui.ctx().data_mut(|m| m.insert_temp(jump_id, jump));
+        if button(ui, p, ahead, "▶", false, LIT, ("club-ahead", d)).on_hover_text("Ahead by the jump's size").clicked() {
+            desk.jump(d, jump);
         }
         let r4 = row(4.0);
         if r4.bottom() <= r.bottom() + 0.5 && button(ui, p, r4, "MT", v.keylock, LIT, ("club-mt", d)).on_hover_text("Master tempo: its key stays as its tempo moves").clicked() {

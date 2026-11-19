@@ -18,6 +18,11 @@ use crate::paint::{alpha, col, family, label_job, label_sized, label_width};
 /// A panel: elevation 1, glass (or dense glass for data), its edge and one inner highlight.
 pub fn panel(p: &Painter, r: Rect, dense: bool) {
     fit::panel(r);
+    // rekordbox's: flat, opaque, a hairline
+    if t::club() {
+        p.rect(r, CornerRadius::same(2), Color32::from_rgb(0x1B, 0x1B, 0x1D), Stroke::new(1.0, Color32::from_rgb(0x32, 0x32, 0x34)), StrokeKind::Inside);
+        return;
+    }
     let cr = CornerRadius::same(t::R_PANEL);
     p.add(t::shadow(1).as_shape(r, cr));
     let fill = col(if dense { theme::GLASS_DENSE } else { theme::GLASS_PANEL });
@@ -85,6 +90,16 @@ pub fn clipped(p: &Painter, pos: Pos2, s: &str, size: f32, fam: &str, c: Color32
     job.wrap = egui::text::TextWrapping { max_width: room.max(10.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
     let g = p.layout_job(job);
     let r = Rect::from_min_size(pos2(pos.x, pos.y - g.size().y / 2.0), g.size());
+    p.galley(r.min, g, c);
+    r
+}
+
+/// [clipped], placed by `anchor` at `pos` (a column's right edge, say).
+pub fn clipped_at(p: &Painter, pos: Pos2, anchor: Align2, s: &str, size: f32, fam: &str, c: Color32, room: f32) -> Rect {
+    let mut job = egui::text::LayoutJob::single_section(s.to_owned(), egui::TextFormat { font_id: FontId::new(size, family(fam)), color: c, ..Default::default() });
+    job.wrap = egui::text::TextWrapping { max_width: room.max(10.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    let g = p.layout_job(job);
+    let r = anchor.anchor_size(pos, g.size());
     p.galley(r.min, g, c);
     r
 }
@@ -218,10 +233,10 @@ impl<'a> Btn<'a> {
             edge = Color32::from_white_alpha(14);
             ink = t::faint();
         }
-        let cr = CornerRadius::same(t::R_CONTROL);
+        let cr = CornerRadius::same(t::r_control());
         p.rect(r, cr, fill, Stroke::new(1.0, edge), StrokeKind::Inside);
-        // lit: a fine inner ring draws in
-        if on > 0.01 && !self.quiet && r.width() > 12.0 && r.height() > 12.0 {
+        // lit: a fine inner ring draws in (the WetOwl's)
+        if on > 0.01 && !self.quiet && r.width() > 12.0 && r.height() > 12.0 && !t::club() {
             let inset = 2.0 + 2.0 * (1.0 - on);
             p.rect_stroke(r.shrink(inset), CornerRadius::same(t::R_CONTROL.saturating_sub(2)), Stroke::new(1.0, alpha_of(lit_edge, 0.35 * on)), StrokeKind::Inside);
         }
@@ -284,8 +299,8 @@ pub fn segmented_with(ui: &mut Ui, p: &Painter, r: Rect, items: &[(&str, Option<
     fit::inside(items.first().map(|i| i.0).unwrap_or("a choice"), r, ui.clip_rect());
     let id = ui.scope_id().with(id);
     let n = items.len().max(1);
-    let cr = CornerRadius::same(t::R_CONTROL);
-    p.rect(r, cr, Color32::from_white_alpha(8), Stroke::new(1.0, Color32::from_white_alpha(18)), StrokeKind::Inside);
+    let cr = CornerRadius::same(t::r_control());
+    p.rect(r, cr, if t::club() { Color32::from_rgb(0x15, 0x15, 0x17) } else { Color32::from_white_alpha(8) }, Stroke::new(1.0, if t::club() { t::edge_rest() } else { Color32::from_white_alpha(18) }), StrokeKind::Inside);
     let w = r.width() / n as f32;
     let some = motion::tween_bool(ui.ctx(), id.with("some"), chosen.is_some(), motion::STANDARD, motion::STANDARD);
     // the highlight stays where it was while it fades out
@@ -300,7 +315,7 @@ pub fn segmented_with(ui: &mut Ui, p: &Painter, r: Rect, items: &[(&str, Option<
     let (lit_fill, lit_edge, lit_ink) = tone.lit();
     if some > 0.01 {
         let hl = Rect::from_min_size(pos2(x, r.top()), vec2(w, r.height())).shrink(2.0);
-        p.rect(hl, CornerRadius::same(t::R_CONTROL - 1), lit_fill.gamma_multiply(some), Stroke::new(1.0, lit_edge.gamma_multiply(some)), StrokeKind::Inside);
+        p.rect(hl, CornerRadius::same(t::r_control().saturating_sub(1)), lit_fill.gamma_multiply(some), Stroke::new(1.0, lit_edge.gamma_multiply(some)), StrokeKind::Inside);
     }
     let is = (r.height() * 0.5).min(14.0);
     let bare = items.iter().any(|(s, i)| i.is_some() && fit::caps(p, s, 11.0, w - 12.0 - is - 5.0).is_none());
@@ -344,6 +359,10 @@ pub fn deck_chip(p: &Painter, left_center: Pos2, d: usize) -> Rect {
 
 /// A small glass tab over busy pictures (a waveform's lane, a stage picture's caption).
 pub fn glass_tab(p: &Painter, r: Rect) {
+    if t::club() {
+        p.rect(r, CornerRadius::same(2), Color32::from_rgb(0x1E, 0x1E, 0x21), Stroke::new(1.0, Color32::from_rgb(0x3A, 0x3A, 0x40)), StrokeKind::Inside);
+        return;
+    }
     p.add(egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(r, CornerRadius::same(t::R_CONTROL)));
     p.rect(r, CornerRadius::same(t::R_CONTROL), Color32::from_rgba_unmultiplied(14, 15, 19, 214), Stroke::new(1.0, Color32::from_white_alpha(22)), StrokeKind::Inside);
 }
@@ -356,8 +375,8 @@ pub fn chip(ui: &mut Ui, p: &Painter, r: Rect, s: &str, on: bool, tone: Tone, en
     let (h, pr, _) = states(ui, id, &resp, enabled);
     let on_t = motion::tween_bool(ui.ctx(), id.with("on"), on && enabled, motion::STANDARD, motion::STANDARD);
     let (lf, le, li) = tone.lit();
-    let cr = CornerRadius::same((r.height() / 2.0) as u8);
-    let fill = mix(mix(mix(Color32::from_white_alpha(6), t::fill_hover(), h), t::fill_press(), pr), lf, on_t);
+    let cr = CornerRadius::same(if t::club() { 2 } else { (r.height() / 2.0) as u8 });
+    let fill = mix(mix(mix(if t::club() { t::fill_rest() } else { Color32::from_white_alpha(6) }, t::fill_hover(), h), t::fill_press(), pr), lf, on_t);
     let edge = mix(mix(Color32::from_white_alpha(20), t::edge_hover(), h), le, on_t);
     let ink = if enabled { mix(mix(t::muted(), t::text(), h), li, on_t) } else { t::faint() };
     p.rect(r, cr, fill, Stroke::new(1.0, edge), StrokeKind::Inside);
@@ -600,8 +619,8 @@ pub fn field(ui: &mut Ui, p: &Painter, r: Rect, value: &mut String, hint_s: &str
     let id = ui.scope_id().with(id);
     let focused = ui.memory(|m| m.has_focus(id));
     let f = motion::tween_bool(ui.ctx(), id.with("f"), focused, motion::STANDARD, motion::STANDARD);
-    let cr = CornerRadius::same(t::R_CONTROL + 1);
-    p.rect(r, cr, mix(Color32::from_white_alpha(8), Color32::from_white_alpha(14), f), Stroke::new(1.0, mix(t::edge_rest(), alpha(theme::SOFT, 0.55), f)), StrokeKind::Inside);
+    let cr = CornerRadius::same(t::r_control() + 1);
+    p.rect(r, cr, if t::club() { Color32::from_rgb(0x0E, 0x0E, 0x10) } else { mix(Color32::from_white_alpha(8), Color32::from_white_alpha(14), f) }, Stroke::new(1.0, mix(t::edge_rest(), alpha(theme::SOFT, 0.55), f)), StrokeKind::Inside);
     let mut left = r.left() + 10.0;
     if let Some(i) = icon {
         icons::paint(p, Rect::from_center_size(pos2(r.left() + 18.0, r.center().y), vec2(15.0, 15.0)), i, mix(t::faint(), t::soft(), f));
@@ -687,6 +706,10 @@ pub fn modal(p: &Painter, full: Rect, size: egui::Vec2, k: f32) -> Rect {
     p.rect_filled(full, CornerRadius::ZERO, Color32::from_black_alpha((140.0 * e) as u8));
     let s = 0.98 + 0.02 * e;
     let card = Rect::from_center_size(full.center() + vec2(0.0, 8.0 * (1.0 - e)), size * s);
+    if t::club() {
+        p.rect(card, CornerRadius::same(4), Color32::from_rgb(0x1C, 0x1C, 0x1F).gamma_multiply(k.clamp(0.0, 1.0)), Stroke::new(1.0, Color32::from_rgb(0x3A, 0x3A, 0x40).gamma_multiply(k.clamp(0.0, 1.0))), StrokeKind::Inside);
+        return card;
+    }
     p.add(t::shadow(3).as_shape(card, CornerRadius::same(t::R_OVERLAY)));
     let a = |v: u8| ((v as f32) * e) as u8;
     p.rect(card, CornerRadius::same(t::R_OVERLAY), Color32::from_rgba_unmultiplied(16, 17, 22, a(246)), Stroke::new(1.0, Color32::from_white_alpha(a(28))), StrokeKind::Inside);

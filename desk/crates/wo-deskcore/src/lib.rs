@@ -18,6 +18,7 @@ pub mod covers;
 pub mod library;
 pub mod marks;
 pub mod previews;
+pub mod phrases;
 pub mod milk;
 pub mod move_player;
 pub mod autodj;
@@ -47,7 +48,7 @@ pub use covers::Cover;
 pub use prefs::{DeskLayout, Prefs, WaveStyle};
 pub use player::PlayerView;
 pub use library::{GRID_VERDICTS, Library, Shelf, StickView, verdict_word};
-pub use records::{Audio, Loudness, Record};
+pub use records::{Audio, Loudness, Record, Tags};
 pub use show::{MilkFilter, FaveEdit, FaveRow, FavesView, SetEdit, SetRow, SetsView, FinishView, LooksGrid, MilkHand, MilkRow, MilkView, MoveRow, MovesView, OwnRows, RotationRow, RotationView, ScenePage, ShowBoard, ShowEdit, ShowHands, Square, SquareDo, StyleRow, TuneRow, Variants, shot_name, value_name};
 pub use wo_show::plan::{LEVEL_MOST, LEVEL_STEPS, level_word};
 pub use wo_show::rig::{RigFinish, TransformSet};
@@ -1738,6 +1739,19 @@ impl Desk {
                     s.timing = a.timing;
                     s.vocals = a.vocals;
                     s.marks = a.marks;
+                    // a stick's record rekordbox found no phrases in: found here, on its grid
+                    if s.marks.phrases.is_empty() && s.timing.sections.is_empty() {
+                        let w = s.wave.lock().unwrap();
+                        if w.is_exact() {
+                            let n = w.rb_len();
+                            let cols: Vec<wo_wave::RbCol> = (0..n).filter_map(|i| w.rb_col(i)).collect();
+                            drop(w);
+                            let lows: Vec<f32> = cols.iter().map(|c| c.bands[0] as f32).collect();
+                            let all: Vec<f32> = cols.iter().map(|c| c.bands.iter().map(|&b| b as f32).sum()).collect();
+                            let g = &s.hands.grid;
+                            s.marks.phrases = phrases::detect(&lows, &all, &g.beats, g.bar_one, s.record.seconds as f64);
+                        }
+                    }
                     if let Some(k) = a.camelot {
                         s.record.key = k;
                     }

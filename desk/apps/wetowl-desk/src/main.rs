@@ -22,6 +22,7 @@ use wo_deskcore::{Desk, Prefs, ShowHand};
 
 mod booth;
 mod club;
+mod club_browser;
 mod controllers;
 mod faves;
 mod fx_panel;
@@ -70,6 +71,12 @@ pub(crate) enum Sort {
     Artist,
     Bpm,
     Key,
+    // rekordbox's browser's other columns
+    Album,
+    Genre,
+    Time,
+    Rating,
+    Added,
 }
 
 pub(crate) struct App {
@@ -147,6 +154,10 @@ pub(crate) struct App {
     pub(crate) rb_overview_kept: [tracks::RbOverviewKept; 2],
     /// A hand on a lane (its drag), per deck.
     pub(crate) lane_held: [bool; 2],
+    /// rekordbox's layout: each deck's pads' mode (HOT CUE, BEAT LOOP …), and the PAD FX
+    /// held.
+    pub(crate) pad_mode: [crate::club::PadMode; 2],
+    pub(crate) pad_fx_held: Option<(usize, usize)>,
     /// The decks' platters: how each turns, its pictures.
     pub(crate) platters: platter::Platters,
     /// Where each deck's platter was last drawn, and records flying from the crate to a deck.
@@ -297,6 +308,10 @@ impl App {
                 d.seek_to(i, t);
             }
         }
+        // --pads beatloop: both decks' pads in that mode (screenshots)
+        if let Some(m) = arg("--pads") {
+            app.pad_mode = [crate::club::PadMode::named(&m); 2];
+        }
         // --fx echo: FX1 on with that effect (screenshots)
         if let Some(name) = arg("--fx") {
             let mut d = app.desk.lock().unwrap();
@@ -375,6 +390,8 @@ impl App {
             overview_kept: [None, None],
             rb_overview_kept: [None, None],
             lane_held: [false; 2],
+            pad_mode: [crate::club::PadMode::HotCue; 2],
+            pad_fx_held: None,
             platters: Default::default(),
             platter_at: [Rect::NOTHING; 2],
             flights: vec![],
@@ -497,6 +514,7 @@ impl App {
     pub(crate) fn frame(&mut self, ui: &mut egui::Ui) -> (Rect, bool, bool) {
         let t0 = Instant::now();
         ui::fit(ui.ctx());
+        ui::tokens::set_club(self.prefs.layout == wo_deskcore::DeskLayout::Club);
         let shared = self.desk.clone();
         let mut guard = shared.lock().unwrap_or_else(|e| e.into_inner());
         let desk: &mut Desk = &mut guard;

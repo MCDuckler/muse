@@ -42,6 +42,7 @@ fn kept_with_stems() -> Option<Record> {
         cover: false,
         cover_rgb: None,
         loudness: Default::default(),
+        tags: Default::default(),
     })
 }
 
