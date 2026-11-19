@@ -309,7 +309,18 @@ def db(v):
     return round(20 * np.log10(abs(v) + 1e-9), 1)
 
 
+def trim(rec):
+    """The recording without the silence before the deck starts and after it stops (a REC
+    left running): 60 dB under its loudest 50 ms."""
+    e = energy(rec.mean(1))
+    loud = np.nonzero(e > 1e-6 * e.max())[0]
+    if not len(loud):
+        return rec
+    return rec[int(loud[0]) * FRAME:(int(loud[-1]) + 1) * FRAME]
+
+
 def measure(dry, grid, rec, kind):
+    rec = trim(rec)
     lag, x = align(dry, rec)
     y = rec
     xm, ym = x.mean(1), y.mean(1)
