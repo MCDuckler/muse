@@ -283,6 +283,17 @@ impl App {
             Some("rekordbox") => Some(Overlay::Rekordbox),
             _ => None,
         };
+        // --layout club|wetowl, --wave 3band|rgb|blue|wetowl: for this run only, the settings
+        // kept as they are (screenshots)
+        match arg("--layout").as_deref() {
+            Some("club") => app.prefs.layout = wo_deskcore::prefs::DeskLayout::Club,
+            Some("wetowl") => app.prefs.layout = wo_deskcore::prefs::DeskLayout::WetOwl,
+            _ => {}
+        }
+        if let Some(w) = arg("--wave")
+            && let Some(s) = wo_deskcore::prefs::WaveStyle::ALL.into_iter().find(|s| s.name().eq_ignore_ascii_case(&w)) {
+                app.prefs.wave_style = s;
+            }
         // --search <words> [--found-tab 0|1|2]: the crate opens on that search (screenshots)
         if let Some(q) = arg("--search") {
             app.search = q.clone();

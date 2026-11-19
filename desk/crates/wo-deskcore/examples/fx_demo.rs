@@ -1,6 +1,10 @@
 //! Every rekordbox effect on a record off the plugged-in stick, rendered offline to WAV
 //! files to listen to: four bars dry, four with the effect, two after it is turned off
-//! (the tails), in time with rekordbox's grid for the record.
+//! (the tails), in time with rekordbox's grid for the record. LEVEL/DEPTH and the COLOR
+//! FX's PARAMETER at their middles, each effect's first beats: as rekordbox is recorded
+//! for `desk/crates/wo-engine/data/fx_measure.py`, which measures both alike. `dry.wav`
+//! (the whole record, decoded as rekordbox does) and `grid.txt` (its beats, seconds;
+//! the first line bar one's index) are what the recordings are lined up on.
 //!
 //!   cargo run --release -p wo-deskcore --example fx_demo -- OUT_DIR [record index on the stick]
 use std::path::Path;
@@ -59,6 +63,11 @@ fn main() {
     println!("{} — {} ({:.2} BPM)", t.title, t.artist, t.bpm);
     let mut pcm = Pcm(vec![]);
     wo_decode::decode_as_rekordbox(&t.path, R, &mut pcm).unwrap();
+    wav(&out.join("dry.wav"), &pcm.0.iter().map(|v| *v as f32 / 32_768.0).collect::<Vec<_>>());
+    let grid: String = std::iter::once(a.bar_one.to_string()).chain(a.beats.iter().map(|b| format!("{b:.6}"))).collect::<Vec<_>>().join("
+");
+    std::fs::write(out.join("grid.txt"), grid + "
+").unwrap();
     let e = Engine::start(Some(R), Output::Offline).unwrap();
     let d = DeckId::new(0).unwrap();
     let mut src = e.new_source(Channels::Stereo, (pcm.0.len() / 2) as i64).unwrap();
@@ -80,8 +89,7 @@ fn main() {
         deck.seek(start);
         deck.play(true);
         render(&e, 4.0 * bar, &mut lr);
-        let level = if kind == BeatFxKind::Pitch { 0.8 } else { 0.7 };
-        let fx = |on| BeatFx { kind, on, level, beats: kind.first_beats(), param: 0.6, target: FxTarget::Deck(d), tempo: d, bpm: None };
+        let fx = |on| BeatFx { kind, on, level: 0.5, beats: kind.first_beats(), param: 0.5, target: FxTarget::Deck(d), tempo: d, bpm: None };
         e.set_beat_fx(0, &fx(true));
         render(&e, 4.0 * bar, &mut lr);
         e.set_beat_fx(0, &fx(false));
@@ -104,12 +112,12 @@ fn main() {
             if kind == ColorFxKind::Filter {
                 deck.set_filter(k);
             } else {
-                deck.set_color_fx(kind, k, 0.6);
+                deck.set_color_fx(kind, k, 0.5);
             }
             render(&e, 4.0 * bar / (steps * 2) as f64, &mut lr);
         }
         deck.set_filter(0.0);
-        deck.set_color_fx(kind, 0.0, 0.6);
+        deck.set_color_fx(kind, 0.0, 0.5);
         render(&e, 2.0 * bar, &mut lr);
         deck.play(false);
         render(&e, 4.0, &mut vec![]);
