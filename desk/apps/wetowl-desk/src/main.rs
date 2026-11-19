@@ -343,6 +343,31 @@ impl App {
                 d.seek_to(i, t);
             }
         }
+        // --sync: deck 2 synced to deck 1, both playing (screenshots)
+        // (once both records are in: a load stops a deck and lets its sync go)
+        if std::env::args().any(|a| a == "--sync") {
+            // (the Auto DJ kept off them: a bench's would load over them)
+            app.desk.lock().unwrap().set_auto(false);
+            let desk = app.desk.clone();
+            thread::spawn(move || {
+                for _ in 0..200 {
+                    thread::sleep(Duration::from_millis(50));
+                    let mut d = desk.lock().unwrap();
+                    let s = d.snapshot();
+                    if s.decks.iter().all(|v| v.record.id != 0 && v.decoded >= 1.0) {
+                        for k in 0..2 {
+                            if !s.decks[k].playing {
+                                d.toggle_play(k);
+                            }
+                        }
+                        if !s.decks[1].synced {
+                            d.toggle_sync(1);
+                        }
+                        return;
+                    }
+                }
+            });
+        }
         // --pads beatloop: both decks' pads in that mode (screenshots)
         if let Some(m) = arg("--pads") {
             app.pad_mode = [crate::club::PadMode::named(&m); 2];

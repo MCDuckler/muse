@@ -83,6 +83,9 @@ pub struct DeckView {
     pub length: f64,
     /// The rate the deck plays at (its pitch fader's, sync's): the motor's, under a hand too.
     pub rate: f64,
+    /// The rate its tempo is held at: the pitch fader's, synced the master's (in its own
+    /// octave); never a bend nor a hand. A second heard is this many of the record's.
+    pub tempo: f64,
     /// How fast the record really goes, backwards negative: under a hand, the hand's.
     pub speed: f64,
     /// A hand on the record (scratching).
@@ -1118,6 +1121,7 @@ impl Desk {
                 heard: self.engine.deck(DeckId::new(i).unwrap()).position(),
                 length,
                 rate,
+                tempo: self.steady_bpm(i) / self.base_bpm(i).max(1.0),
                 speed: st.rate,
                 held,
                 bpm: self.base_bpm(i) * rate,

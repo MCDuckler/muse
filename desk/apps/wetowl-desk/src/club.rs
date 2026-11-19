@@ -303,8 +303,11 @@ impl App {
                 self.zoom = (self.zoom * 1.0015f32.powf(dy)).clamp(40.0, 320.0);
             }
         }
-        // rekordbox's zoom is by time: the zoom's beat at 128 BPM, the same for both decks
-        let px_per_s = zoom as f64 * 128.0 / 60.0;
+        // rekordbox's zoom is by time as heard: the zoom's beat at 128 BPM, the same for both
+        // decks; a record sped up or slowed down (its pitch fader, sync) is drawn as heard, so
+        // synced decks scroll alike and their beats line up (a bend is not: the picture holds
+        // still under a nudge)
+        let px_per_s = zoom as f64 * 128.0 / 60.0 / v.tempo.clamp(0.25, 4.0);
         let lw = desk.lane_wave_at(d, v.heard, w.width(), 2.0, px_per_s, true);
         self.rb_lane(desk, ui, p, w, &lw, v, d, ppp, Anchor::Up(0.64));
         self.lane_hand(desk, ui, w, &lw, v, d);
