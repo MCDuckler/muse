@@ -94,7 +94,7 @@ fn every_beat_fx_changes_the_sound_and_stays_finite() {
         let wet = take(&e, a, at, 2.0);
         e.set_beat_fx(0, &fx(kind, false, level, kind.first_beats(), FxTarget::Deck(a)));
         deck.play(false);
-        render(&e, Some(0), 10.0); // the tails rung out
+        render(&e, Some(0), 30.0); // the tails rung out (a SPIRAL turned up rings long)
         let again = take(&e, a, at, 2.0);
         deck.play(false);
         assert!(wet.iter().all(|v| v.is_finite() && v.abs() <= 1.0), "{}: a sample out of range", kind.name());
@@ -165,7 +165,8 @@ fn the_delay_keeps_the_beat() {
     deck.set_level(1.0, 0.0);
     deck.set_beats(&(0..12).map(|i| i as f64 * SPB).collect::<Vec<_>>());
     deck.set_keylock(false);
-    e.set_beat_fx(0, &fx(BeatFxKind::Delay, true, 1.0, 1.0, FxTarget::Deck(a)));
+    // (half way: the original whole and the delay whole; all the way, the delay alone)
+    e.set_beat_fx(0, &fx(BeatFxKind::Delay, true, 0.5, 1.0, FxTarget::Deck(a)));
     deck.seek(0.0);
     deck.play(true);
     let out = render(&e, Some(0), 3.0);
@@ -249,3 +250,90 @@ fn a_release_echo_holds_the_last_beat_and_a_master_unit_works() {
     assert!(rms(&wet) > rms(&dry_master) * 1.1, "the master's echo: {} vs {}", rms(&wet), rms(&dry_master));
 }
 
+
+/// One click at 1 s on a grid of 0.5 s beats (8 s long), on deck A, parked at 0.
+fn one_click(e: &Engine) -> Source {
+    let a = DeckId::new(0).unwrap();
+    let n = 8 * R as usize;
+    let mut pcm = vec![0i16; n * 2];
+    for k in 0..480 {
+        let v = (12_000.0 * (-(k as f32) / 60.0).exp()) as i16;
+        pcm[(R as usize + k) * 2] = v;
+        pcm[(R as usize + k) * 2 + 1] = v;
+    }
+    let mut src = e.new_source(Channels::Stereo, n as i64).unwrap();
+    src.append(&pcm).unwrap();
+    src.finish();
+    let deck = e.deck(a);
+    deck.set_source(0, &src);
+    deck.set_gains(0, Gains::FULL, 0.0);
+    deck.set_level(1.0, 0.0);
+    deck.set_beats(&(0..16).map(|i| i as f64 * SPB).collect::<Vec<_>>());
+    deck.set_keylock(false);
+    src
+}
+
+/// The loudest sample (left) in each 50 ms window from `from` s for `n` windows.
+fn windows(x: &[f32], from: f64, n: usize) -> Vec<f32> {
+    let w = (0.05 * R as f64) as usize;
+    (0..n).map(|i| x.chunks(2).skip((from * R as f64) as usize + i * w).take(w).map(|c| c[0].abs()).fold(0f32, f32::max)).collect()
+}
+
+/// The DJM-900NXS2's rules for its effects, as its manual has them.
+#[test]
+fn pioneer_s_rules() {
+    let _t = TURN.lock().unwrap_or_else(|p| p.into_inner());
+    let e = Engine::start(Some(R), Output::Offline).unwrap();
+    let a = DeckId::new(0).unwrap();
+    let _src = one_click(&e);
+    let deck = e.deck(a);
+    let run = |kind: BeatFxKind, level: f32, beats: f64, secs: f64| -> Vec<f32> {
+        e.set_beat_fx(0, &fx(kind, true, level, beats, FxTarget::Deck(a)));
+        let x = take(&e, a, 0.0, secs);
+        e.set_beat_fx(0, &fx(kind, false, level, beats, FxTarget::Deck(a)));
+        deck.play(false);
+        render(&e, Some(0), 20.0);
+        x
+    };
+    // DELAY all the way: the delay alone (the original off), a beat later
+    let x = run(BeatFxKind::Delay, 1.0, 1.0, 2.5);
+    let w = windows(&x, 0.95, 14);
+    assert!(w[1] < 0.01, "DELAY at full: no original: {w:?}");
+    assert!(w[11] > 0.05, "its repeat a beat on: {w:?}");
+    // ECHO: each repeat about 4.4 dB under the one before
+    let x = run(BeatFxKind::Echo, 0.5, 1.0, 4.0);
+    let peaks: Vec<f32> = (1..=4).map(|k| windows(&x, 1.0 + k as f64 * SPB - 0.02, 1)[0]).collect();
+    for p in peaks.windows(2) {
+        let db = 20.0 * (p[1] / p[0]).log10();
+        assert!((-5.5..-3.5).contains(&db), "ECHO's repeats fall {db:.1} dB: {peaks:?}");
+    }
+    // PITCH and VINYL BRAKE at LEVEL/DEPTH none: the record as it is
+    for kind in [BeatFxKind::Pitch, BeatFxKind::VinylBrake] {
+        let dry = run(BeatFxKind::Echo, 0.0, 1.0, 2.0);
+        let x = run(kind, 0.0, kind.first_beats(), 2.0);
+        let d: Vec<f32> = dry.iter().zip(&x).map(|(a, b)| a - b).collect();
+        assert!(rms(&d) < 0.02 * rms(&dry), "{} at none changes the record ({})", kind.name(), rms(&d) / rms(&dry));
+    }
+    // REVERB: more of it (its BEAT buttons, %), a longer tail
+    let short = run(BeatFxKind::Reverb, 0.6, 10.0, 3.0);
+    let long = run(BeatFxKind::Reverb, 0.6, 100.0, 3.0);
+    let tail = |x: &[f32]| rms(&x[(2 * R as usize) * 2..(3 * R as usize) * 2]);
+    assert!(tail(&long) > 3.0 * tail(&short), "REVERB 100 % rings longer than 10 %: {} vs {}", tail(&long), tail(&short));
+}
+
+#[test]
+fn noise_filters_the_noise_not_the_record() {
+    let _t = TURN.lock().unwrap_or_else(|p| p.into_inner());
+    let e = Engine::start(Some(R), Output::Offline).unwrap();
+    let a = DeckId::new(0).unwrap();
+    let _src = record(&e, a, 30.0);
+    let deck = e.deck(a);
+    deck.set_keylock(false);
+    let dry = take(&e, a, 2.0, 1.0);
+    // the knob all the way left: the noise's low pass shut, the record's clicks as they were
+    deck.set_color_fx(ColorFxKind::Noise, -1.0, 0.0);
+    render(&e, Some(0), 0.3);
+    let x = take(&e, a, 2.0, 1.0);
+    let d: Vec<f32> = dry.iter().zip(&x).map(|(a, b)| a - b).collect();
+    assert!(rms(&d) < 0.1 * rms(&dry), "NOISE left filters the record: {}", rms(&d) / rms(&dry));
+}

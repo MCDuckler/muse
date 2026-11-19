@@ -11,6 +11,16 @@ use crate::club::{self, CUE, LINE, LIT, MUTED, TEXT, button, knob, words};
 use crate::ui::fit;
 use crate::ui::kit;
 
+/// A BEAT buttons' value as rekordbox writes it: 1/16 … 64, or a share (REVERB's amount,
+/// PITCH's pitch).
+pub(crate) fn value_words(kind: BeatFxKind, b: f64) -> String {
+    match kind {
+        BeatFxKind::Reverb => format!("{b:.0}%"),
+        BeatFxKind::Pitch => format!("{b:+.0}%"),
+        _ => beat_words(b),
+    }
+}
+
 /// A beat as rekordbox's buttons write it: 1/16 … 64.
 pub(crate) fn beat_words(b: f64) -> String {
     if b >= 1.0 {
@@ -90,29 +100,18 @@ impl App {
                 desk.set_fx_target(u, t);
             }
         }
-        // its beats (or, for those without, the reverb's size)
-        let mut x = row2.left();
-        if f.kind.beats().is_empty() {
-            if f.kind == BeatFxKind::Reverb {
-                words(p, pos2(x, row2.center().y), Align2::LEFT_CENTER, "SIZE", 9.5, "semi", MUTED);
-                let sr = Rect::from_min_size(pos2(x + 32.0, row2.top()), vec2(66.0, h));
-                if let Some(v) = kit::hslider(ui, p, sr, f.param, false, 0.5, ("fx-size", u)) {
-                    desk.set_fx_param(u, v);
-                }
-            } else {
-                words(p, pos2(x, row2.center().y), Align2::LEFT_CENTER, "LEVEL/DEPTH: THE PITCH", 9.0, "semi", MUTED);
-            }
-            x += 104.0;
-        } else {
-            let less = Rect::from_min_size(pos2(x, row2.top()), vec2(20.0, h));
+        // its beats (REVERB's amount, PITCH's pitch)
+        let x;
+        {
+            let less = Rect::from_min_size(row2.min, vec2(20.0, h));
             let val = Rect::from_min_size(pos2(less.right() + 2.0, row2.top()), vec2(44.0, h));
             let more = Rect::from_min_size(pos2(val.right() + 2.0, row2.top()), vec2(20.0, h));
-            if button(ui, p, less, "‹", false, LIT, ("fx-b-less", u)).on_hover_text("Fewer beats").clicked() {
+            if button(ui, p, less, "‹", false, LIT, ("fx-b-less", u)).clicked() {
                 desk.step_fx_beats(u, -1);
             }
             p.rect_filled(val, CornerRadius::same(2), Color32::from_rgb(0x0A, 0x0A, 0x0B));
-            words(p, val.center(), Align2::CENTER_CENTER, &beat_words(f.beats), 12.0, "mono-semi", CUE);
-            if button(ui, p, more, "›", false, LIT, ("fx-b-more", u)).on_hover_text("More beats").clicked() {
+            words(p, val.center(), Align2::CENTER_CENTER, &value_words(f.kind, f.beats), 12.0, "mono-semi", CUE);
+            if button(ui, p, more, "›", false, LIT, ("fx-b-more", u)).clicked() {
                 desk.step_fx_beats(u, 1);
             }
             x = more.right() + 8.0;
@@ -214,5 +213,7 @@ mod tests {
         assert_eq!(beat_words(0.75), "3/4");
         assert_eq!(beat_words(1.0), "1");
         assert_eq!(beat_words(64.0), "64");
+        assert_eq!(value_words(BeatFxKind::Pitch, -50.0), "-50%");
+        assert_eq!(value_words(BeatFxKind::Reverb, 60.0), "60%");
     }
 }

@@ -253,7 +253,9 @@ mod tests {
         assert_eq!(step(BeatFxKind::Echo, 1.0, -1), 0.75);
         assert_eq!(step(BeatFxKind::Echo, 16.0, 1), 16.0, "the end stays");
         assert_eq!(step(BeatFxKind::Flanger, 16.0, 1), 32.0);
-        assert_eq!(step(BeatFxKind::Reverb, 1.0, 1), 1.0, "none to step");
+        assert_eq!(step(BeatFxKind::Echo, 0.0625, -1), 0.0625);
+        assert_eq!(step(BeatFxKind::Reverb, 50.0, 1), 60.0, "REVERB's amount");
+        assert_eq!(step(BeatFxKind::Pitch, -10.0, 1), 10.0, "PITCH's pitch, past none");
         assert_eq!(step(BeatFxKind::Trans, 3.0, 1), 8.0, "off the list: from the next one up");
     }
 }

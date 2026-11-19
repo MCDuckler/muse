@@ -482,7 +482,13 @@ impl Engine {
             FxTarget::Deck(d) => d.index() as i32,
             FxTarget::Master => -1,
         };
-        unsafe { sys::we_beat_fx(unit.min(1) as i32, fx.kind as i32, fx.on as i32, fx.level, fx.beats, fx.param, target, fx.tempo.index() as i32, fx.bpm.unwrap_or(0.0)) }
+        // REVERB's and PITCH's BEAT buttons are a share: the engine takes it as their own
+        let (beats, param) = match fx.kind {
+            BeatFxKind::Reverb => (1.0, (fx.beats / 100.0).clamp(0.01, 1.0) as f32),
+            BeatFxKind::Pitch => (1.0, ((fx.beats + 50.0) / 150.0).clamp(0.0, 1.0) as f32),
+            _ => (fx.beats, fx.param),
+        };
+        unsafe { sys::we_beat_fx(unit.min(1) as i32, fx.kind as i32, fx.on as i32, fx.level, beats, param, target, fx.tempo.index() as i32, fx.bpm.unwrap_or(0.0)) }
     }
 
     /// A unit's RELEASE FX held (it turns the unit's BEAT FX off) or let go of.
@@ -693,24 +699,34 @@ impl BeatFxKind {
         }
     }
 
-    /// The beats its buttons offer (as a DJM's): fractions of a beat for the echoes and
-    /// rolls, the LFO's cycle for the sweeps; none where the knob is all (PITCH, REVERB).
+    /// What its BEAT buttons step through, as a DJM-900NXS2's: beats 1/16 … 16 for the
+    /// echoes, cuts and rolls, the cycle 1/16 … 64 beats for the sweeps; REVERB's its
+    /// amount, 10 … 100 (%); PITCH's its pitch, −50 … +100 (%).
     pub fn beats(self) -> &'static [f64] {
+        const BEATS: &[f64] = &[0.0625, 0.125, 0.25, 0.5, 0.75, 1.0, 2.0, 4.0, 8.0, 16.0];
+        const CYCLES: &[f64] = &[0.0625, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0];
         match self {
-            BeatFxKind::Delay | BeatFxKind::Echo | BeatFxKind::PingPong | BeatFxKind::Spiral | BeatFxKind::Helix => &[0.125, 0.25, 0.5, 0.75, 1.0, 2.0, 4.0, 8.0, 16.0],
-            BeatFxKind::Trans | BeatFxKind::SlipRoll | BeatFxKind::Roll => &[0.0625, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0],
-            BeatFxKind::Filter | BeatFxKind::Flanger | BeatFxKind::Phaser => &[0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0],
-            BeatFxKind::VinylBrake => &[0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
-            BeatFxKind::Reverb | BeatFxKind::Pitch => &[],
+            BeatFxKind::Delay | BeatFxKind::Echo | BeatFxKind::PingPong | BeatFxKind::Spiral | BeatFxKind::Helix | BeatFxKind::Trans | BeatFxKind::SlipRoll | BeatFxKind::Roll | BeatFxKind::VinylBrake => BEATS,
+            BeatFxKind::Filter | BeatFxKind::Flanger | BeatFxKind::Phaser => CYCLES,
+            BeatFxKind::Reverb => &[10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0],
+            BeatFxKind::Pitch => &[-50.0, -40.0, -30.0, -20.0, -10.0, 10.0, 20.0, 30.0, 40.0, 50.0, 75.0, 100.0],
         }
     }
 
-    /// The beats it starts on.
+    /// Its BEAT buttons' value is a share (%), not beats.
+    pub fn in_percent(self) -> bool {
+        matches!(self, BeatFxKind::Reverb | BeatFxKind::Pitch)
+    }
+
+    /// Where its BEAT buttons start.
     pub fn first_beats(self) -> f64 {
         match self {
             BeatFxKind::Filter | BeatFxKind::Flanger | BeatFxKind::Phaser => 16.0,
             BeatFxKind::Trans | BeatFxKind::SlipRoll | BeatFxKind::Roll => 0.5,
             BeatFxKind::Delay | BeatFxKind::PingPong => 0.5,
+            BeatFxKind::Echo | BeatFxKind::Spiral => 0.75,
+            BeatFxKind::Reverb => 50.0,
+            BeatFxKind::Pitch => 20.0,
             _ => 1.0,
         }
     }
@@ -778,7 +794,7 @@ pub struct BeatFx {
     pub on: bool,
     /// LEVEL/DEPTH, 0..1.
     pub level: f32,
-    /// Its length (or its LFO's cycle), beats.
+    /// Its length (or its LFO's cycle), beats; REVERB's amount and PITCH's pitch, %.
     pub beats: f64,
     /// The effect's own (the reverb's size), 0..1.
     pub param: f32,

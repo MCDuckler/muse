@@ -7,6 +7,7 @@
 // depth or feedback); its beats are a fraction of the beat (1/16 … 16) or, for the LFO
 // effects, the LFO's cycle. The echoes and reverbs ring out when turned off (their send
 // shut, their tail left to fade), the rest let go of the sound at once (a 10 ms fade).
+// How each behaves follows the DJM-900NXS2's operating instructions (its effects' table).
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -24,9 +25,10 @@ enum FxKind {
 enum ColorKind { kCfxFilter = 0, kCfxSpace, kCfxDubEcho, kCfxSweep, kCfxNoise, kCfxCrush, kCfxKinds };
 enum ReleaseKind { kRfxEcho = 0, kRfxVinylBrake, kRfxBackspin, kRfxKinds };
 
-// The effects that ring out after they are turned off.
+// The effects that ring out after they are turned off (the DJM manual's: the echoes and
+// the reverb leave their sound when the fader comes down).
 inline bool spills(int k) {
-  return k == kFxDelay || k == kFxEcho || k == kFxPingPong || k == kFxSpiral || k == kFxReverb || k == kFxHelix;
+  return k == kFxDelay || k == kFxEcho || k == kFxPingPong || k == kFxSpiral || k == kFxReverb;
 }
 
 // A stereo delay line: written a frame at a time, read any distance back (linear).
@@ -127,6 +129,12 @@ struct Noise {
 };
 
 // ------------------------------------------------------------------ BEAT FX
+// Pioneer's LEVEL/DEPTH balance (the DJM-900NXS2's manual: "the balance of the original
+// and the effect"): the original whole to the middle and gone at the end, the effect
+// coming in to the middle and whole from there.
+inline float dryOf(float L) { return std::min(1.f, 2.f * (1.f - L)); }
+inline float wetOf(float L) { return std::min(1.f, 2.f * L); }
+
 struct BeatFx {
   double rate = 48000;
   int kind = kFxEcho;
@@ -135,16 +143,19 @@ struct BeatFx {
   double beats = 1;
   // send (into the echoes and reverbs), and the effect's presence (the rest)
   Ramp send, mix;
-  Smooth lvl, delayFrames;
-  Line line, line2;      // delays (16 s), the second for ping pong / the spiral's diffusion
-  Line cap;              // roll, helix, vinyl brake: what was played
+  Smooth lvl, delayFrames, gate;
+  Line line, line2;      // delays (16 s); ping pong's right; the reverb's pre-delay
+  Line cap;              // roll, vinyl brake: what was played
+  std::vector<float> loop;  // the helix's turn
   Reverb reverb;
   Shifter shifter;
-  Biquad bq;
+  Biquad bq, lowCut;
   AllpassStage ap[6];
   float fbL = 0, fbR = 0;            // the phaser's feedback
-  double capRead = 0, capLen = 0, brakeSpeed = 1;
+  double capRead = 0, capLen = 0, brakeSpeed = 1, lastLen = 0;
   int64_t capWritten = 0;
+  double loopPhase = 0, loopTurned = 0;
+  size_t loopLen = 0;
   float tail = 0;                    // how loud the wet still is (for "done")
   int bqEvery = 0;
   bool fresh = true;                 // a new effect: its delay time starts where it is
@@ -153,17 +164,20 @@ struct BeatFx {
     rate = r;
     line.init((size_t)(r * 16.5)); line2.init((size_t)(r * 16.5));
     cap.init((size_t)(r * 16.5));
+    loop.assign((size_t)(r * 16.5) * 2, 0.f);
     reverb.init(r); shifter.init(r);
+    lowCut.highpass(200, r);
     send.now = send.target = 0; mix.now = mix.target = 0;
   }
   bool active() const { return on || send.now > 0 || mix.now > 0 || tail > 1e-4f; }
 
+  // `p`: the effect's own (REVERB its amount 0..1; PITCH its pitch, (p × 150 − 50) %).
   void set(int k, bool turnOn, float lv, double b, float p) {
     level = std::clamp(lv, 0.f, 1.f);
     param = std::clamp(p, 0.f, 1.f);
     if (b > 0) beats = std::clamp(b, 1.0 / 16, 64.0);
     if (k >= 0 && k < kFxKinds && k != kind) {
-      // another effect: the old one's tail is let go of (a short fade), lines cleared
+      // another effect: the old one's tail is let go of, its lines cleared
       kind = k;
       tail = 0; line.clear(); line2.clear(); reverb.clear(); fresh = true;
     }
@@ -183,147 +197,175 @@ struct BeatFx {
     const bool started = on && !wasOn;
     wasOn = on;
     if (started) startCapture(len);
-    if (fresh) { fresh = false; delayFrames.now = kind == kFxTrans ? 1.f : (float)len; }
+    if (fresh) { fresh = false; delayFrames.now = (float)len; gate.now = 1; }
+    // SLIP ROLL takes the sound again when its beats change (ROLL keeps what it took)
+    if (on && kind == kFxSlipRoll && std::fabs(len - lastLen) > 1) startCapture(len);
+    if (kind == kFxRoll) capLen = len;
+    lastLen = len;
     float peak = 0;
     for (int i = 0; i < n; i++) {
       const float x0 = lr[i * 2], x1 = lr[i * 2 + 1];
       const float s = send.next(), m = mix.next();
       const float L = lvl.to(level, 0.002f);
       const double bp = beatPos + perFrame * i;
-      float w0 = x0, w1 = x1;  // the effect's sound
+      // the echoes' own balance: their send shut, the original whole again
+      const float dryS = 1 - s * (1 - dryOf(L)), wet = wetOf(L);
+      float w0 = x0, w1 = x1;  // the effect's sound, balanced against the original below
       switch (kind) {
         case kFxDelay:
         case kFxEcho: {
-          const float fb = kind == kFxDelay ? 0.f : 0.42f + 0.38f * L;
+          // DELAY one repeat; ECHO repeats fading (a DJM's: about 4.4 dB each)
+          const float fb = kind == kFxDelay ? 0.f : 0.6f;
           const float d = delayFrames.to((float)len, 0.0008f);
           const float y0 = line.read(0, d), y1 = line.read(1, d);
           line.push(x0 * s + y0 * fb, x1 * s + y1 * fb);
-          lr[i * 2] = x0 * (1 - 0.35f * L * s) + y0 * L;
-          lr[i * 2 + 1] = x1 * (1 - 0.35f * L * s) + y1 * L;
+          lr[i * 2] = x0 * dryS + y0 * wet;
+          lr[i * 2 + 1] = x1 * dryS + y1 * wet;
           peak = std::max(peak, std::fabs(y0) + std::fabs(y1));
           continue;
         }
         case kFxPingPong: {
-          const float fb = 0.45f + 0.35f * L;
+          // left at the beats, right a turn later, across and back, fading
+          const float fb = 0.6f;
           const float d = delayFrames.to((float)len, 0.0008f);
           const float yl = line.read(0, d), yr = line2.read(1, d);
           const float mono = 0.5f * (x0 + x1);
           line.push(mono * s + yr * fb, 0);
           line2.push(0, yl);
-          lr[i * 2] = x0 * (1 - 0.35f * L * s) + yl * L;
-          lr[i * 2 + 1] = x1 * (1 - 0.35f * L * s) + yr * L;
+          lr[i * 2] = x0 * dryS + yl * wet;
+          lr[i * 2 + 1] = x1 * dryS + yr * wet;
           peak = std::max(peak, std::fabs(yl) + std::fabs(yr));
           continue;
         }
         case kFxSpiral: {
-          // an echo whose time glides to the beat chosen (its pitch bends as it does),
-          // smeared each pass: the repeats swirl into a wash
-          const float fb = 0.6f + 0.33f * L;
+          // a reverberant echo whose time glides to the beats chosen (its pitch bends as
+          // it does); LEVEL/DEPTH its feedback and its balance
+          const float fb = 0.5f + 0.47f * L;
           const float d = delayFrames.to((float)len, 0.00015f);
           float y0 = line.read(0, d), y1 = line.read(1, d);
-          const float a = 0.55f;
-          y0 = ap[0].run(0, y0, a); y1 = ap[0].run(1, y1, a);
-          y0 = ap[1].run(0, y0, -a); y1 = ap[1].run(1, y1, -a);
+          y0 = ap[0].run(0, y0, 0.6f); y1 = ap[0].run(1, y1, 0.6f);
+          y0 = ap[1].run(0, y0, -0.6f); y1 = ap[1].run(1, y1, -0.6f);
+          y0 = ap[2].run(0, y0, 0.45f); y1 = ap[2].run(1, y1, 0.45f);
           line.push(x0 * s + y1 * fb, x1 * s + y0 * fb);
-          lr[i * 2] = x0 * (1 - 0.35f * L * s) + y0 * L;
-          lr[i * 2 + 1] = x1 * (1 - 0.35f * L * s) + y1 * L;
+          lr[i * 2] = x0 * dryS + y0 * wet;
+          lr[i * 2 + 1] = x1 * dryS + y1 * wet;
           peak = std::max(peak, std::fabs(y0) + std::fabs(y1));
           continue;
         }
         case kFxReverb: {
-          reverb.room = 0.70f + 0.28f * param;
+          // its amount (the BEAT buttons, 1–100 %) the room's size; a pre-delay of 15 ms
+          // and a low cut on what goes in, the early reflections and the tail
+          reverb.room = 0.62f + 0.36f * param;
+          reverb.damp = 0.42f - 0.27f * param;
+          const float in = lowCut.run(0, 0.5f * (x0 + x1) * s);
+          line2.push(in, 0);
+          const float pre = line2.read(0, rate * 0.015);
           float rl, rr;
-          reverb.run(0.5f * (x0 + x1) * s, rl, rr);
-          lr[i * 2] = x0 * (1 - 0.4f * L * s) + rl * L * 1.4f;
-          lr[i * 2 + 1] = x1 * (1 - 0.4f * L * s) + rr * L * 1.4f;
+          reverb.run(pre, rl, rr);
+          const float e = 0.35f * line2.read(0, rate * 0.023);  // an early reflection
+          rl = rl * 2.2f + e; rr = rr * 2.2f + 0.35f * line2.read(0, rate * 0.031);
+          lr[i * 2] = x0 * dryS + rl * wet;
+          lr[i * 2 + 1] = x1 * dryS + rr * wet;
           peak = std::max(peak, std::fabs(rl) + std::fabs(rr));
           continue;
         }
         case kFxTrans: {
-          // cut in time: on for the first half of each `beats`, off for the rest
+          // cut on the beats: LEVEL/DEPTH the cut's depth, then its length (a fifth of
+          // each `beats` to the half)
           const double ph = std::fmod(bp / beats, 1.0);
-          const float target = (ph < 0.5) ? 1.f : 1.f - L;
-          const float g = delayFrames.to(target, 0.02f);
+          const float depth = std::min(1.f, 2 * L), cut = 0.2f + 0.3f * std::max(0.f, 2 * L - 1);
+          const float target = ph >= 1.0 - cut ? 1.f - depth : 1.f;
+          const float g = gate.to(target, 0.02f);
           w0 = x0 * g; w1 = x1 * g;
           break;
         }
         case kFxFilter: {
+          // a resonant low pass swept round every `beats`; LEVEL/DEPTH how far down
           if (bqEvery-- <= 0) {
             bqEvery = 32;
             const double ph = std::fmod(bp / beats, 1.0);
             const double sweep = 0.5 - 0.5 * std::cos(2 * kPi * ph);
-            const double f = 250 * std::pow(40.0, sweep);  // 250 Hz … 10 kHz
-            bq.lowpass(std::min(f, rate * 0.45), rate, 0.9 + 5.0 * L);
+            const double f = 18000 * std::pow(120.0 / 18000, sweep * L);
+            bq.lowpass(std::min(f, rate * 0.45), rate, 2.2);
           }
           w0 = bq.run(0, x0); w1 = bq.run(1, x1);
           break;
         }
         case kFxFlanger: {
+          // a jet: a short delay swept once every `beats`, fed back; LEVEL/DEPTH its depth
           const double ph = std::fmod(bp / beats, 1.0);
-          const double d = (0.0006 + 0.0045 * (0.5 - 0.5 * std::cos(2 * kPi * ph))) * rate;
-          const float fb = 0.35f + 0.5f * L;
+          const double d = (0.0004 + 0.0065 * (0.5 - 0.5 * std::cos(2 * kPi * ph))) * rate;
           const float y0 = line.read(0, d), y1 = line.read(1, d);
-          line.push(x0 + y0 * fb, x1 + y1 * fb);
-          w0 = 0.6f * (x0 + y0); w1 = 0.6f * (x1 + y1);
+          line.push(x0 + y0 * 0.65f, x1 + y1 * 0.65f);
+          const float k = 0.55f * L;
+          w0 = x0 * (1 - k) + y0 * k * 0.75f; w1 = x1 * (1 - k) + y1 * k * 0.75f;
           break;
         }
         case kFxPhaser: {
           const double ph = std::fmod(bp / beats, 1.0);
-          const double f = 300 * std::pow(8.0, 0.5 - 0.5 * std::cos(2 * kPi * ph));
+          const double f = 200 * std::pow(15.0, 0.5 - 0.5 * std::cos(2 * kPi * ph));
           const double t = std::tan(kPi * f / rate);
           const float a = (float)((t - 1) / (t + 1));
-          const float fb = 0.2f + 0.55f * L;
-          float y0 = x0 + fbL * fb, y1 = x1 + fbR * fb;
+          float y0 = x0 + fbL * 0.55f, y1 = x1 + fbR * 0.55f;
           for (auto& st : ap) { y0 = st.run(0, y0, a); y1 = st.run(1, y1, a); }
           fbL = y0; fbR = y1;
-          w0 = 0.6f * (x0 + y0); w1 = 0.6f * (x1 + y1);
+          const float k = 0.5f * L;
+          w0 = x0 * (1 - k) + y0 * k; w1 = x1 * (1 - k) + y1 * k;
           break;
         }
         case kFxPitch: {
-          // LEVEL/DEPTH is the pitch: the middle none, an octave down to an octave up
-          const float k = (L - 0.5f) * 2;
-          const double semis = std::fabs(k) < 0.03f ? 0.0 : 12.0 * k;
-          shifter.run(w0, w1, std::pow(2.0, semis / 12.0));
-          lr[i * 2] = x0 * (1 - m) + w0 * m;
-          lr[i * 2 + 1] = x1 * (1 - m) + w1 * m;
+          // its pitch the BEAT buttons' (−50 … +100 %), LEVEL/DEPTH how much of it: none
+          // at the left
+          const double pct = param * 150.0 - 50.0;
+          const double ratio = std::max(0.25, 1.0 + pct / 100.0 * L);
+          shifter.run(w0, w1, ratio);
+          // near no shift, the original itself (the shifter's grains lag it a little)
+          const float k = m * (float)std::clamp(std::fabs(ratio - 1) * 25, 0.0, 1.0);
+          lr[i * 2] = x0 * (1 - k) + w0 * k;
+          lr[i * 2 + 1] = x1 * (1 - k) + w1 * k;
           continue;
         }
         case kFxSlipRoll:
         case kFxRoll: {
           // what was played from the moment it went on, round again every `beats`
           cap.push(x0, x1); capWritten++;
-          if (capLen != len && kind == kFxSlipRoll) capLen = len;  // the length follows the beats at once
-          const double into = std::fmod((double)capWritten - 1, std::max(16.0, capLen));
+          const double turn = std::max(16.0, capLen);
+          const double into = std::fmod((double)capWritten - 1, turn);
           const double back = (double)capWritten - into;
-          w0 = cap.read(0, back); w1 = cap.read(1, back);
-          // its own level: LEVEL/DEPTH lets the original through under it
-          const float k = 0.5f + 0.5f * L;
-          w0 = w0 * k + x0 * (1 - k); w1 = w1 * k + x1 * (1 - k);
+          const float r0 = cap.read(0, back), r1 = cap.read(1, back);
+          w0 = x0 * dryOf(L) + r0 * wetOf(L); w1 = x1 * dryOf(L) + r1 * wetOf(L);
           break;
         }
         case kFxVinylBrake: {
-          // the sound slows to a stop over `beats`, its pitch going with it
+          // the sound slows over `beats` to the speed LEVEL/DEPTH asks (to a stop at the
+          // right, back up to the record's own at the left)
           cap.push(x0, x1); capWritten++;
-          brakeSpeed = std::max(0.0, brakeSpeed - 1.0 / std::max(1.0, len * (0.6 + 0.8 * (1 - L))));
+          const double target = 1.0 - L, by = 1.0 / std::max(1.0, len);
+          brakeSpeed += std::clamp(target - brakeSpeed, -by, by);
           capRead += brakeSpeed;
-          const double back = (double)capWritten - capRead;
-          const float fade = (float)std::min(1.0, brakeSpeed * 8);
-          w0 = cap.read(0, back) * fade; w1 = cap.read(1, back) * fade;
+          const double lag = (double)capWritten - capRead;
+          const float slow = (float)std::clamp((1 - brakeSpeed) * 12, 0.0, 1.0);
+          if (slow <= 0 && lag > 0) capRead = (double)capWritten;  // back up to speed: caught up
+          const float fade = (float)std::min(1.0, brakeSpeed * 10);
+          const float b0 = cap.read(0, std::max(1.0, lag)) * fade, b1 = cap.read(1, std::max(1.0, lag)) * fade;
+          w0 = x0 * (1 - slow) + b0 * slow; w1 = x1 * (1 - slow) + b1 * slow;
           break;
         }
         case kFxHelix: {
-          // what was playing caught and held, round and round; LEVEL/DEPTH lets new sound
-          // into it as it turns
-          const double back = std::max(16.0, capLen);  // a full turn back
-          const float o0 = line.read(0, back), o1 = line.read(1, back);
-          const float in = on ? (1 - 0.85f * L) * 0.6f : 0.f;
-          const float keep = on ? 0.97f : 0.86f;
-          line.push(o0 * keep + x0 * in * s, o1 * keep + x1 * in * s);
-          capWritten++;
-          lr[i * 2] = x0 * (1 - 0.6f * m) + o0 * (0.4f + 0.6f * L);
-          lr[i * 2 + 1] = x1 * (1 - 0.6f * m) + o1 * (0.4f + 0.6f * L);
-          peak = std::max(peak, std::fabs(o0) + std::fabs(o1));
-          continue;
+          // what was playing caught and held, round and round; new beats play the turn
+          // faster or slower (its pitch with it); LEVEL/DEPTH how much new sound goes into
+          // it (the right: none, held as it is), and its balance
+          const double step = (double)loopLen / std::max(16.0, len);
+          size_t at = (size_t)loopPhase % std::max<size_t>(loopLen, 1);
+          const float o0 = loop[at * 2], o1 = loop[at * 2 + 1];
+          const bool first = loopTurned < (double)loopLen;
+          const float keep = first ? 0.f : L, in = first ? 1.f : (1 - L);
+          if (on) { loop[at * 2] = o0 * keep + x0 * in; loop[at * 2 + 1] = o1 * keep + x1 * in; }
+          loopPhase += step; loopTurned += step;
+          if (loopPhase >= (double)loopLen) loopPhase -= (double)loopLen;
+          const float h0 = first ? x0 : o0, h1 = first ? x1 : o1;
+          w0 = x0 * dryOf(L) + h0 * wetOf(L); w1 = x1 * dryOf(L) + h1 * wetOf(L);
+          break;
         }
         default: break;
       }
@@ -331,37 +373,43 @@ struct BeatFx {
       lr[i * 2 + 1] = x1 * (1 - m) + w1 * m;
     }
     tail = spills(kind) ? std::max(peak, tail * 0.9f) : 0.f;
-    if (!spills(kind) && !on && mix.now <= 0) tail = 0;
   }
 
   void startCapture(double len) {
     capLen = len; capWritten = 0; capRead = 0; brakeSpeed = 1;
-    // the helix's loop fills with what plays on its first turn
-    if (kind == kFxHelix) line.clear();
     cap.clear();
-    delayFrames.now = kind == kFxTrans ? 1.f : (float)len;
+    loopLen = std::min((size_t)len, loop.size() / 2); loopPhase = 0; loopTurned = 0;
+    delayFrames.now = (float)len;
   }
 };
 
 // ------------------------------------------------------------------ SOUND COLOR FX
-// The channel's knob: the middle nothing, either way more of the effect, each way its
-// own flavour (rekordbox's SPACE, DUB ECHO, SWEEP, NOISE, CRUSH, FILTER).
+// The channel's knob: the middle nothing, either way more of the effect, each way its own
+// flavour, as the DJM-900NXS2's manual has them:
+//   SPACE     reverb: left on the lows and mids, right on the mids and highs; PARAMETER its
+//             feedback (the tail's length)
+//   DUB ECHO  an echo fading: left on the mids alone, right on the highs alone; PARAMETER
+//             its feedback
+//   SWEEP     left a gate (tighter, quieter; PARAMETER tighter still), right a band pass
+//             narrowing (PARAMETER its centre, higher to the right)
+//   NOISE     white noise in through a filter (left its low pass closing, right its high
+//             pass opening; the record itself untouched); PARAMETER its volume
+//   CRUSH     left more distortion; right crushed, then through a high pass opening;
+//             PARAMETER more of it
 struct ColorFx {
   double rate = 48000;
   int kind = kCfxFilter;
   float knob = 0, param = 0.5f;
-  Filter filter;   // NOISE's and CRUSH's tone (FILTER itself is the deck's own filter)
   Reverb reverb;
   Line line;
-  Biquad loopF, bp;
+  Biquad sendLo, sendHi, loopLo, loopHi, bp, noiseF, hp;
   Noise noise;
   Smooth amt, env, hold;
   float crushHold[2] = {0, 0};
   int crushCount = 0;
   float tail = 0;
-  void init(double r) {
-    rate = r; filter.init(r); reverb.init(r); line.init((size_t)(r * 2.5));
-  }
+  int every = 0;
+  void init(double r) { rate = r; reverb.init(r); line.init((size_t)(r * 2.5)); }
   void setKind(int k, float p) {
     p = std::clamp(p, 0.f, 1.f);
     if (k != kind && k >= 0 && k < kCfxKinds) { kind = k; reverb.clear(); line.clear(); tail = 0; }
@@ -372,92 +420,102 @@ struct ColorFx {
   bool busy() const { return kind != kCfxFilter && (std::fabs(knob) >= 0.02f || tail >= 1e-4f || amt.now >= 1e-3f); }
   void run(float* lr, int n, double beatSec) {
     if (kind == kCfxFilter) return;
-    filter.set(knob);
     const float a = std::fabs(knob);
     if (a < 0.02f && tail < 1e-4f && amt.now < 1e-3f) return;
+    const bool left = knob < 0;
     float peak = 0;
     switch (kind) {
       case kCfxSpace: {
-        // reverb, its send the knob: left low and dark, right high and bright
-        reverb.room = 0.74f + 0.22f * param;
-        if (knob < 0) loopF.lowpass(900, rate); else loopF.highpass(700, rate);
+        reverb.room = 0.7f + 0.28f * param;
+        reverb.damp = 0.3f;
+        if (left) { sendLo.lowpass(2500, rate); sendHi.highpass(80, rate); }
+        else { sendLo.lowpass(16000, rate); sendHi.highpass(600, rate); }
         for (int i = 0; i < n; i++) {
           const float s = amt.to(a, 0.003f);
-          float in = 0.5f * (lr[i * 2] + lr[i * 2 + 1]) * s;
-          in = loopF.run(0, in);
+          const float in = sendHi.run(0, sendLo.run(0, 0.5f * (lr[i * 2] + lr[i * 2 + 1]) * s));
           float rl, rr;
           reverb.run(in, rl, rr);
-          lr[i * 2] += rl * 1.8f; lr[i * 2 + 1] += rr * 1.8f;
+          lr[i * 2] += rl * 2.4f; lr[i * 2 + 1] += rr * 2.4f;
           peak = std::max(peak, std::fabs(rl));
         }
         break;
       }
       case kCfxDubEcho: {
-        // an echo a dotted eighth apart, its repeats darker (left) or thinner (right)
-        // each pass, more of them the further the knob
         const double d = std::clamp(beatSec, 0.15, 2.0) * 0.75 * rate;
-        const double fc = knob < 0 ? 3000 * std::pow(0.15, (double)a) : 300 * std::pow(8.0, (double)a);
-        if (knob < 0) loopF.lowpass(fc, rate); else loopF.highpass(fc, rate);
-        const float fb = 0.5f + 0.35f * param;
+        if (left) { sendLo.lowpass(2500, rate); sendHi.highpass(300, rate); }
+        else { sendLo.lowpass(18000, rate); sendHi.highpass(2500, rate); }
+        loopLo.lowpass(left ? 2200 : 12000, rate); loopHi.highpass(left ? 350 : 2000, rate);
+        const float fb = 0.45f + 0.45f * param;
         for (int i = 0; i < n; i++) {
           const float s = amt.to(a, 0.003f);
           const float y0 = line.read(0, d), y1 = line.read(1, d);
-          const float f0 = loopF.run(0, y0), f1 = loopF.run(1, y1);
-          line.push(lr[i * 2] * s + f0 * fb, lr[i * 2 + 1] * s + f1 * fb);
-          lr[i * 2] += y0; lr[i * 2 + 1] += y1;
+          const float in0 = sendHi.run(0, sendLo.run(0, lr[i * 2] * s)), in1 = sendHi.run(1, sendLo.run(1, lr[i * 2 + 1] * s));
+          line.push(in0 + loopHi.run(0, loopLo.run(0, y0)) * fb, in1 + loopHi.run(1, loopLo.run(1, y1)) * fb);
+          lr[i * 2] += y0 * 1.3f; lr[i * 2 + 1] += y1 * 1.3f;
           peak = std::max(peak, std::fabs(y0));
         }
         break;
       }
       case kCfxSweep: {
-        if (knob > 0) {
-          // a band narrowing and rising with the knob
-          const double f = 300 * std::pow(20.0, (double)a);
-          bp.lowpass(std::min(f, rate * 0.45), rate, 1.0 + 6.0 * a);
+        if (!left) {
+          // a band, narrower the further, around a centre the PARAMETER sets
+          const double fc = 150 * std::pow(60.0, (double)param);
           for (int i = 0; i < n; i++) {
             const float m = amt.to(a, 0.003f);
-            lr[i * 2] = lr[i * 2] * (1 - m) + bp.run(0, lr[i * 2]) * m;
-            lr[i * 2 + 1] = lr[i * 2 + 1] * (1 - m) + bp.run(1, lr[i * 2 + 1]) * m;
+            if (every-- <= 0) { every = 32; bp.lowpass(std::min(fc, rate * 0.45), rate, 0.7 + 9.0 * m * m); hp.highpass(fc * (0.25 + 0.7 * m), rate, 0.7 + 2.0 * m); }
+            const float b0 = hp.run(0, bp.run(0, lr[i * 2])), b1 = hp.run(1, bp.run(1, lr[i * 2 + 1]));
+            lr[i * 2] = lr[i * 2] * (1 - m) + b0 * m;
+            lr[i * 2 + 1] = lr[i * 2 + 1] * (1 - m) + b1 * m;
           }
         } else {
-          // a gate: what falls under a threshold rising with the knob goes quiet
-          const float th = 0.02f + 0.4f * a * a;
+          // a gate: what falls under a threshold (higher the further, and with the
+          // PARAMETER) goes quiet; the rest a little quieter too
+          const float th = 0.01f + (0.05f + 0.35f * param) * a * a;
           for (int i = 0; i < n; i++) {
             const float m = amt.to(a, 0.003f);
-            const float e = env.to(std::max(std::fabs(lr[i * 2]), std::fabs(lr[i * 2 + 1])), 0.01f);
-            const float g = hold.to(e > th ? 1.f : 0.f, e > th ? 0.05f : 0.002f);
-            const float k = 1 - m + m * g;
+            const float e = env.to(std::max(std::fabs(lr[i * 2]), std::fabs(lr[i * 2 + 1])), 0.02f);
+            const float g = hold.to(e > th ? 1.f : 0.f, e > th ? 0.08f : 0.004f);
+            const float k = (1 - m + m * g) * (1 - 0.15f * m);
             lr[i * 2] *= k; lr[i * 2 + 1] *= k;
           }
         }
         break;
       }
       case kCfxNoise: {
-        // white noise in under the knob's filter, as much as the knob is turned
         for (int i = 0; i < n; i++) {
-          const float m = amt.to(a, 0.003f) * (0.12f + 0.2f * param);
-          lr[i * 2] += noise.next() * m; lr[i * 2 + 1] += noise.next() * m;
+          const float m = amt.to(a, 0.003f);
+          if (every-- <= 0) {
+            every = 32;
+            if (left) noiseF.lowpass(18000 * std::pow(80.0 / 18000, (double)m), rate, 1.2);
+            else noiseF.highpass(30 * std::pow(12000.0 / 30, (double)m), rate, 1.2);
+          }
+          const float v = std::min(1.f, m * 6) * (0.03f + 0.25f * param);
+          const float z0 = noiseF.run(0, noise.next()) * v, z1 = noiseF.run(1, noise.next()) * v;
+          lr[i * 2] += z0; lr[i * 2 + 1] += z1;
         }
-        filter.run(lr, n);
-        return;
+        break;
       }
       case kCfxCrush: {
-        // fewer bits and a lower rate the further, darker left, thinner right
-        const float bits = 16 - 12 * a;
-        const float q = std::pow(2.f, bits - 1);
-        const int every = 1 + (int)(a * 12 * (0.5f + param));
+        // fewer bits, a lower rate, a little drive: further, and with the PARAMETER, more
+        const float k = a * (0.4f + 0.6f * param);
+        const float q = std::pow(2.f, 15 - 12 * k);
+        const int hold = 1 + (int)(k * 14);
+        if (!left) hp.highpass(40 * std::pow(100.0, (double)a), rate, 0.9);
         for (int i = 0; i < n; i++) {
           if (crushCount-- <= 0) {
-            crushCount = every - 1;
-            crushHold[0] = std::round(lr[i * 2] * q) / q;
-            crushHold[1] = std::round(lr[i * 2 + 1] * q) / q;
+            crushCount = hold - 1;
+            for (int ch = 0; ch < 2; ch++) {
+              const float x = std::tanh(lr[i * 2 + ch] * (1 + 3 * k)) / std::tanh(1 + 3 * k);
+              crushHold[ch] = std::round(x * q) / q;
+            }
           }
           const float m = amt.to(a, 0.003f);
-          lr[i * 2] = lr[i * 2] * (1 - m) + crushHold[0] * m;
-          lr[i * 2 + 1] = lr[i * 2 + 1] * (1 - m) + crushHold[1] * m;
+          float c0 = crushHold[0], c1 = crushHold[1];
+          if (!left) { c0 = hp.run(0, c0); c1 = hp.run(1, c1); }
+          lr[i * 2] = lr[i * 2] * (1 - m) + c0 * m;
+          lr[i * 2 + 1] = lr[i * 2 + 1] * (1 - m) + c1 * m;
         }
-        filter.run(lr, n);
-        return;
+        break;
       }
       default: break;
     }
