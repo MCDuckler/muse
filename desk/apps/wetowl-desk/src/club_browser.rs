@@ -214,8 +214,30 @@ impl App {
                     kit::sleeve(ui, p, art, tex, &r.initials(), col(theme::sleeve(r.id)), 1, ("club-row-art", r.id));
                 }
                 Col::Preview => {
+                    let pr = Rect::from_min_size(pos2(left, y - 7.0), vec2(w, 14.0));
+                    // a click previews it from there (in the headphones); again, stops it
+                    let resp = ui.interact(pr, ui.scope_id().with(("club-preview", r.id)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if resp.clicked()
+                        && let Some(pos) = resp.interact_pointer_pos()
+                    {
+                        let at = ((pos.x - pr.left()) / pr.width()) as f64;
+                        if !desk.play_preview(r, at) {
+                            let why = match desk.preview_way() {
+                                wo_deskcore::preview::PreviewWay::NotNow => "A preview needs headphones while a deck plays (Settings → Sound)",
+                                _ => "This record cannot be previewed",
+                            };
+                            self.toasts.say(why, crate::ui::tokens::Tone::Warm);
+                        }
+                    }
+                    if let Some((id, at)) = desk.previewing()
+                        && id == r.id
+                    {
+                        let x = pr.left() + pr.width() * at as f32;
+                        p.rect_filled(Rect::from_min_max(pr.min, pos2(x, pr.bottom())), CornerRadius::ZERO, Color32::from_rgba_unmultiplied(43, 196, 107, 40));
+                        p.line_segment([pos2(x, pr.top()), pos2(x, pr.bottom())], Stroke::new(1.5, LOADED));
+                        ui.ctx().request_repaint();
+                    }
                     if let Some(pv) = desk.preview(r) {
-                        let pr = Rect::from_min_size(pos2(left, y - 7.0), vec2(w, 14.0));
                         let style = self.wave_style();
                         wave::columns(p, pr, &pv, pr.left(), pr.width() / pv.len().max(1) as f32, Columns { style, anchor: Anchor::Up(1.0), gain: 1.45, reflect: 0.0, heard: None });
                         // where it plays, on a deck

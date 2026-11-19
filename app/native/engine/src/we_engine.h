@@ -190,6 +190,15 @@ WE_API void we_release_fx(int unit, int kind, int hold, double beats);
 // A deck's SOUND COLOR FX: `kind` SPACE 1, DUB ECHO 2, SWEEP 3, NOISE 4, CRUSH 5 (FILTER 0
 // is we_deck_filter's), `knob` -1..1 (the middle none), `param` its PARAMETER 0..1.
 WE_API void we_color_fx(int deck, int kind, float knob, float param);
+// REC: the master as heard (after its limiter) kept in a ring of twenty seconds from
+// we_record(1) on; we_record_read takes up to `max_frames` stereo frames of it (and how many
+// were lost to a full ring, if `dropped`).
+// SLIP: while a hand (we_deck_scratch) or a loop held by we_deck_slip_loop(1) holds the
+// record, where it would have been runs on; let go of the last, it goes on from there.
+WE_API void we_deck_slip(int deck, int on);
+WE_API void we_deck_slip_loop(int deck, int hold);
+WE_API void we_record(int on);
+WE_API int64_t we_record_read(float* out, int64_t max_frames, int64_t* dropped);
 
 // ---- pads (the board) ------------------------------------------------------------
 

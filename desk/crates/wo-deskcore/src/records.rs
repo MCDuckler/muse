@@ -273,6 +273,36 @@ fn beats_for(fetched: &Path, id: i64) -> Option<(Vec<f64>, usize)> {
 }
 
 /// How well `r` follows a record at `bpm` in `key`: the Camelot wheel first, then tempo. 0..100.
+/// A Camelot key ("8A") as its number and whether it is major (B).
+fn camelot_parts(k: &str) -> Option<(i32, bool)> {
+    let k = k.trim();
+    let (n, l) = k.split_at(k.len().checked_sub(1)?);
+    let n: i32 = n.parse().ok()?;
+    let major = match l {
+        "A" | "a" => false,
+        "B" | "b" => true,
+        _ => return None,
+    };
+    (1..=12).contains(&n).then_some((n, major))
+}
+
+/// A Camelot key shifted `semis` semitones (seven steps round the wheel a semitone).
+pub fn shift_camelot(k: &str, semis: i32) -> String {
+    match camelot_parts(k) {
+        Some((n, major)) => format!("{}{}", (n - 1 + 7 * semis).rem_euclid(12) + 1, if major { 'B' } else { 'A' }),
+        None => k.to_owned(),
+    }
+}
+
+/// The fewest semitones (−6 … +5) that take key `from` to the number of key `to` (the same
+/// key, or its relative major or minor: they mix).
+pub fn semis_to(from: &str, to: &str) -> Option<i32> {
+    let ((a, _), (b, _)) = (camelot_parts(from)?, camelot_parts(to)?);
+    // a semitone is seven numbers round the wheel: 7 × 7 = 49 ≡ 1, so seven back again
+    let s = (7 * (b - a)).rem_euclid(12);
+    Some(if s > 5 { s - 12 } else { s })
+}
+
 pub fn fits(r: &Record, bpm: f64, key: &str) -> u8 {
     let parse = |k: &str| -> Option<(i32, char)> {
         let letter = k.chars().last()?;
@@ -336,5 +366,22 @@ mod loudness_tests {
         // a quiet one whose peak is not known, or already at the ceiling: not turned up
         assert_eq!(Loudness { gain_db: Some(4.0), true_peak_db: None }.trim(), 1.0);
         assert_eq!(Loudness { gain_db: Some(4.0), true_peak_db: Some(-0.5) }.trim(), 1.0);
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    #[test]
+    fn keys_shift_round_the_wheel() {
+        assert_eq!(shift_camelot("8A", 1), "3A", "A minor up a semitone is B flat minor");
+        assert_eq!(shift_camelot("8B", -1), "1B", "C major down a semitone is B major");
+        assert_eq!(shift_camelot("12A", 0), "12A");
+        assert_eq!(semis_to("8A", "3A"), Some(1));
+        assert_eq!(semis_to("3A", "8A"), Some(-1));
+        assert_eq!(semis_to("8A", "8B"), Some(0), "relatives already mix");
+        assert_eq!(shift_camelot("8A", semis_to("8A", "10A").unwrap()), "10A");
+        assert_eq!(semis_to("", "8A"), None);
     }
 }

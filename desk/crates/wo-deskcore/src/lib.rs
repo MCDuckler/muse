@@ -19,6 +19,8 @@ pub mod library;
 pub mod marks;
 pub mod previews;
 pub mod phrases;
+pub mod preview;
+pub mod recorder;
 pub mod milk;
 pub mod move_player;
 pub mod autodj;
@@ -122,6 +124,10 @@ pub struct DeckView {
     pub memory: Vec<f64>,
     /// The record's waveform is rekordbox's own (off its stick).
     pub exact: bool,
+    /// KEY SHIFT by hand, semitones.
+    pub key_semis: i32,
+    /// SLIP on.
+    pub slip: bool,
     /// The hands' state: CUE, the loop, the pitch fader.
     pub cue: Option<f64>,
     pub looped: Option<(f64, f64)>,
@@ -164,6 +170,10 @@ pub struct Snapshot {
     pub up_next: Vec<Record>,
     /// A list playing in order.
     pub player: Option<PlayerView>,
+    /// Quantize on (Q).
+    pub quantize: bool,
+    /// The master's level knob, 0..1 (0.75 unity).
+    pub master_level: f32,
 }
 
 /// A control moved on a controller, and what the Desk did with it.
@@ -309,6 +319,8 @@ struct Slot {
     vocals: Option<wo_booth::planner::VocalMap>,
     /// Its memory cues, hot cue looks and phrases off a stick.
     marks: Marks,
+    /// KEY SHIFT by hand (rekordbox's key ±), semitones: on top of a move's own shift.
+    key_semis: i32,
 }
 
 /// A transition the Auto DJ has planned (and, once `started`, is making).
@@ -343,6 +355,16 @@ pub struct Desk {
     engine: Engine,
     /// rekordbox's effects (beat_fx.rs).
     beat_fx: beat_fx::Fx,
+    /// Quantize (Q): cues and loops set by hand land on the beat.
+    quantize: bool,
+    /// The browser's preview (preview.rs).
+    preview: preview::Preview,
+    /// REC (recorder.rs).
+    recorder: recorder::Recorder,
+    /// SLIP, each deck.
+    slip: [bool; 2],
+    /// The master's level knob, 0..1 (0.75 unity).
+    master_level: f32,
     /// The browser's previews (previews.rs).
     previews: previews::Previews,
     slots: [Slot; 2],
@@ -499,6 +521,7 @@ impl Desk {
             shift: 0.0,
             vocals: None,
             marks: Marks::default(),
+            key_semis: 0,
         };
         let (done_tx, done_rx) = mpsc::channel();
         let mut desk = Desk {
@@ -517,6 +540,11 @@ impl Desk {
             house: None,
             previews: Default::default(),
             beat_fx: Default::default(),
+            quantize: false,
+            preview: Default::default(),
+            recorder: Default::default(),
+            slip: [false; 2],
+            master_level: 0.75,
             done_tx,
             done_rx,
             library: Library::default(),
@@ -760,8 +788,10 @@ impl Desk {
         s.loader = Some(loader);
         s.vocals = None;
         s.marks = Marks::default();
-        if s.shift != 0.0 {
+        s.hands.quantize = self.quantize;
+        if s.shift != 0.0 || s.key_semis != 0 {
             s.shift = 0.0;
+            s.key_semis = 0;
             self.engine.deck(DeckId::new(slot).unwrap()).set_shift(0.0);
         }
         self.reset_stems(slot);
@@ -938,7 +968,7 @@ impl Desk {
         };
         if best.shift != 0.0 {
             self.slots[to].shift = best.shift as f32;
-            self.engine.deck(DeckId::new(to).unwrap()).set_shift(best.shift);
+            self.apply_shift(to);
         }
         let td = self.engine.deck(DeckId::new(to).unwrap());
         td.play(false);
@@ -1107,6 +1137,8 @@ impl Desk {
                 looks: s.marks.looks.clone(),
                 memory: s.marks.memory.clone(),
                 exact: wave.is_exact(),
+                key_semis: s.key_semis,
+                slip: self.slip[i],
             }
         };
         let decks = [view(0), view(1)];
@@ -1168,6 +1200,8 @@ impl Desk {
             set_seconds: self.started.elapsed().as_secs_f64(),
             up_next: up.into_iter().take(4).cloned().collect(),
             player: self.player(),
+            quantize: self.quantize,
+            master_level: self.master_level,
             decks,
         }
     }
@@ -1288,6 +1322,72 @@ impl Desk {
             let rid = self.slots[d].record.id;
             self.previews.keep(rid, id, p);
         }
+    }
+
+    /// The deck's pitch: a move's shift and the key shifted by hand, together.
+    pub(crate) fn apply_shift(&mut self, d: usize) {
+        let s = &self.slots[d];
+        self.engine.deck(DeckId::new(d).unwrap()).set_shift(s.shift as f64 + s.key_semis as f64);
+    }
+
+    /// KEY SHIFT: the record `delta` semitones higher (or lower), within an octave.
+    pub fn key_shift(&mut self, d: usize, delta: i32) {
+        self.slots[d].key_semis = (self.slots[d].key_semis + delta).clamp(-12, 12);
+        self.apply_shift(d);
+        self.changes += 1;
+    }
+
+    pub fn key_reset(&mut self, d: usize) {
+        self.slots[d].key_semis = 0;
+        self.apply_shift(d);
+        self.changes += 1;
+    }
+
+    /// KEY SYNC: the record shifted (by the fewest semitones) to the other deck's key as it
+    /// sounds now; none where either key is not known.
+    pub fn key_sync(&mut self, d: usize) {
+        let o = 1 - d.min(1);
+        let other = records::shift_camelot(&self.slots[o].record.key, self.slots[o].key_semis);
+        if let Some(semis) = records::semis_to(&self.slots[d].record.key, &other) {
+            self.slots[d].key_semis = semis;
+            self.apply_shift(d);
+            self.changes += 1;
+        }
+    }
+
+    /// Q: quantize on or off (every deck's cues and loops).
+    pub fn set_quantize(&mut self, on: bool) {
+        self.quantize = on;
+        for s in &mut self.slots {
+            s.hands.quantize = on;
+        }
+        self.changes += 1;
+    }
+
+    /// The master's level knob, 0..1: unity at 0.75, about +5 dB at the top (the limiter
+    /// after it).
+    pub fn set_master_level(&mut self, v: f32) {
+        self.master_level = v.clamp(0.0, 1.0);
+        let g = (self.master_level / 0.75).powi(2);
+        self.engine.set_master_level(g);
+        self.changes += 1;
+    }
+
+    /// Where a deck's record sings (the house's vocal map, bar by bar): its spans, seconds.
+    pub fn vocal_spans(&self, d: usize) -> Vec<(f64, f64)> {
+        let s = &self.slots[d];
+        let (Some(v), g) = (s.vocals.as_ref(), &s.hands.grid) else { return vec![] };
+        let Some(bars) = v.bars.as_ref() else { return vec![] };
+        let at = |bar: usize| g.beats.get(g.bar_one + bar * 4).copied();
+        let mut out: Vec<(f64, f64)> = vec![];
+        for (b, _) in bars.iter().enumerate().filter(|(_, l)| **l >= wo_booth::planner::VocalMap::SUNG) {
+            let (Some(a), Some(z)) = (at(b), at(b + 1).or_else(|| at(b).map(|a| a + 4.0 * g.spb().unwrap_or(0.5)))) else { continue };
+            match out.last_mut() {
+                Some(last) if (last.1 - a).abs() < 0.05 => last.1 = z,
+                _ => out.push((a, z)),
+            }
+        }
+        out
     }
 
     /// The whole record in `n` bins the rekordbox way (each the mean of its columns).
@@ -1436,8 +1536,27 @@ impl Desk {
 
     /// Runs `f` with deck `d`'s hands over its engine deck.
     fn hands<R>(&mut self, d: usize, f: impl FnOnce(&mut Hands, &mut EngineDeck<'_>) -> R) -> R {
+        let was = self.slots[d].hands.looped.is_some();
         let mut t = EngineDeck(self.engine.deck(DeckId::new(d).unwrap()));
-        f(&mut self.slots[d].hands, &mut t)
+        let r = f(&mut self.slots[d].hands, &mut t);
+        // SLIP: a loop begun holds the record, a loop let go of lets it go on from SLIP's
+        let now = self.slots[d].hands.looped.is_some();
+        if self.slip[d] && was != now {
+            self.engine.deck(DeckId::new(d).unwrap()).slip_loop(now);
+        }
+        r
+    }
+
+    /// SLIP on or off for deck `d`.
+    pub fn toggle_slip(&mut self, d: usize) {
+        self.slip[d] = !self.slip[d];
+        let deck = self.engine.deck(DeckId::new(d).unwrap());
+        deck.set_slip(self.slip[d]);
+        // a loop already going holds it from now
+        if self.slip[d] && self.slots[d].hands.looped.is_some() {
+            deck.slip_loop(true);
+        }
+        self.changes += 1;
     }
 
     pub fn cue_down(&mut self, d: usize) {
@@ -1736,6 +1855,7 @@ impl Desk {
                     hands.cue = a.cue;
                     let s = &mut self.slots[slot];
                     s.hands = hands;
+                    s.hands.quantize = self.quantize;
                     s.timing = a.timing;
                     s.vocals = a.vocals;
                     s.marks = a.marks;

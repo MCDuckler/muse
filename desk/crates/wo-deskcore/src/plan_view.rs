@@ -206,7 +206,7 @@ impl Desk {
         }
         if o.shift != 0.0 {
             self.slots[to].shift = o.shift as f32;
-            self.engine.deck(DeckId::new(to).unwrap()).set_shift(o.shift);
+            self.apply_shift(to);
         }
     }
 

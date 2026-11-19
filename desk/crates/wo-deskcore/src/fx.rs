@@ -398,6 +398,8 @@ pub(crate) struct Fx {
     ready: Vec<Ready>,
     playing: [Option<Source>; 2],
     turn: usize,
+    /// Deck D lent to the browser's preview: the sounds keep to deck C meanwhile.
+    pub(crate) d_lent: bool,
     /// Sounds fired, counted (the log, the tests).
     pub fired: u64,
 }
@@ -434,6 +436,9 @@ impl Fx {
             return;
         }
         source.finish();
+        if self.d_lent {
+            self.turn = 0;
+        }
         let deck = engine.deck(DeckId::new(2 + self.turn).unwrap());
         deck.play(false);
         deck.set_source(0, &source);

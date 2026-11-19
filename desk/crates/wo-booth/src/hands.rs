@@ -56,6 +56,8 @@ pub struct Hands {
     pub loop_in: Option<f64>,
     /// The loop buttons' length when the loop came from one, beats.
     pub loop_beats: Option<f64>,
+    /// Quantize (rekordbox's Q): cues and loop ends set by hand land on the nearest beat.
+    pub quantize: bool,
     /// The pitch fader, -1..1, and its range.
     pub pitch: f64,
     pub range: usize,
@@ -74,6 +76,7 @@ impl Hands {
             looped: None,
             loop_in: None,
             loop_beats: None,
+            quantize: false,
             pitch: 0.0,
             range: 0,
             nudging: 0,
@@ -91,7 +94,7 @@ impl Hands {
             t.play(false);
             match self.cue {
                 Some(at) => t.seek(at),
-                None => self.cue = Some(here),
+                None => self.cue = Some(self.here(t)),
             }
             return;
         }
@@ -101,7 +104,12 @@ impl Hands {
                 t.play(true);
                 return;
             }
-        self.cue = Some(here);
+        // the cue point here (quantized: on the beat, the record moved there)
+        let at = self.here(t);
+        if at != here {
+            t.seek(at);
+        }
+        self.cue = Some(at);
     }
 
     /// CUE let go: a preview ends back at the cue point.
@@ -118,11 +126,17 @@ impl Hands {
     // ---------------------------------------------------------------- pads
 
     /// A pad pressed: an empty one is set here; a set one takes the record there.
+    /// Where a hand sets something now: here, or the nearest beat with quantize on.
+    fn here(&self, t: &impl Transport) -> f64 {
+        let at = t.position();
+        if self.quantize { self.grid.nearest(at).unwrap_or(at) } else { at }
+    }
+
     pub fn pad(&mut self, n: usize, t: &mut impl Transport) {
         match self.pads[n] {
             Some(p) => t.seek(p.at),
             None => {
-                self.pads[n] = Some(Pad { at: t.position(), auto: None });
+                self.pads[n] = Some(Pad { at: self.here(t), auto: None });
                 self.by_hand[n] = true;
             }
         }
@@ -168,7 +182,7 @@ impl Hands {
 
     /// Loop IN: the loop will start here. Nothing loops until OUT; a running loop is let go.
     pub fn loop_in(&mut self, t: &mut impl Transport) {
-        self.loop_in = Some(t.position());
+        self.loop_in = Some(self.here(t));
         if self.looped.is_some() {
             self.set(None, None, t);
         }
@@ -177,7 +191,7 @@ impl Hands {
     /// Loop OUT: the loop ends here and goes round from IN. Without an IN before here, nothing.
     pub fn loop_out(&mut self, t: &mut impl Transport) {
         let Some(from) = self.loop_in else { return };
-        let to = t.position();
+        let to = self.here(t);
         if to > from + 0.02 {
             self.loop_in = None;
             self.set(Some((from, to)), None, t);
@@ -391,5 +405,22 @@ mod tests {
         t.playing = true;
         h.brake(&mut t);
         assert_eq!(t.braked, Some(1.0), "two beats at 120 bpm");
+    }
+
+    /// Quantize on: a hot cue and a loop's ends set by hand land on the nearest beat.
+    #[test]
+    fn quantize_puts_them_on_the_beat() {
+        let mut h = hands();
+        h.quantize = true;
+        let mut t = Fake { at: 10.13, ..Fake::default() };
+        h.pad(0, &mut t);
+        let at = h.pads[0].unwrap().at;
+        assert!(h.grid.beats.iter().any(|b| (b - at).abs() < 1e-9), "on a beat: {at}");
+        assert!((at - 10.25).abs() < 1e-9, "the nearest: {at}");
+        h.loop_in(&mut t);
+        assert_eq!(h.loop_in, Some(at));
+        // parked off the beat, CUE: the cue point on the beat and the record moved there
+        h.cue_down(&mut t);
+        assert_eq!((h.cue, t.at), (Some(10.25), 10.25));
     }
 }

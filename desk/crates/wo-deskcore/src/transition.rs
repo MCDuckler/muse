@@ -183,7 +183,7 @@ impl Desk {
                 && (self.slots[d].shift - semis).abs() > 0.02
             {
                 self.slots[d].shift = semis;
-                self.engine.deck(DeckId::new(d).unwrap()).set_shift(semis as f64);
+                self.apply_shift(d);
             }
             if let Some(depth) = steps::gate_at(&run.steps, side, k) {
                 let div = steps::gate_div_at(&run.steps, side, k);
@@ -288,7 +288,7 @@ impl Desk {
         self.set_echo(d, 0.0, 1.0);
         if self.slots[d].shift != 0.0 {
             self.slots[d].shift = 0.0;
-            self.engine.deck(DeckId::new(d).unwrap()).set_shift(0.0);
+            self.apply_shift(d);
         }
         self.slots[d].stems.mix = None;
         self.apply_part(d, crate::parts::RAMP);

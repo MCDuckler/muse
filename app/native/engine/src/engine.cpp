@@ -167,6 +167,11 @@ struct Deck {
   double hTarget = 0;        // where the hand has put the record, frames
   Ramp hWeight;
   double hX[2] = {0, 0}, hY[2] = {0, 0};   // its DC blocker: a record held still is silent
+  // SLIP: while a hand or a loop holds the record (bits 1, 2 of `slipping`), where it would
+  // be had nothing held it runs on; let go, the record goes on from there
+  bool slip = false;
+  int slipping = 0;
+  double slipHead = 0;
   // sound
   Ramp level;
   Bands bands;
@@ -190,7 +195,7 @@ enum CmdKind {
   kSource, kSourceGain, kPlay, kSeek, kRate, kBend, kKeylock, kShift, kBeats, kSync, kBarOne, kStart,
   kLoop, kLoopBeats, kLevel, kEq, kFilter, kGate, kEcho, kBrake, kMaster, kFreeSource, kSyncOffset, kAlign, kSyncOctave,
   kPadPlay, kPadStop, kPadGain, kPadsLevel, kScratch, kScratchBy, kCue, kCueMix,
-  kBeatFx, kReleaseFx, kColorFx
+  kBeatFx, kReleaseFx, kColorFx, kSlip, kSlipLoop
 };
 
 // ------------------------------------------------------------------ pads (the board)
@@ -326,6 +331,11 @@ struct Engine {
   // a deck's beat (`fxTempo`) or a tapped tempo (`fxBpm` > 0); each with its RELEASE FX
   BeatFx fx[2];
   ReleaseFx release[2];
+  // REC: the master as heard (after its limiter) into a ring the caller drains to a file
+  std::vector<float> recRing;
+  std::atomic<int64_t> recWritten{0}, recRead{0};
+  std::atomic<bool> recOn{false};
+  std::atomic<int64_t> recDropped{0};
   int fxTarget[2] = {0, 1}, fxTempo[2] = {0, 1};
   double fxBpm[2] = {0, 0};
   double fxPos[2] = {0, 0};   // beats counted where no deck gives them (a tapped tempo)
@@ -778,11 +788,18 @@ double deckLength(const Deck& d) {
 }
 
 // A hand on the record, or let go.
+void slipRelease(Deck& d, int bit);
+
 void handOn(Deck& d, bool on) {
   const int fade = (int)(E->rate * 0.003);
   if (!on) {
     if (d.hand == 1) d.hand = 2;
+    slipRelease(d, 1);
     return;
+  }
+  if (d.slip && d.playing && !(d.slipping & 1)) {
+    if (!d.slipping) d.slipHead = heardOf(d);
+    d.slipping |= 1;
   }
   if (d.hand == 1) return;
   if (d.hand == 0) {
@@ -804,6 +821,14 @@ void handOn(Deck& d, bool on) {
   d.hTarget = d.hHead;
   d.hand = 1;
   d.handLive = true;
+}
+
+// A hold let go of (`bit` 1 the hand, 2 a loop): the last one gone, the record on from
+// where SLIP kept it (a hand spinning back up: from there).
+void slipRelease(Deck& d, int bit) {
+  if (!(d.slipping & bit)) return;
+  d.slipping &= ~bit;
+  if (!d.slipping && d.slip && d.playing) jump(d, d.slipHead);
 }
 
 // Up to speed after the hand let go: a voice goes on from where the record is, the
@@ -1103,6 +1128,20 @@ void apply(const Cmd& c) {
     case kGate: d.gateDepth = c.f0; d.gatePeriod = c.d1; d.gateOrigin = c.d2; break;
     case kEcho: d.echo.set(c.f0, c.f1, c.d1, (int)(E->rate * 0.03)); break;
     case kColorFx: d.color.setKind(c.i0, c.f1); d.color.knob = std::clamp(c.f0, -1.f, 1.f); break;
+    case kSlip:
+      d.slip = c.i0 != 0;
+      if (!d.slip) d.slipping = 0;
+      break;
+    case kSlipLoop:
+      if (c.i0) {
+        if (d.slip && d.playing && !(d.slipping & 2)) {
+          if (!d.slipping) d.slipHead = heardOf(d);
+          d.slipping |= 2;
+        }
+      } else {
+        slipRelease(d, 2);
+      }
+      break;
     case kScratch: handOn(d, c.i0 != 0); break;
     case kScratchBy:
       if (d.hand == 1) d.hTarget = std::clamp(d.hTarget + secToFrame(c.d0), 0.0, std::max(0.0, deckLength(d)));
@@ -1155,6 +1194,11 @@ void runUnits(int target, float* lr, int n) {
 // ------------------------------------------------------------------ a block
 void renderDeck(Deck& d, int n) {
   std::memset(d.buf, 0, sizeof(float) * (size_t)n * 2);
+  // SLIP: kept with the record while nothing holds it, running on at its tempo while held
+  if (d.slip) {
+    if (!d.slipping) d.slipHead = d.heardNow;
+    else if (d.playing) d.slipHead += (double)n * d.rate * d.trim;
+  }
   d.cueHeard = false;
   int from = 0;
   if (d.startWaiting && d.startMaster >= 0) {
@@ -1337,6 +1381,20 @@ void block(float* out, int n, float** deckOut, double at, float* cue) {
     E->cueLimiter.run(cue, n);
   }
   if (!E->split) E->limiter.run(out, n);
+  // REC: the block into the ring (a full ring drops it, counted)
+  if (E->recOn.load(std::memory_order_relaxed) && !E->recRing.empty()) {
+    const int64_t cap = (int64_t)E->recRing.size() / 2;
+    const int64_t w = E->recWritten.load(std::memory_order_relaxed), r = E->recRead.load(std::memory_order_acquire);
+    if (w - r + n <= cap) {
+      for (int k = 0; k < n; k++) {
+        const size_t at = (size_t)((w + k) % cap) * 2;
+        E->recRing[at] = out[k * 2]; E->recRing[at + 1] = out[k * 2 + 1];
+      }
+      E->recWritten.store(w + n, std::memory_order_release);
+    } else {
+      E->recDropped.fetch_add(n, std::memory_order_relaxed);
+    }
+  }
   for (auto& d : E->decks) publish(d, at);
   tapWrite(out, n, at);
 }
@@ -1643,6 +1701,7 @@ WE_API int we_start(int rate, int device) {
     d.bands.init(E->rate); d.filter.init(E->rate); d.echo.init(E->rate); d.color.init(E->rate);
   }
   for (int u = 0; u < 2; u++) { E->fx[u].init(E->rate); E->release[u].init(E->rate); }
+  E->recRing.assign((size_t)E->rate * 20 * 2, 0.f);  // twenty seconds a writer has to keep up
   if (E->device && ma_device_start(&E->dev) != MA_SUCCESS) {
     E->devOpen = false;
     lastError = "the sound card would not start";
@@ -1949,6 +2008,26 @@ WE_API void we_beat_fx(int unit, int kind, int on, float level, double beats, fl
 }
 WE_API void we_release_fx(int unit, int kind, int hold, double beats) {
   Cmd c{kReleaseFx}; c.i0 = unit; c.i1 = kind; c.i2 = hold; c.d0 = beats; push(c);
+}
+WE_API void we_deck_slip(int deck, int on) { Cmd c{kSlip}; c.deck = deck; c.i0 = on; push(c); }
+WE_API void we_deck_slip_loop(int deck, int hold) { Cmd c{kSlipLoop}; c.deck = deck; c.i0 = hold; push(c); }
+WE_API void we_record(int on) {
+  if (!E) return;
+  if (on) { E->recRead.store(E->recWritten.load()); E->recDropped.store(0); }
+  E->recOn.store(on != 0);
+}
+WE_API int64_t we_record_read(float* out, int64_t max_frames, int64_t* dropped) {
+  if (!E || E->recRing.empty()) return 0;
+  const int64_t cap = (int64_t)E->recRing.size() / 2;
+  const int64_t w = E->recWritten.load(std::memory_order_acquire), r = E->recRead.load(std::memory_order_relaxed);
+  const int64_t n = std::min(w - r, max_frames);
+  for (int64_t k = 0; k < n; k++) {
+    const size_t at = (size_t)((r + k) % cap) * 2;
+    out[k * 2] = E->recRing[at]; out[k * 2 + 1] = E->recRing[at + 1];
+  }
+  E->recRead.store(r + n, std::memory_order_release);
+  if (dropped) *dropped = E->recDropped.load();
+  return n;
 }
 WE_API void we_color_fx(int deck, int kind, float knob, float param) {
   Cmd c{kColorFx}; c.deck = deck; c.i0 = kind; c.f0 = knob; c.f1 = param; push(c);

@@ -491,6 +491,19 @@ impl Engine {
         unsafe { sys::we_beat_fx(unit.min(1) as i32, fx.kind as i32, fx.on as i32, fx.level, beats, param, target, fx.tempo.index() as i32, fx.bpm.unwrap_or(0.0)) }
     }
 
+    /// REC on (the master kept from now) or off.
+    pub fn record(&self, on: bool) {
+        unsafe { sys::we_record(on as i32) }
+    }
+
+    /// The master kept since the last read, into `out` (stereo, interleaved): the frames
+    /// taken, and how many were lost to a ring left unread too long.
+    pub fn record_read(&self, out: &mut [f32]) -> (usize, i64) {
+        let mut dropped = 0i64;
+        let n = unsafe { sys::we_record_read(out.as_mut_ptr(), (out.len() / 2) as i64, &mut dropped) };
+        (n.max(0) as usize, dropped)
+    }
+
     /// A unit's RELEASE FX held (it turns the unit's BEAT FX off) or let go of.
     pub fn release_fx(&self, unit: usize, kind: ReleaseFxKind, hold: bool, beats: f64) {
         unsafe { sys::we_release_fx(unit.min(1) as i32, kind as i32, hold as i32, beats) }
@@ -943,6 +956,17 @@ impl Deck<'_> {
     /// -1 (low pass) .. 1 (high pass).
     pub fn set_filter(&self, knob: f32) {
         unsafe { sys::we_deck_filter(self.d, knob) }
+    }
+
+    /// SLIP on or off: while a hand or a held loop holds the record, where it would have
+    /// been runs on, and on its let-go the record goes on from there.
+    pub fn set_slip(&self, on: bool) {
+        unsafe { sys::we_deck_slip(self.d, on as i32) }
+    }
+
+    /// A loop holding the record (SLIP keeps on), or let go of (it goes on from SLIP's).
+    pub fn slip_loop(&self, hold: bool) {
+        unsafe { sys::we_deck_slip_loop(self.d, hold as i32) }
     }
 
     /// The channel's SOUND COLOR FX: `kind` (FILTER is [Deck::set_filter]'s), its knob

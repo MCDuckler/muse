@@ -248,6 +248,10 @@ impl App {
         words(p, pos2(bpm.left() - 8.0, y), Align2::RIGHT_CENTER, &format!("MASTER {}", m + 1), 10.0, "semi", MASTER);
         let set = s.set_seconds as u64;
         words(p, pos2(bpm.right() + 12.0, y), Align2::LEFT_CENTER, &format!("{}:{:02}:{:02}", set / 3600, set / 60 % 60, set % 60), 12.0, "mono", MUTED);
+        // the clock and the sound's load (rekordbox's CPU meter): left of the right's icons,
+        // drawn once they are placed (below)
+        let clock = crate::paint::clock();
+        let cpu = (s.load.average * 100.0).clamp(0.0, 100.0) as f32;
         // the right: settings, keys, the house and the gear, the Auto DJ
         let gear = Rect::from_min_size(pos2(r.right() - 30.0, y - 13.0), vec2(26.0, 26.0));
         if Btn::new("").icon(Icon::Settings).quiet().on(self.overlay == Some(Overlay::Settings)).show(ui, p, gear, "club-settings").on_hover_text("Settings  (Ctrl ,)").clicked() {
@@ -259,6 +263,18 @@ impl App {
         }
         let left = self.status_icons(desk, ui, p, pos2(keys.left() - 10.0, y), s);
         let auto = Rect::from_min_size(pos2(left - 12.0 - 84.0, y - 11.0), vec2(84.0, 22.0));
+        let mut cx = auto.left() - 12.0;
+        if let Some(c) = clock {
+            let cr = words(p, pos2(cx, y), Align2::RIGHT_CENTER, &c, 13.0, "mono-semi", TEXT);
+            cx = cr.left() - 14.0;
+        }
+        // the load: a short bar, warm past 60 %, hot past 85 %
+        let bar = Rect::from_min_size(pos2(cx - 40.0, y - 3.0), vec2(40.0, 6.0));
+        p.rect_filled(bar, CornerRadius::same(1), rgb(0x0A0A0B));
+        let lc = if cpu > 85.0 { col(theme::HOT) } else if cpu > 60.0 { CUE } else { PLAY };
+        p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * cpu / 100.0, 6.0)), CornerRadius::same(1), lc);
+        words(p, pos2(bar.left() - 6.0, y), Align2::RIGHT_CENTER, "CPU", 9.5, "semi", MUTED);
+        ui.interact(bar.expand(4.0), ui.scope_id().with("club-cpu"), Sense::hover()).on_hover_text(format!("The sound's load: {cpu:.0} % of the time it has (late: {})", s.load.late));
         if button(ui, p, auto, "AUTO DJ", s.auto, rgb(0x1E8F55), "club-auto").on_hover_text("The Auto DJ mixes the next record in  (A)").clicked() {
             desk.set_auto(!s.auto);
         }
@@ -329,9 +345,32 @@ impl App {
             desk.toggle_sync(d);
         }
         button(ui, p, master, "MASTER", v.master, MASTER, ("club-master", d)).on_hover_text("The master: the deck the other syncs to and the Auto DJ mixes out of");
+        // KEY SYNC, and the key as it sounds: ‹ 8A ±0 › (a shift by hand; a double-click back)
+        let ksync = Rect::from_min_size(pos2(sync.left() - 74.0, inner.top()), vec2(70.0, 16.0));
+        let other = &s.decks[1 - d];
+        let in_key = !v.record.key.is_empty() && wo_deskcore::records::semis_to(&wo_deskcore::records::shift_camelot(&v.record.key, v.key_semis), &wo_deskcore::records::shift_camelot(&other.record.key, other.key_semis)) == Some(0);
+        if button(ui, p, ksync, "KEY SYNC", in_key && v.key_semis != 0, LIT, ("club-key-sync", d)).on_hover_text("Its key to the other deck's, the fewest semitones away").clicked() {
+            desk.key_sync(d);
+        }
+        let kr = Rect::from_min_size(pos2(ksync.left(), inner.top() + 19.0), vec2(70.0, 16.0));
+        let less = Rect::from_min_size(kr.min, vec2(14.0, 16.0));
+        let more = Rect::from_min_size(pos2(kr.right() - 14.0, kr.top()), vec2(14.0, 16.0));
+        if button(ui, p, less, "‹", false, LIT, ("club-key-less", d)).on_hover_text("A semitone down").clicked() {
+            desk.key_shift(d, -1);
+        }
+        if button(ui, p, more, "›", false, LIT, ("club-key-more", d)).on_hover_text("A semitone up").clicked() {
+            desk.key_shift(d, 1);
+        }
+        let key_now = wo_deskcore::records::shift_camelot(&v.record.key, v.key_semis);
+        let kw = format!("{} {}", if key_now.is_empty() { "—" } else { &key_now }, if v.key_semis == 0 { "±0".to_owned() } else { format!("{:+}", v.key_semis) });
+        let kmid = Rect::from_min_max(pos2(less.right(), kr.top()), pos2(more.left(), kr.bottom()));
+        words(p, kmid.center(), Align2::CENTER_CENTER, &kw, 10.5, "semi", if v.key_semis != 0 { CUE } else { TEXT });
+        if ui.interact(kmid, ui.scope_id().with(("club-key-reset", d)), Sense::click()).on_hover_text("Its own key again (double-click)").double_clicked() {
+            desk.key_reset(d);
+        }
         let left = (v.length - v.heard).max(0.0);
         let warn = v.playing && v.length > 0.0 && left < 30.0;
-        let gone = words(p, pos2(sync.left() - 10.0, hy), Align2::RIGHT_CENTER, &mmss(v.heard), 12.0, "mono", MUTED);
+        let gone = words(p, pos2(ksync.left() - 10.0, hy), Align2::RIGHT_CENTER, &mmss(v.heard), 12.0, "mono", MUTED);
         let lt = words(p, pos2(gone.left() - 8.0, hy), Align2::RIGHT_CENTER, &format!("-{}", mmss(left)), 20.0, "mono-semi", if warn { CUE } else { TEXT });
         // the middle: title over artist, tempo and key beside
         let tx = cover.right() + 8.0;
@@ -342,13 +381,20 @@ impl App {
         kit::clipped(p, pos2(tx, inner.top() + 26.0), &v.record.artist, 11.5, "", MUTED, room);
         let kx = tx + room + 10.0;
         words(p, pos2(kx, inner.top() + 9.0), Align2::LEFT_CENTER, &format!("{:.2}", v.bpm), 13.0, "mono-semi", TEXT);
-        words(p, pos2(kx + 58.0, inner.top() + 9.0), Align2::LEFT_CENTER, &v.record.key, 12.0, "semi", MUTED);
+        words(p, pos2(kx + 58.0, inner.top() + 9.0), Align2::LEFT_CENTER, &key_now, 12.0, "semi", if v.key_semis != 0 { CUE } else { MUTED });
         words(p, pos2(kx, inner.top() + 26.0), Align2::LEFT_CENTER, &format!("{:+.1}% ±{:.0}", (v.rate - 1.0) * 100.0, v.range * 100.0), 10.5, "mono", MUTED);
 
         // the overview, and the phrases under it
         let ov = Rect::from_min_size(pos2(inner.left(), inner.top() + 42.0), vec2(inner.width(), 40.0));
         p.rect_filled(ov, CornerRadius::ZERO, rgb(0x050506));
         self.overview_strip(desk, ui, p, ov.shrink2(vec2(2.0, 5.0)), s, d, None);
+        // where it sings: rekordbox's blue dashes along the overview's top
+        let len_v = v.length.max(1.0);
+        for (a, b) in desk.vocal_spans(d) {
+            let xa = ov.left() + 2.0 + (ov.width() - 4.0) * (a / len_v).clamp(0.0, 1.0) as f32;
+            let xb = ov.left() + 2.0 + (ov.width() - 4.0) * (b / len_v).clamp(0.0, 1.0) as f32;
+            p.rect_filled(Rect::from_min_max(pos2(xa, ov.top() + 1.0), pos2(xb.max(xa + 1.0), ov.top() + 3.0)), CornerRadius::ZERO, rgb(0x2E8BE6));
+        }
         let band = Rect::from_min_size(pos2(inner.left(), ov.bottom() + 1.0), vec2(inner.width(), 14.0));
         let len = v.length.max(1.0);
         let xb = |t: f64| band.left() + 2.0 + (band.width() - 4.0) * (t / len).clamp(0.0, 1.0) as f32;
@@ -571,8 +617,18 @@ impl App {
             desk.jump(d, jump);
         }
         let r4 = row(4.0);
-        if r4.bottom() <= r.bottom() + 0.5 && button(ui, p, r4, "MT", v.keylock, LIT, ("club-mt", d)).on_hover_text("Master tempo: its key stays as its tempo moves").clicked() {
-            desk.toggle_keylock(d);
+        if r4.bottom() <= r.bottom() + 0.5 {
+            let w3 = (r4.width() - 8.0) / 3.0;
+            let cell = |i: f32| Rect::from_min_size(pos2(r4.left() + i * (w3 + 4.0), r4.top()), vec2(w3, rh));
+            if button(ui, p, cell(0.0), "Q", s.quantize, LIT, ("club-q", d)).on_hover_text("Quantize: cues and loops set by hand land on the beat").clicked() {
+                desk.set_quantize(!s.quantize);
+            }
+            if button(ui, p, cell(1.0), "SLIP", v.slip, rgb(0xC8342C), ("club-slip", d)).on_hover_text("Slip: a scratch or a loop let go, the record goes on from where it would have been").clicked() {
+                desk.toggle_slip(d);
+            }
+            if button(ui, p, cell(2.0), "MT", v.keylock, LIT, ("club-mt", d)).on_hover_text("Master tempo: its key stays as its tempo moves").clicked() {
+                desk.toggle_keylock(d);
+            }
         }
     }
 
@@ -744,7 +800,29 @@ impl App {
         let (l, rr) = (s.decks[0].peak_lr.0.max(s.decks[1].peak_lr.0), s.decks[0].peak_lr.1.max(s.decks[1].peak_lr.1));
         let mw = 160.0;
         let mx = r.right() - 12.0 - mw;
-        words(p, pos2(mx - 10.0, y), Align2::RIGHT_CENTER, "MASTER OUT", 10.0, "semi", MUTED);
+        // REC: the master into a file; its time while it runs
+        let rec = desk.recording();
+        let rec_r = Rect::from_min_size(pos2(mx - 210.0, y - 11.0), vec2(56.0, 22.0));
+        let word = if rec.on { format!("{}:{:02}", rec.seconds as u64 / 60, rec.seconds as u64 % 60) } else { "REC".to_owned() };
+        if button(ui, p, rec_r, &word, rec.on, rgb(0xC8342C), "club-rec").on_hover_text(if rec.on { "Recording the master: stop" } else { "Record the master (into Music / WetOwl recordings)" }).clicked() {
+            desk.toggle_recording();
+            if !desk.recording().on {
+                match desk.last_recording() {
+                    Some(Ok(path)) => self.toasts.say(format!("Recorded: {}", path.display()), Tone::Ok),
+                    Some(Err(why)) => self.toasts.say(format!("The recording failed: {why}"), Tone::Danger),
+                    None => {}
+                }
+            }
+        }
+        if rec.on {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            p.circle_filled(pos2(rec_r.left() - 8.0, y), 3.5, rgb(0xE5202A));
+        }
+        let mk = pos2(mx - 16.0, y);
+        if let Some(nv) = knob(ui, p, mk, s.master_level, false, 0.75, "club-master-level") {
+            desk.set_master_level(nv);
+        }
+        words(p, pos2(mk.x - 16.0, y), Align2::RIGHT_CENTER, "MASTER OUT", 10.0, "semi", MUTED);
         for (i, lv) in [l, rr].into_iter().enumerate() {
             let bar = Rect::from_min_size(pos2(mx, y - 6.0 + i as f32 * 7.0), vec2(mw, 4.0));
             p.rect_filled(bar, CornerRadius::ZERO, rgb(0x0A0A0B));

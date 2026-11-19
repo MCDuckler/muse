@@ -104,3 +104,21 @@ pub(crate) fn pad_name(k: Option<PadKind>) -> &'static str {
 pub(crate) fn pad_colour(k: Option<PadKind>) -> Rgba {
     k.map(theme::pad).unwrap_or(theme::SOFT)
 }
+
+/// The local time, "HH:MM" (none where this computer's local time is not to be had).
+pub(crate) fn clock() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as libc::time_t;
+        // SAFETY: localtime_r writes into `tm` only.
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
+            return None;
+        }
+        Some(format!("{:02}:{:02}", tm.tm_hour, tm.tm_min))
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
