@@ -647,16 +647,19 @@ impl Drop for App {
     }
 }
 
-/// The Desk's own clock: a tick every few milliseconds, whatever the window does; the
-/// window told when something from outside it changed the Desk (a controller, the house).
+/// The Desk's own clock: a tick every few milliseconds, whatever the window does, and at
+/// once when a controller says something (its doorbell); the window told when something
+/// from outside it changed the Desk (a controller, the house).
 fn keep_time(desk: Arc<Mutex<Desk>>, ctx: egui::Context) -> (Arc<AtomicBool>, JoinHandle<()>) {
     let stop = Arc::new(AtomicBool::new(false));
     let s = stop.clone();
+    let bell = desk.lock().unwrap_or_else(|e| e.into_inner()).doorbell();
     let t = thread::Builder::new()
         .name("desk clock".into())
         .spawn(move || {
             let mut seen = 0;
             while !s.load(Ordering::Relaxed) {
+                let t0 = Instant::now();
                 let changes = {
                     let mut d = desk.lock().unwrap_or_else(|e| e.into_inner());
                     d.tick();
@@ -666,7 +669,16 @@ fn keep_time(desk: Arc<Mutex<Desk>>, ctx: egui::Context) -> (Arc<AtomicBool>, Jo
                     seen = changes;
                     ctx.request_repaint();
                 }
-                thread::sleep(Duration::from_millis(4));
+                // 4 ms between ticks, or less when a controller speaks — never under 1 ms,
+                // so a spinning jog (a message a millisecond) leaves the window its turns
+                match &bell {
+                    Some(b) => {
+                        if b.wait(Duration::from_millis(4)) {
+                            thread::sleep(Duration::from_millis(1).saturating_sub(t0.elapsed()));
+                        }
+                    }
+                    None => thread::sleep(Duration::from_millis(4)),
+                }
             }
         })
         .expect("the Desk's clock");

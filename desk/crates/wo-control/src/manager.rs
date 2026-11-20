@@ -3,11 +3,12 @@
 //! a device by its vendor and product), each one found is opened and read on its own,
 //! and its events come through one channel. Lights go back the same way. A lane may see
 //! each event first, on the reading thread itself, for what cannot wait for the Desk's
-//! next frame (a hand on a record): what it did comes through with the event.
+//! next frame (a hand on a record): what it did comes through with the event. A doorbell
+//! rings with each, so whoever acts on them need not wait out a poll.
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -34,6 +35,28 @@ pub type Lane = Arc<dyn Fn(&Event) -> Option<String> + Send + Sync>;
 
 /// An event, and what the lane did with it.
 pub type Heard = (Event, Option<String>);
+
+/// Rung by the reading threads each time a controller says something: the Desk's clock
+/// waits on it (with its own beat as the timeout) rather than sleeping through a press.
+#[derive(Default)]
+pub struct Doorbell {
+    rung: Mutex<bool>,
+    cv: Condvar,
+}
+
+impl Doorbell {
+    pub fn ring(&self) {
+        *self.rung.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        self.cv.notify_all();
+    }
+
+    /// Until it rings (or rang since the last wait), or `timeout`: whether it rang.
+    pub fn wait(&self, timeout: Duration) -> bool {
+        let g = self.rung.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut g, _) = self.cv.wait_timeout_while(g, timeout, |rung| !*rung).unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *g)
+    }
+}
 
 type Monitor = Arc<Mutex<VecDeque<Packet>>>;
 
@@ -87,6 +110,7 @@ pub struct Manager {
     stop: Arc<AtomicBool>,
     monitor: Monitor,
     layouts: Vec<Layout>,
+    bell: Arc<Doorbell>,
 }
 
 impl Drop for Manager {
@@ -113,14 +137,21 @@ impl Manager {
         let monitor: Monitor = Arc::new(Mutex::new(VecDeque::new()));
         let (s, st, m, known) = (shared.clone(), stop.clone(), monitor.clone(), layouts.clone());
         let lane: Lane = lane.unwrap_or_else(|| Arc::new(|_: &Event| None));
+        let bell = Arc::new(Doorbell::default());
+        let to = Hear { tx, lane, bell: bell.clone() };
         thread::spawn(move || {
             while !st.load(Ordering::Relaxed) {
-                scan_midi(&known, &s, &tx, &m, &lane);
-                scan_hid(&known, &s, &tx, &m, &lane);
+                scan_midi(&known, &s, &to, &m);
+                scan_hid(&known, &s, &to, &m);
                 thread::sleep(Duration::from_secs(2));
             }
         });
-        Manager { events: rx, shared, stop, monitor, layouts }
+        Manager { events: rx, shared, stop, monitor, layouts, bell }
+    }
+
+    /// Rings each time a controller says something (see [Doorbell]).
+    pub fn doorbell(&self) -> Arc<Doorbell> {
+        self.bell.clone()
     }
 
     /// The packets the controllers sent lately, oldest first.
@@ -184,7 +215,28 @@ impl Manager {
     }
 }
 
-fn scan_midi(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Heard>, monitor: &Monitor, lane: &Lane) {
+/// Where a reading thread's events go: the lane first, then the channel, the bell rung.
+#[derive(Clone)]
+struct Hear {
+    tx: Sender<Heard>,
+    lane: Lane,
+    bell: Arc<Doorbell>,
+}
+
+impl Hear {
+    fn all(&self, events: Vec<Event>) {
+        if events.is_empty() {
+            return;
+        }
+        for e in events {
+            let did = (self.lane)(&e);
+            let _ = self.tx.send((e, did));
+        }
+        self.bell.ring();
+    }
+}
+
+fn scan_midi(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, to: &Hear, monitor: &Monitor) {
     let Ok(probe) = midir::MidiInput::new("WetOwl Desk") else { return };
     let ports: Vec<(midir::MidiInputPort, String)> = probe.ports().into_iter().filter_map(|p| Some((p.clone(), probe.port_name(&p).ok()?))).collect();
     let names: Vec<String> = ports.iter().map(|(_, n)| format!("midi:{n}")).collect();
@@ -202,16 +254,13 @@ fn scan_midi(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Heard>
         let Some(layout) = layouts.iter().find(|l| l.protocol == Protocol::Midi && l.names_match(&name)) else { continue };
         let Ok(input) = midir::MidiInput::new("WetOwl Desk") else { continue };
         let mut decoder = Decoder::new(layout.clone());
-        let (tx, lane) = (tx.clone(), lane.clone());
+        let to = to.clone();
         let (m, from) = (monitor.clone(), name.clone());
         let controller = Controller { name: name.clone(), layout: layout.name.clone(), trouble: None };
         let link = match input.connect(&port, "WetOwl Desk in", move |_, msg, _| {
             let events = decoder.decode(msg);
             keep(&m, &from, msg, &events, decoder.half());
-            for e in events {
-                let did = lane(&e);
-                let _ = tx.send((e, did));
-            }
+            to.all(events);
         }, ()) {
             Ok(conn) => Some(Link::Midi { _input: conn, output: midi_output(&name), lights: Decoder::new(layout.clone()) }),
             Err(e) => {
@@ -232,7 +281,7 @@ fn midi_output(name: &str) -> Option<midir::MidiOutputConnection> {
     out.connect(&port, "WetOwl Desk out").ok()
 }
 
-fn scan_hid(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Heard>, monitor: &Monitor, lane: &Lane) {
+fn scan_hid(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, to: &Hear, monitor: &Monitor) {
     let hid_layouts: Vec<&Layout> = layouts.iter().filter(|l| l.protocol == Protocol::Hid).collect();
     if hid_layouts.is_empty() {
         return;
@@ -264,7 +313,7 @@ fn scan_hid(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Heard>,
         let alive = Arc::new(AtomicBool::new(true));
         let (send, lights_rx) = mpsc::channel::<Vec<u8>>();
         let mut decoder = Decoder::new((*layout).clone());
-        let (tx, a, lane) = (tx.clone(), alive.clone(), lane.clone());
+        let (to, a) = (to.clone(), alive.clone());
         let (m, from) = (monitor.clone(), controller.name.clone());
         thread::spawn(move || {
             let mut buf = [0u8; 64];
@@ -280,15 +329,49 @@ fn scan_hid(layouts: &[Layout], shared: &Arc<Mutex<Shared>>, tx: &Sender<Heard>,
                         if !events.is_empty() {
                             keep(&m, &from, &buf[..n], &events, None);
                         }
-                        for e in events {
-                            let did = lane(&e);
-                            let _ = tx.send((e, did));
-                        }
+                        to.all(events);
                     }
                     Err(_) => a.store(false, Ordering::Relaxed),
                 }
             }
         });
         shared.lock().unwrap().open.insert(key, Open { controller, link: Some(Link::Hid { lights: Decoder::new((*layout).clone()), send, alive }) });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn the_doorbell_wakes_a_waiter_at_once() {
+        let bell = Arc::new(Doorbell::default());
+        assert!(!bell.wait(Duration::from_millis(5)), "not rung: the timeout");
+        bell.ring();
+        assert!(bell.wait(Duration::from_secs(5)), "rung before the wait: no waiting");
+        let b = bell.clone();
+        let t = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(30));
+            b.ring();
+        });
+        let t0 = Instant::now();
+        assert!(bell.wait(Duration::from_secs(5)));
+        assert!(t0.elapsed() < Duration::from_secs(1), "woken by the ring, not the timeout: {:?}", t0.elapsed());
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn events_go_through_the_lane_and_ring() {
+        let (tx, rx) = mpsc::channel();
+        let bell = Arc::new(Doorbell::default());
+        let to = Hear { tx, lane: Arc::new(|e: &Event| (e.id == "deck.a.jog.scratch").then(|| "a hand".to_owned())), bell: bell.clone() };
+        to.all(vec![]);
+        assert!(!bell.wait(Duration::ZERO), "nothing said: no ring");
+        let ev = |id: &str| Event { id: id.into(), kind: crate::Kind::Jog, value: 1.0 };
+        to.all(vec![ev("deck.a.jog.scratch"), ev("deck.a.jog")]);
+        assert!(bell.wait(Duration::ZERO));
+        let heard: Vec<Heard> = rx.try_iter().collect();
+        assert_eq!(heard, vec![(ev("deck.a.jog.scratch"), Some("a hand".to_owned())), (ev("deck.a.jog"), None)]);
     }
 }

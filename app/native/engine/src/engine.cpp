@@ -1650,9 +1650,12 @@ WE_API int we_start(int rate, int device) {
     // The period: 256 frames where the system's sound server takes them in its stride
     // (PipeWire, measured); on Windows a larger one, so that the stretchers' work —
     // which comes in bursts of a whole FFT frame — has room in each call (WASAPI's own
-    // period is 10 ms anyway). WETOWL_ENGINE_PERIOD overrides.
+    // period is 10 ms anyway). Not 1024: shared WASAPI keeps three periods, so 1024 was
+    // 64 ms from a hand on a controller to the ears, 512 is 32 ms (256 only 30) — and a
+    // machine too slow for it falls back to the R2 stretcher by itself (see callback).
+    // WETOWL_ENGINE_PERIOD overrides (1024: the old room).
 #ifdef _WIN32
-    int period = 1024;
+    int period = 512;
 #else
     int period = 256;
 #endif
