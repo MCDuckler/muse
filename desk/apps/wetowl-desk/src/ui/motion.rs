@@ -171,11 +171,13 @@ mod tests {
     fn frame(ctx: &Context, t: f64, f: impl FnOnce(&Context)) {
         let input = eframe::egui::RawInput { time: Some(t), ..Default::default() };
         let mut f = Some(f);
-        let _ = ctx.run_ui(input, |ui| {
+        let mut out = ctx.run_ui(input, |ui| {
             if let Some(f) = f.take() {
                 f(ui.ctx());
             }
         });
+        // (no painter here: egui wants unapplied texture deltas dropped on purpose)
+        out.textures_delta.clear();
     }
 
     #[test]

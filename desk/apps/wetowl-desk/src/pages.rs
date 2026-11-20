@@ -73,9 +73,10 @@ fn every_page_and_overlay_draws_at_every_size() {
                     let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), points)), time: Some(t), ..Default::default() };
                     let t0 = Instant::now();
                     let mut window = Rect::NOTHING;
-                    let out = ctx.run_ui(input, |ui| {
+                    let mut out = ctx.run_ui(input, |ui| {
                         window = app.frame(ui).0;
                     });
+                    out.textures_delta.clear();
                     let ppp = out.pixels_per_point;
                     // (the first frames lay things out and ease them in)
                     let missed = crate::ui::fit::take();
