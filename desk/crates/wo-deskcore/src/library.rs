@@ -30,6 +30,8 @@ pub enum Shelf {
     Usb { root: std::path::PathBuf, stick: String, playlist: Option<(u32, String)> },
     /// A record or a list found elsewhere, opened: its songs (elsewhere.rs).
     Elsewhere(wo_house::Found),
+    /// rekordbox's HISTORY yyyy-mm-dd: a day's records played a minute or more, in order.
+    History { day: String },
 }
 
 /// A rekordbox stick plugged in, as the crate lists it.
@@ -209,7 +211,7 @@ pub(crate) fn fetch_shelf(tx: &Sender<Done>, house: &House, shelf: Shelf, turn: 
                 Ok((v, n))
             }),
             // (the Desk lists these itself)
-            Shelf::Queue | Shelf::Usb { .. } | Shelf::Elsewhere(_) => Ok((vec![], 0)),
+            Shelf::Queue | Shelf::Usb { .. } | Shelf::Elsewhere(_) | Shelf::History { .. } => Ok((vec![], 0)),
             Shelf::Similar { fresh, seeds, exclude } => house.recommend(&seeds, &exclude, fresh as f64 / 100.0, 30).map(|picks| {
                 let v: Vec<wo_house::Track> = picks
                     .into_iter()

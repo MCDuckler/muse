@@ -21,6 +21,8 @@ const fn rgb(v: u32) -> Color32 {
 
 const SELECTED: Color32 = rgb(0x0B4F86);
 const LOADED: Color32 = rgb(0x2BC46B);
+/// A record played today (its row, as rekordbox's played tracks).
+const PLAYED: Color32 = rgb(0x6FA7C9);
 const SHADE: Color32 = rgb(0x1F1F22);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,7 +188,8 @@ impl App {
             p.rect_filled(rr, CornerRadius::ZERO, Color32::from_white_alpha(10));
         }
         let r = &row.record;
-        let ink = if row.on_deck.is_some() { LOADED } else if r.playable() { TEXT } else { MUTED };
+        // a record on today's history in another colour (rekordbox's Coloring of played tracks)
+        let ink = if row.on_deck.is_some() { LOADED } else if !r.playable() { MUTED } else if row.played { PLAYED } else { TEXT };
         let y = rr.center().y;
         let mut art = Rect::from_min_size(pos2(rr.left(), y - 8.0), vec2(16.0, 16.0));
         for &(c, x, w) in &cols.0 {

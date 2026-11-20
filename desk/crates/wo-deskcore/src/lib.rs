@@ -29,6 +29,7 @@ pub mod audio;
 pub mod elsewhere;
 pub mod fetch;
 pub mod follow;
+pub mod history;
 mod crate_;
 pub mod plan_view;
 pub mod player;
@@ -208,6 +209,8 @@ pub struct Row {
     pub record: Record,
     pub fits: u8,
     pub on_deck: Option<usize>,
+    /// On today's play history (rekordbox colours a played record's row).
+    pub played: bool,
     /// A word on it: why it was picked, what its check said.
     pub note: Option<String>,
 }
@@ -466,6 +469,16 @@ pub struct Desk {
     session_live: bool,
     idle_since: Option<Instant>,
     resume: [Option<(f64, bool)>; 2],
+    /// A deck loaded by hand while it was synced: synced again once its grid is in (rekordbox
+    /// keeps BEAT SYNC on through a load).
+    resync: [bool; 2],
+    /// rekordbox's HISTORY (history.rs).
+    history: history::History,
+    /// Instant Doubles: the deck that takes the other's record, put where that one plays
+    /// once its sound is in.
+    doubling: [bool; 2],
+    /// Whether the master played last tick (it hands on when it stops, not while stopped).
+    master_played: bool,
     resumed: Option<String>,
     /// Following rekordbox (follow.rs): its decks drive these, silently.
     follow: Option<follow::Follow>,
@@ -613,6 +626,10 @@ impl Desk {
             session_live: false,
             idle_since: None,
             resume: [None, None],
+            resync: [false; 2],
+            history: history::History::today(),
+            doubling: [false; 2],
+            master_played: false,
             resumed: None,
             follow: None,
             dice: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_nanos() as u64) | 1,
@@ -801,7 +818,7 @@ impl Desk {
             Audio::Synth { .. } => synth::first_drop(bpm),
             _ => bar_at(0.3),
         };
-        let mut hands = Hands::new(Grid::new(beats.clone(), bar_one));
+        let mut hands = self.fresh_hands(slot, Grid::new(beats.clone(), bar_one));
         if !beats.is_empty() {
             hands.place_auto(&[
                 (0, beats[bar_one.min(beats.len() - 1)], PadKind::Intro),
@@ -812,8 +829,6 @@ impl Desk {
         }
         let timing = self.timing_of(&record, hands.grid.clone());
         let s = &mut self.slots[slot];
-        // the deck's pitch range is the deck's, whatever is on it (as rekordbox)
-        hands.range = s.hands.range;
         s.record = record;
         s.hands = hands;
         s.timing = timing;
@@ -821,7 +836,6 @@ impl Desk {
         s.loader = Some(loader);
         s.vocals = None;
         s.marks = Marks::default();
-        s.hands.quantize = self.quantize;
         if s.shift != 0.0 || s.key_semis != 0 {
             s.shift = 0.0;
             s.key_semis = 0;
@@ -832,6 +846,24 @@ impl Desk {
         let deck = self.engine.deck(DeckId::new(slot).unwrap());
         deck.set_keylock(self.slots[slot].keylock);
         deck.set_eq(eq_db(self.slots[slot].eq), 0.0);
+        // the tempo slider stays where it is: the new record at its rate (as rekordbox, whose
+        // tempo is the deck's, and a DDJ's slider where the hand left it)
+        self.hands(slot, |h, t| {
+            h.set_pitch(h.pitch, t);
+        });
+    }
+
+    /// A deck's hands for a record just put on it. rekordbox keeps the deck's own settings
+    /// (the tempo slider where it is, its range, quantize) and parks the record on a CUE
+    /// point (Auto Cue): its start here; a stick's first memory cue once its analysis is in.
+    fn fresh_hands(&self, slot: usize, grid: Grid) -> Hands {
+        let was = &self.slots[slot].hands;
+        let mut h = Hands::new(grid);
+        h.range = was.range;
+        h.pitch = was.pitch;
+        h.quantize = self.quantize;
+        h.cue = Some(0.0);
+        h
     }
 
     /// Advances the Auto DJ. Call once a frame.
@@ -860,6 +892,9 @@ impl Desk {
         }
         self.stems_tick();
         self.mind_tick();
+        self.doubles_tick();
+        self.master_follows();
+        self.history_tick();
         self.feed_stage();
         // following rekordbox, the decks are rekordbox's: no Auto DJ, however it was asked
         if !self.auto || self.follow.is_some() {
@@ -1266,10 +1301,11 @@ impl Desk {
                 record: r.clone(),
                 fits: records::fits(r, master_bpm, &key),
                 on_deck: (0..2).find(|&d| self.slots[d].record.id == r.id),
+                played: self.history.played(r.id),
                 note: self.library.notes.get(&r.id).cloned(),
             })
             .collect();
-        if !matches!(self.library.shelf, Shelf::Fits { .. } | Shelf::Queue | Shelf::Similar { .. } | Shelf::Check | Shelf::Usb { playlist: Some(_), .. }) || (self.house.is_none() && !on_usb) {
+        if !matches!(self.library.shelf, Shelf::Fits { .. } | Shelf::Queue | Shelf::Similar { .. } | Shelf::Check | Shelf::Usb { playlist: Some(_), .. } | Shelf::History { .. }) || (self.house.is_none() && !on_usb) {
             rows.sort_by_key(|r| (r.on_deck.is_none(), std::cmp::Reverse(r.fits)));
         }
         rows
@@ -1579,8 +1615,116 @@ impl Desk {
     }
 
     pub fn toggle_play(&mut self, deck: usize) {
+        // CUE held (the record playing from the cue point) and PLAY pressed: it plays on
+        // when CUE is let go, as a CDJ and rekordbox
+        if std::mem::take(&mut self.slots[deck].hands.previewing) {
+            self.engine.deck(DeckId::new(deck).unwrap()).play(true);
+            return;
+        }
         let d = self.engine.deck(DeckId::new(deck).unwrap());
         d.play(!d.read().playing);
+    }
+
+    /// The sync master (rekordbox's MASTER, a DDJ's BEAT SYNC held): the deck the other
+    /// syncs to and the show follows. Not while a move of the Auto DJ's runs (it hands over
+    /// itself at its end).
+    pub fn set_master(&mut self, d: usize) {
+        if d < 2 && !self.mix.as_ref().is_some_and(|m| m.started) && self.follow.is_none() {
+            self.master = d;
+            self.master_played = false;
+            self.changes += 1;
+        }
+    }
+
+    /// rekordbox's HISTORY: a record played a minute or more goes on the day's history
+    /// (not following rekordbox: rekordbox keeps its own).
+    fn history_tick(&mut self) {
+        if self.follow.is_some() {
+            return;
+        }
+        let playing = [0, 1].map(|d| self.engine.deck(DeckId::new(d).unwrap()).read().playing);
+        if self.history.tick([&self.slots[0].record, &self.slots[1].record], self.load_gen, playing) {
+            self.changes += 1;
+            if let Shelf::History { day } = &self.library.shelf
+                && *day == self.history.day
+            {
+                self.library.rows = self.history.entries.iter().map(|e| e.record.clone()).collect();
+                self.library.total = self.library.rows.len() as i64;
+            }
+        }
+    }
+
+    /// The days with a play history and how many records each, newest first.
+    pub fn history_days(&self) -> &[(String, usize)] {
+        &self.history.kept
+    }
+
+    /// rekordbox's master hands itself on: the master stopped (or its record ended or
+    /// changed) and the other deck playing, the other is the master.
+    fn master_follows(&mut self) {
+        let (m, o) = (self.master, 1 - self.master);
+        let playing = |d: usize| self.engine.deck(DeckId::new(d).unwrap()).read().playing;
+        let now = playing(m);
+        // only as it stops: a stopped deck made the master by hand stays it
+        let stopped = std::mem::replace(&mut self.master_played, now) && !now;
+        if self.follow.is_some() || self.mix.as_ref().is_some_and(|m| m.started) {
+            return;
+        }
+        if stopped && playing(o) {
+            self.master = o;
+            self.master_played = true;
+            self.changes += 1;
+        }
+    }
+
+    /// Instant Doubles (rekordbox: LOAD twice on a DDJ): the other deck's record onto `d`,
+    /// with its cue, pads, tempo and range, put where the other plays and playing if it
+    /// plays, once its sound is in.
+    pub fn instant_double(&mut self, d: usize) {
+        let o = 1 - d;
+        let rec = self.slots[o].record.clone();
+        if !rec.playable() {
+            return;
+        }
+        self.load_by_hand(d, rec);
+        let (cue, pads, pitch, range) = {
+            let h = &self.slots[o].hands;
+            (h.cue, h.pads, h.pitch, h.range)
+        };
+        let h = &mut self.slots[d].hands;
+        (h.cue, h.pads, h.pitch, h.range) = (cue, pads, pitch, range);
+        let rate = self.engine.deck(DeckId::new(o).unwrap()).read().rate;
+        self.hands(d, |h, t| {
+            h.set_pitch(h.pitch, t);
+        });
+        self.engine.deck(DeckId::new(d).unwrap()).set_rate(rate);
+        self.doubling[d] = true;
+    }
+
+    /// Each tick: a doubled deck put where the other plays once its sound is in; a deck
+    /// loaded while synced synced again once its grid is.
+    fn doubles_tick(&mut self) {
+        for d in 0..2 {
+            if self.doubling[d] {
+                let o = 1 - d;
+                let at = self.engine.deck(DeckId::new(o).unwrap()).position();
+                let decoded = self.slots[d].wave.lock().unwrap().seconds();
+                let whole = self.slots[d].loader.as_ref().is_none_or(|h| h.is_finished());
+                if decoded >= at + 2.0 || (whole && decoded > 0.0) {
+                    let play = self.engine.deck(DeckId::new(o).unwrap()).read().playing;
+                    self.doubling[d] = false;
+                    // where the other is by now, a block on
+                    let at = self.engine.deck(DeckId::new(o).unwrap()).position();
+                    self.seek_to(d, at);
+                    self.engine.deck(DeckId::new(d).unwrap()).play(play);
+                }
+            }
+            if self.resync[d] && !self.slots[d].hands.grid.beats.is_empty() {
+                self.resync[d] = false;
+                // (not asked whether it is: the load's unsync may not be read back yet)
+                self.engine.deck(DeckId::new(d).unwrap()).sync(DeckId::new(1 - d).unwrap(), 4, 0.0);
+            }
+        }
     }
 
     pub fn toggle_sync(&mut self, deck: usize) {
@@ -1772,6 +1916,17 @@ impl Desk {
             self.library.checked.clear();
             return;
         }
+        if let Shelf::History { day } = &shelf {
+            self.shelf_gen += 1;
+            self.more_asked = None;
+            let entries = if *day == self.history.day { self.history.entries.clone() } else { history::History::of(day) };
+            self.library.rows = entries.into_iter().map(|e| e.record).collect();
+            self.library.total = self.library.rows.len() as i64;
+            self.library.shelf = shelf;
+            self.library.loading = false;
+            self.library.error = None;
+            return;
+        }
         if shelf == Shelf::Queue {
             self.shelf_gen += 1;
             self.library.shelf = Shelf::Queue;
@@ -1915,7 +2070,7 @@ impl Desk {
                     let deck = self.engine.deck(DeckId::new(slot).unwrap());
                     deck.set_beats(&a.grid.beats);
                     deck.set_bar_one(a.grid.bar_one);
-                    let mut hands = Hands::new(a.grid);
+                    let mut hands = self.fresh_hands(slot, a.grid);
                     for &(n, at) in &a.hand {
                         match at {
                             Some(at) => hands.pads[n] = Some(Pad { at, auto: None }),
@@ -1923,11 +2078,14 @@ impl Desk {
                         }
                     }
                     hands.place_auto(&a.auto);
-                    hands.cue = a.cue;
+                    // a hand's CUE point set while the analysis came keeps; else the stick's
+                    // first memory cue, else the start (Auto Cue)
                     let s = &mut self.slots[slot];
-                    hands.range = s.hands.range;
+                    hands.cue = match s.hands.cue {
+                        Some(c) if c > 0.0 => Some(c),
+                        _ => a.cue.or(Some(0.0)),
+                    };
                     s.hands = hands;
-                    s.hands.quantize = self.quantize;
                     s.timing = a.timing;
                     s.vocals = a.vocals;
                     s.marks = a.marks;
@@ -2097,6 +2255,7 @@ impl Desk {
                 deck.seek(cue);
             }
             A::Sync(d) => self.toggle_sync(d),
+            A::Master(d) => self.set_master(d),
             A::Keylock(d) => self.toggle_keylock(d),
             A::PitchReset(d) => self.set_pitch(d, 0.0),
             A::CyclePitchRange(d) => self.cycle_range(d),

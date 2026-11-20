@@ -38,6 +38,8 @@ pub enum Action {
     /// STOP tapped alone: stop, back on the cue point.
     Stop(usize),
     Sync(usize),
+    /// The deck the sync master (rekordbox's MASTER; a DDJ's BEAT SYNC held).
+    Master(usize),
     Keylock(usize),
     PitchReset(usize),
     /// The deck's pitch range, the next one (the rate kept).
@@ -288,6 +290,7 @@ impl Binding {
                 }
             }
             "sync" if pressed => vec![Action::Sync(d)],
+            "master" if pressed => vec![Action::Master(d)],
             "keylock" if pressed => vec![Action::Keylock(d)],
             "pitchReset" if pressed => {
                 if shift {

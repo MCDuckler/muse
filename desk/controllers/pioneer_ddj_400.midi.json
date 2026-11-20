@@ -54,6 +54,12 @@
    "note": "0x58"
   },
   {
+   "id": "deck.a.master",
+   "kind": "button",
+   "channel": 0,
+   "note": "0x5C"
+  },
+  {
    "id": "deck.a.tempoRange",
    "kind": "button",
    "channel": 0,
@@ -639,6 +645,12 @@
    "kind": "button",
    "channel": 1,
    "note": "0x58"
+  },
+  {
+   "id": "deck.b.master",
+   "kind": "button",
+   "channel": 1,
+   "note": "0x5C"
   },
   {
    "id": "deck.b.tempoRange",
@@ -1808,7 +1820,7 @@
  "notes": {
   "deck.a.shift": "SHIFT: held, the other controls' second meanings.",
   "deck.a.jog.scratch": "The platter, as rekordbox's VINYL: touched on top it is a hand on the record (playing: a scratch; parked: it scrubs, a turn 1.8 s). Its side, or the top spun untouched: playing, the pitch bend; parked, a fine nudge (a turn 0.6 s). SHIFT + the top: a fast search (a turn 2 minutes).",
-  "deck.a.pitch": "TEMPO, toward you is faster (+), as rekordbox. SHIFT + BEAT SYNC cycles the deck's range \u00b16 \u2192 10 \u2192 16 \u2192 WIDE, the slider across the new range.",
+  "deck.a.pitch": "TEMPO, toward you is faster (+), as rekordbox. BEAT SYNC held long sends note 0x5C (rekordbox's MASTER), SHIFT + BEAT SYNC cycles the deck's range \u00b16 \u2192 10 \u2192 16 \u2192 WIDE, the slider across the new range.",
   "deck.a.trim": "TRIM: the deck's gain, \u00b112 dB.",
   "deck.a.filter": "CFX: the filter, low-pass left, high-pass right.",
   "deck.a.hotcue.1": "HOT CUE pads 1\u20138: set, then jump; SHIFT clears.",

@@ -1087,6 +1087,7 @@ a click: following rekordbox")).clicked() {
                 let name = match &lib.shelf {
                     Shelf::Usb { stick, playlist: Some((_, list)), .. } => format!("{stick} · {list}"),
                     Shelf::Usb { stick, .. } => format!("{stick} · all records"),
+                    Shelf::History { day } => format!("HISTORY {day}"),
                     _ => String::new(),
                 };
                 format!("{name} · {}", thousands(lib.total))
@@ -1098,6 +1099,7 @@ a click: following rekordbox")).clicked() {
                     Shelf::Search(q) => format!("“{q}”"),
                     Shelf::Fits { title, .. } => format!("Fits {title}"),
                     Shelf::Queue => "The queue".to_owned(),
+                    Shelf::History { day } => format!("HISTORY {day}"),
                     Shelf::Similar { .. } => "Like what is on".to_owned(),
                     Shelf::Check => format!("Check by ear · {} done", lib.checked.len()),
                     Shelf::Usb { stick, .. } => stick.clone(),
@@ -1228,9 +1230,16 @@ a click: following rekordbox")).clicked() {
                     }
                 }
                 wo_control::Action::Load(d) => {
-                    if let Some(row) = rows.get(self.cursor)
+                    // LOAD twice quickly: rekordbox's Instant Doubles (the other deck's
+                    // record, where it plays); once: the row under the cursor, whatever
+                    // deck it is on already
+                    let now = std::time::Instant::now();
+                    let twice = self.load_pressed[d].is_some_and(|t| now.duration_since(t).as_secs_f32() < 0.4);
+                    self.load_pressed[d] = (!twice).then_some(now);
+                    if twice {
+                        desk.instant_double(d);
+                    } else if let Some(row) = rows.get(self.cursor)
                         && row.record.playable()
-                        && row.on_deck.is_none()
                     {
                         desk.load_by_hand(d, row.record.clone());
                     }
@@ -1324,7 +1333,8 @@ a click: following rekordbox")).clicked() {
                             tx += 18.0;
                         }
                     }
-                    let ink = if row.on_deck.is_some() { t::muted() } else if row.record.playable() { t::text() } else { t::muted() };
+                    // a record on today's history dimmer (rekordbox colours a played record's row)
+                    let ink = if row.on_deck.is_some() || !row.record.playable() { t::muted() } else if row.played { t::soft() } else { t::text() };
                     kit::clipped(&p, pos2(tx, y), &row.record.title, 13.0, "", ink, at(3) - tx - 12.0);
                     match &row.note {
                         Some(n) => {
@@ -1634,17 +1644,27 @@ a click: following rekordbox")).clicked() {
         let list = Rect::from_min_max(pos2(tree.left(), tree.top() + 204.0), pos2(tree.right(), tree.bottom() - 46.0));
         // the sticks' shelves first (each stick, then its playlists), then the house's
         let usb = stick_entries(&sticks);
+        let days = history_entries(desk.history_days());
         // the tree's rows in order, for a controller's browse
         let mut rows = vec![(-1, TreeEntry::Open(Shelf::All)), (-2, TreeEntry::Fits), (-3, TreeEntry::Open(Shelf::Queue)), (-4, TreeEntry::Similar), (-5, TreeEntry::Open(Shelf::Check))];
         rows.extend(usb.iter().map(|e| (e.id, TreeEntry::Open(e.shelf.clone()))));
         rows.extend(lists.iter().map(|l| (l.id, TreeEntry::Open(Shelf::Playlist { id: l.id, name: l.name.clone() }))));
+        rows.extend(days.iter().map(|e| (e.id, TreeEntry::Open(e.shelf.clone()))));
         let scroll = self.tree_rows(&ctx, rows, 5, list.height());
+        let n_lists = lists.len();
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
         let area = egui::ScrollArea::vertical().id_salt("playlists").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0));
         let area = if let Some(y) = scroll { area.vertical_scroll_offset(y) } else { area };
-        area.show_rows(&mut child, 28.0, usb.len() + lists.len(), |ui, range| {
+        area.show_rows(&mut child, 28.0, usb.len() + n_lists + days.len(), |ui, range| {
             for i in range {
                 let (rr, _) = ui.allocate_exact_size(vec2(list.width(), 28.0), Sense::hover());
+                // rekordbox's Histories, after the playlists
+                if let Some(e) = i.checked_sub(usb.len() + n_lists).and_then(|j| days.get(j)) {
+                    if stick_row(ui, &ctx, tree, rr, e, &shelf) {
+                        open = Some(e.shelf.clone());
+                    }
+                    continue;
+                }
                 if let Some(e) = usb.get(i) {
                     if stick_row(ui, &ctx, tree, rr, e, &shelf) {
                         open = Some(e.shelf.clone());
@@ -1696,7 +1716,8 @@ a click: following rekordbox")).clicked() {
         let ctx = ui.ctx().clone();
         kit::section(p, pos2(tree.left() + 18.0, tree.top() + 16.0), Align2::LEFT_TOP, "USB");
         let list = Rect::from_min_max(pos2(tree.left(), tree.top() + 34.0), pos2(tree.right(), tree.bottom() - 46.0));
-        let usb = stick_entries(&sticks);
+        let mut usb = stick_entries(&sticks);
+        usb.extend(history_entries(desk.history_days()));
         let scroll = self.tree_rows(&ctx, usb.iter().map(|e| (e.id, TreeEntry::Open(e.shelf.clone()))).collect(), 0, list.height());
         let mut open = None;
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
@@ -2186,6 +2207,14 @@ fn stick_entries(sticks: &[wo_deskcore::StickView]) -> Vec<StickEntry> {
 }
 
 /// A stick's row in the scrolling list at `rr`; whether it was clicked.
+/// rekordbox's Histories in the crate's left column: a day's records played a minute or more.
+fn history_entries(days: &[(String, usize)]) -> Vec<StickEntry> {
+    days.iter()
+        .enumerate()
+        .map(|(i, (day, n))| StickEntry { shelf: Shelf::History { day: day.clone() }, name: format!("HISTORY {day}"), n: *n, id: -5_000_000 - i as i64, playlist: true })
+        .collect()
+}
+
 fn stick_row(ui: &mut Ui, ctx: &egui::Context, tree: Rect, rr: Rect, e: &StickEntry, shelf: &Shelf) -> bool {
     let on = *shelf == e.shelf;
     let clicked = shelf_row(ui, ctx, tree, rr.top(), &e.name, e.n.to_string(), on, e.id, if e.playlist { 14.0 } else { 0.0 });

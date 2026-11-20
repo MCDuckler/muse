@@ -123,6 +123,8 @@ pub(crate) struct App {
     /// A controller's browse in the tree (the shelves and playlists) rather than the rows,
     /// as rekordbox's: SHIFT + press the knob goes there, a press opens the one marked.
     pub(crate) tree: crate::booth::TreeBrowse,
+    /// When each deck's LOAD was last pressed on a controller (twice quickly: Instant Doubles).
+    pub(crate) load_pressed: [Option<std::time::Instant>; 2],
     /// A search's tab: 0 the house's records, 1 songs from elsewhere, 2 lists.
     pub(crate) found_tab: usize,
     /// The booth, the Show page (K), or the kit's gallery.
@@ -431,6 +433,7 @@ impl App {
             app_sign_in: Desk::app_sign_in_here(),
             cursor: 0,
             tree: Default::default(),
+            load_pressed: [None; 2],
             found_tab: 0,
             page: show::Page::Booth,
             said: (0, None),

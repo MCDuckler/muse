@@ -451,10 +451,15 @@ impl Desk {
                 self.note(LogKind::Hand, "The mix stopped: a record loaded onto one of its decks".to_owned());
             }
         }
-        if d == self.master && self.engine.deck(wo_engine::DeckId::new(1 - d).unwrap()).read().playing {
+        // rekordbox: a new record on the sync master's deck hands the master to the other
+        if d == self.master {
             self.master = 1 - d;
         }
+        // and BEAT SYNC stays on through the load: synced again once the grid is in
+        let synced = self.engine.deck(wo_engine::DeckId::new(d).unwrap()).read().synced;
+        self.doubling[d] = false;
         self.load(d, record);
+        self.resync[d] = synced;
         self.apply_levels();
         self.mind.by_hand[d] = true;
         self.note(LogKind::Hand, format!("{title} on deck {} by hand", ["A", "B"][d]));
