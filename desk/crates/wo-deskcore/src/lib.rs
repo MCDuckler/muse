@@ -2089,17 +2089,31 @@ impl Desk {
                     s.timing = a.timing;
                     s.vocals = a.vocals;
                     s.marks = a.marks;
-                    // a stick's record rekordbox found no phrases in: found here, on its grid
-                    if s.marks.phrases.is_empty() && s.timing.sections.is_empty() {
+                    // a stick's record: rekordbox's waveform read for what the house's analysis
+                    // gives its records — phrases where rekordbox found none, and for the
+                    // show the sections, the drops and each bar's loudness (without them the
+                    // director has no shape to go by and stays at a fifth of its intensity)
+                    let exact = s.wave.lock().unwrap().is_exact();
+                    if exact && (s.timing.sections.is_empty() || s.timing.energy.is_empty()) {
                         let w = s.wave.lock().unwrap();
-                        if w.is_exact() {
-                            let n = w.rb_len();
-                            let cols: Vec<wo_wave::RbCol> = (0..n).filter_map(|i| w.rb_col(i)).collect();
-                            drop(w);
-                            let lows: Vec<f32> = cols.iter().map(|c| c.bands[0] as f32).collect();
-                            let all: Vec<f32> = cols.iter().map(|c| c.bands.iter().map(|&b| b as f32).sum()).collect();
-                            let g = &s.hands.grid;
+                        let n = w.rb_len();
+                        let cols: Vec<wo_wave::RbCol> = (0..n).filter_map(|i| w.rb_col(i)).collect();
+                        drop(w);
+                        let lows: Vec<f32> = cols.iter().map(|c| c.bands[0] as f32).collect();
+                        let all: Vec<f32> = cols.iter().map(|c| c.bands.iter().map(|&b| b as f32).sum()).collect();
+                        let g = s.hands.grid.clone();
+                        if s.marks.phrases.is_empty() && s.timing.sections.is_empty() {
                             s.marks.phrases = phrases::detect(&lows, &all, &g.beats, g.bar_one, s.record.seconds as f64);
+                        }
+                        if s.timing.sections.is_empty() && !s.marks.phrases.is_empty() {
+                            let (sections, drops) = phrases::sections(&s.marks.phrases);
+                            s.timing.phrases = sections.iter().map(|x| x.start).collect();
+                            s.timing.sections = sections;
+                            s.timing.show_drops = drops.clone();
+                            s.timing.drops = drops;
+                        }
+                        if s.timing.energy.is_empty() {
+                            s.timing.energy = phrases::bar_energy(&all, &g.beats, g.bar_one);
                         }
                     }
                     if let Some(k) = a.camelot {
