@@ -2121,7 +2121,7 @@ impl Desk {
             A::Headphones(d) => self.toggle_headphones(d),
             A::HeadMix(v) => self.set_head_mix(v),
             A::HeadLevel(v) => self.set_head_level(v),
-            a @ (A::Load(_) | A::Browse(..)) => self.for_the_crate.push(a),
+            a @ (A::Load(_) | A::Browse(..) | A::BrowseSwitch | A::Zoom(_)) => self.for_the_crate.push(a),
             A::Show(cue) => {
                 use wo_control::ShowCue as C;
                 let v = self.stage.view();

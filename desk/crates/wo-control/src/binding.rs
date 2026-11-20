@@ -75,6 +75,11 @@ pub enum Action {
     /// The headphones' level knob, 0..1.
     HeadLevel(f32),
     Browse(i32, i32),
+    /// The browser's view switched: the tree (shelves, playlists) or the rows (rekordbox's
+    /// SwitchActiveWindow, SHIFT + LOAD 2 on a DDJ-400).
+    BrowseSwitch,
+    /// The waveforms zoomed in (+) or out (−) by steps (rekordbox's SHIFT + the browse knob).
+    Zoom(i32),
     /// The show (the stage's director), as the v1 booth binds it.
     Show(ShowCue),
 }
@@ -235,6 +240,8 @@ impl Binding {
                 // marked, with SHIFT it goes back to the tree
                 "browse.press" if pressed => vec![Action::Browse(1, 0)],
                 "browse.back" if pressed => vec![Action::Browse(-1, 0)],
+                "browse.switch" if pressed => vec![Action::BrowseSwitch],
+                "browse.zoom" if e.value != 0.0 => vec![Action::Zoom(e.value.signum() as i32)],
                 "show.scene.prev" if pressed => vec![Action::Show(ShowCue::Previous)],
                 "show.scene.next" if pressed => vec![Action::Show(ShowCue::Next)],
                 "show.hit" if pressed => vec![Action::Show(ShowCue::Hit)],
@@ -472,6 +479,9 @@ mod tests {
         let press = |id: &str| Event { id: id.into(), kind: Kind::Button, value: 1.0 };
         assert_eq!(b.handle(&press("browse.press"), &at), vec![Action::Browse(1, 0)], "into the playlist marked");
         assert_eq!(b.handle(&press("browse.back"), &at), vec![Action::Browse(-1, 0)], "back to the tree");
+        assert_eq!(b.handle(&press("browse.switch"), &at), vec![Action::BrowseSwitch], "tree or rows");
+        let zoom = Event { id: "browse.zoom".into(), kind: Kind::Encoder, value: -3.0 };
+        assert_eq!(b.handle(&zoom, &at), vec![Action::Zoom(-1)], "a step out, however fast it turned");
     }
 
     #[test]

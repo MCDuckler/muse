@@ -1211,6 +1211,15 @@ a click: following rekordbox")).clicked() {
         let mut scroll_to = None;
         for a in desk.take_crate_actions() {
             match a {
+                wo_control::Action::BrowseSwitch => {
+                    // the tree, or back to the rows without opening anything
+                    if self.tree.on {
+                        self.tree.on = false;
+                    } else {
+                        self.tree_browse(desk, -1, 0);
+                    }
+                }
+                wo_control::Action::Zoom(dir) => self.zoom_step(dir),
                 wo_control::Action::Browse(dx, dy) => {
                     let dy = self.tree_browse(desk, dx, dy);
                     if dy != 0 && !rows.is_empty() {
