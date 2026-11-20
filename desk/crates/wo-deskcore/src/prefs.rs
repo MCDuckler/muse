@@ -23,6 +23,9 @@ pub struct Prefs {
     pub bar_groups: bool,
     /// rekordbox's layout shows its effect panel under the decks.
     pub club_fx: bool,
+    /// The crossfader off, as rekordbox's (Preferences → Controller → Mixer): both channels
+    /// straight through, the channel faders mix.
+    pub crossfader_off: bool,
     /// Follow a set played in rekordbox: the Desk silent, the show with rekordbox's decks.
     pub follow_rekordbox: bool,
     /// Where rekordbox's audio is looked for (none: Music, Downloads and the Desktop).
@@ -76,6 +79,7 @@ impl Default for Prefs {
             layout: DeskLayout::WetOwl,
             bar_groups: true,
             club_fx: true,
+            crossfader_off: false,
             follow_rekordbox: false,
             music_folders: vec![],
             rkbx_link: None,

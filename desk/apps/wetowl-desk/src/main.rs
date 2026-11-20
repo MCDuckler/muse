@@ -120,6 +120,9 @@ pub(crate) struct App {
     app_sign_in: bool,
     /// The crate row a controller's browse is on.
     pub(crate) cursor: usize,
+    /// A controller's browse in the tree (the shelves and playlists) rather than the rows,
+    /// as rekordbox's: SHIFT + press the knob goes there, a press opens the one marked.
+    pub(crate) tree: crate::booth::TreeBrowse,
     /// A search's tab: 0 the house's records, 1 songs from elsewhere, 2 lists.
     pub(crate) found_tab: usize,
     /// The booth, the Show page (K), or the kit's gallery.
@@ -395,10 +398,11 @@ impl App {
 
     /// The Desk's window over `desk`, its clock on its own thread or (`clock` false: tests)
     /// ticked by whoever draws it.
-    fn with(ctx: &egui::Context, desk: Desk, bench: Option<Bench>, clock: bool) -> Self {
+    fn with(ctx: &egui::Context, mut desk: Desk, bench: Option<Bench>, clock: bool) -> Self {
         fonts(ctx);
         ui::style(ctx);
         let prefs = Prefs::read();
+        desk.set_crossfader_off(prefs.crossfader_off);
         motion::set_reduced(ctx, prefs.reduced_motion);
         let tex = |name: &str, b: wo_deskcore::Backdrop| {
             ctx.load_texture(name, ColorImage::from_rgba_unmultiplied([b.width as usize, b.height as usize], &b.rgba), TextureOptions::LINEAR)
@@ -426,6 +430,7 @@ impl App {
             form: (wo_house::DEFAULT_SERVER.to_owned(), String::new(), String::new()),
             app_sign_in: Desk::app_sign_in_here(),
             cursor: 0,
+            tree: Default::default(),
             found_tab: 0,
             page: show::Page::Booth,
             said: (0, None),
@@ -537,6 +542,9 @@ impl App {
 
     pub(crate) fn save_prefs(&mut self, ctx: &egui::Context) {
         motion::set_reduced(ctx, self.prefs.reduced_motion);
+        if let Ok(mut d) = self.desk.lock() {
+            d.set_crossfader_off(self.prefs.crossfader_off);
+        }
         self.prefs.save();
     }
 }
@@ -882,7 +890,7 @@ impl App {
                     d.nudge_by(d.master(), dir * 0.01);
                 } else {
                     let x = d.crossfader() + dir as f32 * 0.05;
-                    d.set_crossfader(x);
+                    d.hand_crossfader(x);
                 }
             }
             K::K => self.page = if self.page == show::Page::Show { show::Page::Booth } else { show::Page::Show },

@@ -231,6 +231,10 @@ impl Binding {
                 "browse.down" if pressed => vec![Action::Browse(0, 1)],
                 "browse.left" if pressed => vec![Action::Browse(-1, 0)],
                 "browse.right" if pressed => vec![Action::Browse(1, 0)],
+                // rekordbox's Library Forward and Back: the knob pressed opens the tree's row
+                // marked, with SHIFT it goes back to the tree
+                "browse.press" if pressed => vec![Action::Browse(1, 0)],
+                "browse.back" if pressed => vec![Action::Browse(-1, 0)],
                 "show.scene.prev" if pressed => vec![Action::Show(ShowCue::Previous)],
                 "show.scene.next" if pressed => vec![Action::Show(ShowCue::Next)],
                 "show.hit" if pressed => vec![Action::Show(ShowCue::Hit)],
@@ -465,6 +469,9 @@ mod tests {
         assert_eq!(b.handle(&button("deck.a.tempoRange", true), &at), vec![Action::CyclePitchRange(0)]);
         let browse = Event { id: "browse.turn".into(), kind: Kind::Encoder, value: -2.0 };
         assert_eq!(b.handle(&browse, &at), vec![Action::Browse(0, -2)]);
+        let press = |id: &str| Event { id: id.into(), kind: Kind::Button, value: 1.0 };
+        assert_eq!(b.handle(&press("browse.press"), &at), vec![Action::Browse(1, 0)], "into the playlist marked");
+        assert_eq!(b.handle(&press("browse.back"), &at), vec![Action::Browse(-1, 0)], "back to the tree");
     }
 
     #[test]

@@ -534,6 +534,16 @@ pub fn crossfader(ui: &mut Ui, p: &Painter, r: Rect, x: f32, id: impl std::hash:
     resp.dragged().then(|| (x + resp.drag_delta().x / track.width()).clamp(0.0, 1.0))
 }
 
+/// The crossfader off (both channels straight through): its track faint, no cap, the word.
+pub fn crossfader_off(p: &Painter, r: Rect) {
+    let track = Rect::from_center_size(r.center(), vec2(r.width() - 28.0, 4.0));
+    let line = alpha_of(col(theme::LINE), 0.45);
+    let (gap_l, gap_r) = (r.center().x - 22.0, r.center().x + 22.0);
+    p.rect_filled(Rect::from_min_max(track.min, pos2(gap_l, track.bottom())), CornerRadius::same(2), line);
+    p.rect_filled(Rect::from_min_max(pos2(gap_r, track.top()), track.max), CornerRadius::same(2), line);
+    text(p, r.center(), Align2::CENTER_CENTER, "OFF", 9.5, "semi", t::faint());
+}
+
 /// A level slider: a thin track, filled to the value, a small round cap; click or drag to set
 /// (0..1; the caller snaps it to steps). `on` false: drawn faint, still usable. A double click
 /// gives `rest`.

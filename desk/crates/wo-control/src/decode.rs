@@ -257,6 +257,9 @@ mod tests {
         assert_eq!(d.decode(&[0x99, 0x33, 0x7F])[0].id, "show.blackout");
         // the browser turned back one: two's complement
         assert_eq!(d.decode(&[0xB6, 0x40, 0x7F])[0].value, -1.0);
+        // the browser pressed: rekordbox's Library Forward; with SHIFT its Back
+        assert_eq!(d.decode(&[0x96, 0x41, 0x7F])[0].id, "browse.press");
+        assert_eq!(d.decode(&[0x96, 0x42, 0x7F])[0].id, "browse.back");
         // a note off as a note on of nothing
         assert!(!d.decode(&[0x91, 0x0B, 0x00])[0].pressed());
     }

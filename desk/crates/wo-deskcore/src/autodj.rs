@@ -438,9 +438,24 @@ impl Desk {
 
     /// A record a hand put on deck `d`: the Auto DJ plans with it and its choices leave
     /// it there.
+    /// Any deck, at any time, as rekordbox: onto a playing deck the record there stops and
+    /// the new one waits at its start; a move of the Auto DJ's through that deck stops
+    /// with the other deck left the master.
     pub fn load_by_hand(&mut self, d: usize, record: Record) {
         let title = record.title.clone();
+        if self.mix.as_ref().is_some_and(|m| m.from == d || m.to == d) {
+            let started = self.mix.as_ref().is_some_and(|m| m.started);
+            self.mix = None;
+            self.full_law = false;
+            if started {
+                self.note(LogKind::Hand, "The mix stopped: a record loaded onto one of its decks".to_owned());
+            }
+        }
+        if d == self.master && self.engine.deck(wo_engine::DeckId::new(1 - d).unwrap()).read().playing {
+            self.master = 1 - d;
+        }
         self.load(d, record);
+        self.apply_levels();
         self.mind.by_hand[d] = true;
         self.note(LogKind::Hand, format!("{title} on deck {} by hand", ["A", "B"][d]));
     }

@@ -176,6 +176,8 @@ pub struct Snapshot {
     /// The master's steady tempo (the pitch fader's, or sync's): not a hand's on it.
     pub master_bpm: f64,
     pub crossfader: f32,
+    /// The crossfader off: the channels straight through (`Desk::set_crossfader_off`).
+    pub crossfader_off: bool,
     pub mix: Option<MixView>,
     pub auto: bool,
     pub load: Load,
@@ -384,6 +386,11 @@ pub struct Desk {
     slots: [Slot; 2],
     master: usize,
     crossfader: f32,
+    /// The crossfader off (rekordbox's "crossfader: off"): both channels straight through,
+    /// only the channel faders mix; the hands' crossfader (screen, keys, controller) does
+    /// nothing. The Auto DJ's moves (while it is on) and following rekordbox still use it
+    /// inside.
+    crossfader_off: bool,
     rows: Vec<Record>,
     queue: Vec<Record>,
     next: usize,
@@ -593,6 +600,7 @@ impl Desk {
             covers: Default::default(),
             sticks: vec![],
             full_law: false,
+            crossfader_off: false,
             fx: Default::default(),
             recent: vec![],
             mind: Default::default(),
@@ -1144,7 +1152,7 @@ impl Desk {
                 peak_lr: lr,
                 peak: lr.0.max(lr.1),
                 audible: if st.playing {
-                    let (ga, gb) = transition::law(self.crossfader, self.full_law);
+                    let (ga, gb) = self.crossfader_gains();
                     (s.fader * s.fader * if i == 0 { ga } else { gb }).clamp(0.0, 1.0)
                 } else {
                     0.0
@@ -1213,6 +1221,7 @@ impl Desk {
         Snapshot {
             master_bpm,
             crossfader: self.crossfader,
+            crossfader_off: self.crossfader_off,
             mix: self.mix.as_ref().map(|m| {
                 let heard = self.engine.deck(DeckId::new(m.from).unwrap()).position();
                 MixView {
@@ -1503,6 +1512,31 @@ impl Desk {
     pub fn set_crossfader(&mut self, x: f32) {
         self.crossfader = x.clamp(0.0, 1.0);
         self.apply_levels();
+    }
+
+    /// The crossfader off (both channels through, the faders mix) or on again.
+    pub fn set_crossfader_off(&mut self, off: bool) {
+        if self.crossfader_off != off {
+            self.crossfader_off = off;
+            self.changes += 1;
+            self.apply_levels();
+        }
+    }
+
+    pub fn crossfader_off(&self) -> bool {
+        self.crossfader_off
+    }
+
+    /// A hand's crossfader (the screen's, the keys', a controller's): takes a running move
+    /// of the Auto DJ's over; nothing while the crossfader is off.
+    pub fn hand_crossfader(&mut self, x: f32) {
+        if self.crossfader_off {
+            return;
+        }
+        if self.mix.as_ref().is_some_and(|m| m.started) {
+            self.set_auto(false);
+        }
+        self.set_crossfader(x);
     }
 
     pub fn set_fader(&mut self, deck: usize, v: f32) {
@@ -2083,13 +2117,7 @@ impl Desk {
             A::LoopBeats(d, beats) => self.loop_beats(d, beats),
             A::Unloop(d) => self.unloop(d),
             A::Fx(h) => self.fx_hand(h),
-            A::Crossfader(x) => {
-                // a hand on the crossfader mid-mix takes the mix over
-                if self.mix.as_ref().is_some_and(|m| m.started) {
-                    self.set_auto(false);
-                }
-                self.set_crossfader(x);
-            }
+            A::Crossfader(x) => self.hand_crossfader(x),
             A::Headphones(d) => self.toggle_headphones(d),
             A::HeadMix(v) => self.set_head_mix(v),
             A::HeadLevel(v) => self.set_head_level(v),
@@ -2234,6 +2262,8 @@ impl Desk {
 
     pub fn set_auto(&mut self, on: bool) {
         self.auto = on;
+        // (the crossfader off: a move left half made hands the levels back to the faders)
+        self.apply_levels();
     }
 
     // ---- the stage
@@ -2388,12 +2418,19 @@ impl Desk {
             onset: f.onset,
         };
         let x = self.crossfader;
+        let thru = self.crossfader_bypassed();
         let deck = |i: usize| {
             let s = &self.slots[i];
             let id = DeckId::new(i).unwrap();
             let e = self.engine.deck(id);
             let st = e.read();
-            let g = if i == 0 { (2.0 * (1.0 - x)).min(1.0) } else { (2.0 * x).min(1.0) };
+            let g = if thru {
+                1.0
+            } else if i == 0 {
+                (2.0 * (1.0 - x)).min(1.0)
+            } else {
+                (2.0 * x).min(1.0)
+            };
             let eq = eq_db(s.eq);
             let k = (s.filter - 0.5) * 2.0;
             wo_wire::Deck {
@@ -2463,8 +2500,19 @@ impl Desk {
 
     // ---- inside
 
+    /// Whether the crossfader is left out now: off, and no move of the Auto DJ's running
+    /// nor rekordbox followed (those mix with it).
+    fn crossfader_bypassed(&self) -> bool {
+        self.crossfader_off && self.follow.is_none() && !(self.auto && self.mix.as_ref().is_some_and(|m| m.started))
+    }
+
+    /// The crossfader's gains on A and B now (both whole while it is left out).
+    fn crossfader_gains(&self) -> (f32, f32) {
+        if self.crossfader_bypassed() { (1.0, 1.0) } else { transition::law(self.crossfader, self.full_law) }
+    }
+
     fn apply_levels(&self) {
-        let (ga, gb) = transition::law(self.crossfader, self.full_law);
+        let (ga, gb) = self.crossfader_gains();
         for (d, g) in [(0, ga), (1, gb)] {
             let s = &self.slots[d];
             // the hands' gain (±12 dB) over the record brought to the house's loudness

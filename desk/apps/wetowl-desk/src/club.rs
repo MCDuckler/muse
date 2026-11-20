@@ -324,7 +324,7 @@ impl App {
         // a record dragged from the browser lands here
         if let Some(rec) = egui::DragAndDrop::payload::<Record>(&ctx) {
             let over = ctx.pointer_latest_pos().is_some_and(|pos| r.contains(pos));
-            let ok = !v.playing && rec.playable();
+            let ok = rec.playable();
             p.rect_stroke(r, CornerRadius::same(2), Stroke::new(if over && ok { 2.0 } else { 1.0 }, if ok { LIT } else { LINE }), StrokeKind::Inside);
             if over && ok && ctx.input(|i| i.pointer.any_released()) {
                 desk.load_by_hand(d, (*rec).clone());
@@ -794,9 +794,11 @@ impl App {
         let cf = Rect::from_center_size(pos2(r.center().x, y), vec2(220.0, 30.0));
         words(p, pos2(cf.left() - 8.0, y), Align2::RIGHT_CENTER, "1", 11.0, "semi", MUTED);
         words(p, pos2(cf.right() + 8.0, y), Align2::LEFT_CENTER, "2", 11.0, "semi", MUTED);
-        if let Some(x) = kit::crossfader(ui, p, cf, s.crossfader, "club-xf") {
+        if s.crossfader_off {
+            kit::crossfader_off(p, cf);
+        } else if let Some(x) = kit::crossfader(ui, p, cf, s.crossfader, "club-xf") {
             desk.set_auto(false);
-            desk.set_crossfader(x);
+            desk.hand_crossfader(x);
         }
         // the master: two horizontal meters, as rekordbox's Master Out
         let level = |pk: f32| (1.0 + 20.0 * pk.max(1e-6).log10() / 48.0).clamp(0.0, 1.0);

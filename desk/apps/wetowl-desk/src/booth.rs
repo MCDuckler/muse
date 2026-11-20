@@ -288,7 +288,7 @@ a click: following rekordbox")).clicked() {
         // a record dragged from the crate: this deck lights where it can take it
         if let Some(rec) = egui::DragAndDrop::payload::<Record>(&ctx) {
             let over = ctx.pointer_latest_pos().is_some_and(|pos| r.contains(pos));
-            let ok = !v.playing && rec.playable();
+            let ok = rec.playable();
             let k = motion::tween_bool(&ctx, ui.scope_id().with(("drop", d)), over && ok, 0.12, 0.12);
             p.rect_stroke(r, CornerRadius::same(t::R_PANEL), Stroke::new(1.0 + 1.5 * k, alpha_of(t::deck(d), if ok { 0.3 + 0.6 * k } else { 0.12 })), StrokeKind::Inside);
             if over && ok && ctx.input(|i| i.pointer.any_released()) {
@@ -730,9 +730,11 @@ a click: following rekordbox")).clicked() {
         let cf = Rect::from_min_max(pos2(inner.left() + 22.0, inner.bottom() - cf_h), pos2(inner.right() - 22.0, inner.bottom()));
         kit::deck_chip(p, pos2(inner.left() - 2.0, cf.center().y), 0);
         kit::deck_chip(p, pos2(inner.right() - 18.0, cf.center().y), 1);
-        if let Some(x) = kit::crossfader(ui, p, cf.shrink2(vec2(6.0, 0.0)), s.crossfader, "xf") {
+        if s.crossfader_off {
+            kit::crossfader_off(p, cf.shrink2(vec2(6.0, 0.0)));
+        } else if let Some(x) = kit::crossfader(ui, p, cf.shrink2(vec2(6.0, 0.0)), s.crossfader, "xf") {
             desk.set_auto(false);
-            desk.set_crossfader(x);
+            desk.hand_crossfader(x);
         }
     }
 
@@ -1204,20 +1206,22 @@ a click: following rekordbox")).clicked() {
                 });
             }
         }
-        // a controller's browse moves the cursor, its LOAD loads the row under it (never
-        // onto a deck that is playing)
+        // a controller's browse moves the cursor, its LOAD loads the row under it (onto any
+        // deck, playing or not, as rekordbox)
         let mut scroll_to = None;
         for a in desk.take_crate_actions() {
             match a {
-                wo_control::Action::Browse(_, dy) if !rows.is_empty() => {
-                    self.cursor = (self.cursor as i64 + dy as i64).clamp(0, rows.len() as i64 - 1) as usize;
-                    scroll_to = Some(self.cursor);
+                wo_control::Action::Browse(dx, dy) => {
+                    let dy = self.tree_browse(desk, dx, dy);
+                    if dy != 0 && !rows.is_empty() {
+                        self.cursor = (self.cursor as i64 + dy as i64).clamp(0, rows.len() as i64 - 1) as usize;
+                        scroll_to = Some(self.cursor);
+                    }
                 }
                 wo_control::Action::Load(d) => {
                     if let Some(row) = rows.get(self.cursor)
                         && row.record.playable()
                         && row.on_deck.is_none()
-                        && !s.decks[d].playing
                     {
                         desk.load_by_hand(d, row.record.clone());
                     }
@@ -1253,7 +1257,6 @@ a click: following rekordbox")).clicked() {
         let checked_ids: Vec<i64> = desk.library().checked.keys().copied().collect();
         let mut dismiss: Option<i64> = None;
         let mut uncheck: Option<i64> = None;
-        let free_decks: [bool; 2] = [!s.decks[0].playing, !s.decks[1].playing];
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
         // a row's pitch: its height and the gap egui leaves under it (show_rows lays the
         // rows out so) — the cursor's highlight, placed by ROW alone, crept 3 px a row
@@ -1377,7 +1380,7 @@ a click: following rekordbox")).clicked() {
                         });
                     }
                     for d in 0..2 {
-                        if ui.add_enabled(playable && free_decks[d], egui::Button::new(format!("On deck {}", ["A", "B"][d]))).clicked() {
+                        if ui.add_enabled(playable, egui::Button::new(format!("On deck {}", ["A", "B"][d]))).clicked() {
                             load_on = Some((d, rec.clone()));
                             from = Some(sl);
                             ui.close();
@@ -1455,17 +1458,14 @@ a click: following rekordbox")).clicked() {
         if near_end {
             desk.more_rows();
         }
-        if let Some(rec) = load
-            && s.mix.is_none()
-        {
+        if let Some(rec) = load {
+            // the deck not the master's, playing or not
             let free = s.decks.iter().position(|d| !d.master).unwrap_or(1);
-            if !s.decks[free].playing {
-                self.toasts.say(format!("{} on deck {}", rec.title, ["A", "B"][free]), Tone::Deck(free));
-                if let Some(f) = from {
-                    self.flights.push((rec.clone(), f, free, std::time::Instant::now()));
-                }
-                desk.load_by_hand(free, rec);
+            self.toasts.say(format!("{} on deck {}", rec.title, ["A", "B"][free]), Tone::Deck(free));
+            if let Some(f) = from {
+                self.flights.push((rec.clone(), f, free, std::time::Instant::now()));
             }
+            desk.load_by_hand(free, rec);
         }
     }
 
@@ -1524,9 +1524,74 @@ a click: following rekordbox")).clicked() {
 
     /// The crate's left column: the house's shelves, or the sign-in; the rekordbox sticks
     /// plugged in either way.
+    /// The tree's rows as drawn this frame, for a controller's browse: the mark kept on its
+    /// row and shown; where the playlists scroll to show it (once, after it moved).
+    fn tree_rows(&mut self, ctx: &egui::Context, rows: Vec<(i64, TreeEntry)>, fixed: usize, height: f32) -> Option<f32> {
+        let b = &mut self.tree;
+        b.rows = rows;
+        b.fixed = fixed;
+        b.at = b.at.min(b.rows.len().saturating_sub(1));
+        if b.rows.is_empty() {
+            b.on = false;
+        }
+        let mark = b.on.then(|| b.rows.get(b.at).map(|r| r.0)).flatten();
+        ctx.data_mut(|d| match mark {
+            Some(id) => {
+                d.insert_temp(tree_mark_id(), id);
+            }
+            None => d.remove::<i64>(tree_mark_id()),
+        });
+        let b = &mut self.tree;
+        if !std::mem::take(&mut b.scroll) || b.at < fixed {
+            return None;
+        }
+        // the mark in the middle of the playlists
+        Some(((b.at - fixed) as f32 * 28.0 + 14.0 - height / 2.0).max(0.0))
+    }
+
+    /// A controller's browse: SHIFT + press (−1, 0) the tree, a press (1, 0) opens the row
+    /// marked there, a turn (0, dy) moves along the tree or the rows. Returns the rows' turn.
+    pub(crate) fn tree_browse(&mut self, desk: &mut Desk, dx: i32, dy: i32) -> i32 {
+        let b = &mut self.tree;
+        if dx < 0 && !b.rows.is_empty() {
+            // back to the tree, marked on the shelf open
+            if !b.on {
+                let open = desk.library().shelf.clone();
+                b.at = b.rows.iter().position(|(_, e)| matches!(e, TreeEntry::Open(s) if *s == open)).unwrap_or(b.at);
+                b.on = true;
+                b.scroll = true;
+            }
+            return 0;
+        }
+        if dx > 0 && b.on {
+            b.on = false;
+            match b.rows.get(b.at).map(|r| r.1.clone()) {
+                Some(TreeEntry::Open(s)) => {
+                    self.search.clear();
+                    self.searched.clear();
+                    self.cursor = 0;
+                    desk.open_shelf(s);
+                }
+                Some(TreeEntry::Fits) => self.fits_asked = true,
+                Some(TreeEntry::Similar) => self.similar_asked = Some(self.similar_fresh),
+                None => {}
+            }
+            return 0;
+        }
+        if b.on {
+            if dy != 0 && !b.rows.is_empty() {
+                b.at = (b.at as i64 + dy as i64).clamp(0, b.rows.len() as i64 - 1) as usize;
+                b.scroll = true;
+            }
+            return 0;
+        }
+        dy
+    }
+
     fn shelves(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, tree: Rect) {
         let Some((server, user)) = desk.house().map(|(s, u)| (s.to_owned(), u.map(str::to_owned))) else {
             if desk.library().sticks.is_empty() || self.usb_sign_in {
+                self.tree_rows(&ui.ctx().clone(), vec![], 0, 0.0);
                 return self.sign_in(desk, ui, p, tree);
             }
             return self.stick_shelves(desk, ui, p, tree);
@@ -1560,8 +1625,15 @@ a click: following rekordbox")).clicked() {
         let list = Rect::from_min_max(pos2(tree.left(), tree.top() + 204.0), pos2(tree.right(), tree.bottom() - 46.0));
         // the sticks' shelves first (each stick, then its playlists), then the house's
         let usb = stick_entries(&sticks);
+        // the tree's rows in order, for a controller's browse
+        let mut rows = vec![(-1, TreeEntry::Open(Shelf::All)), (-2, TreeEntry::Fits), (-3, TreeEntry::Open(Shelf::Queue)), (-4, TreeEntry::Similar), (-5, TreeEntry::Open(Shelf::Check))];
+        rows.extend(usb.iter().map(|e| (e.id, TreeEntry::Open(e.shelf.clone()))));
+        rows.extend(lists.iter().map(|l| (l.id, TreeEntry::Open(Shelf::Playlist { id: l.id, name: l.name.clone() }))));
+        let scroll = self.tree_rows(&ctx, rows, 5, list.height());
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
-        egui::ScrollArea::vertical().id_salt("playlists").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0)).show_rows(&mut child, 28.0, usb.len() + lists.len(), |ui, range| {
+        let area = egui::ScrollArea::vertical().id_salt("playlists").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0));
+        let area = if let Some(y) = scroll { area.vertical_scroll_offset(y) } else { area };
+        area.show_rows(&mut child, 28.0, usb.len() + lists.len(), |ui, range| {
             for i in range {
                 let (rr, _) = ui.allocate_exact_size(vec2(list.width(), 28.0), Sense::hover());
                 if let Some(e) = usb.get(i) {
@@ -1616,9 +1688,12 @@ a click: following rekordbox")).clicked() {
         kit::section(p, pos2(tree.left() + 18.0, tree.top() + 16.0), Align2::LEFT_TOP, "USB");
         let list = Rect::from_min_max(pos2(tree.left(), tree.top() + 34.0), pos2(tree.right(), tree.bottom() - 46.0));
         let usb = stick_entries(&sticks);
+        let scroll = self.tree_rows(&ctx, usb.iter().map(|e| (e.id, TreeEntry::Open(e.shelf.clone()))).collect(), 0, list.height());
         let mut open = None;
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
-        egui::ScrollArea::vertical().id_salt("sticks").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0)).show_rows(&mut child, 28.0, usb.len(), |ui, range| {
+        let area = egui::ScrollArea::vertical().id_salt("sticks").auto_shrink([false, false]).min_scrolled_height(0.0).max_height(list.height().max(0.0));
+        let area = if let Some(y) = scroll { area.vertical_scroll_offset(y) } else { area };
+        area.show_rows(&mut child, 28.0, usb.len(), |ui, range| {
             for e in &usb[range] {
                 let (rr, _) = ui.allocate_exact_size(vec2(list.width(), 28.0), Sense::hover());
                 if stick_row(ui, &ctx, tree, rr, e, &shelf) {
@@ -2069,6 +2144,10 @@ fn shelf_row(ui: &mut Ui, ctx: &egui::Context, tree: Rect, y: f32, name: &str, n
             p.rect_filled(Rect::from_min_size(pos2(rr.left() + 1.0, rr.top() + 8.0), vec2(2.5, rr.height() - 16.0)), CornerRadius::same(1), alpha_of(t::soft(), o));
         }
     }
+    // a controller's browse is on this row of the tree
+    if ctx.data(|d| d.get_temp::<i64>(tree_mark_id())) == Some(id) {
+        p.rect_stroke(rr.shrink(1.0), CornerRadius::same(t::R_CONTROL), Stroke::new(1.5, t::high()), StrokeKind::Inside);
+    }
     let ink = mix(Color32::from_rgb(0xB9, 0xBC, 0xC4), t::text(), o.max(h));
     kit::clipped(&p, pos2(rr.left() + 12.0 + indent, rr.center().y), name, if t::club() { 12.0 } else { 13.0 }, "", ink, rr.width() - 60.0 - indent);
     kit::text(&p, pos2(rr.right() - 8.0, rr.center().y), Align2::RIGHT_CENTER, &n, 11.0, "mono", t::faint());
@@ -2258,4 +2337,33 @@ fn place_chip(p: &Painter, left_center: egui::Pos2, place: &str) {
     let r = Rect::from_min_size(pos2(left_center.x, left_center.y - 9.0), vec2(g.size().x + 10.0, 18.0));
     p.rect(r, CornerRadius::same(4), alpha_of(c, 0.14), Stroke::new(1.0, alpha_of(c, 0.45)), StrokeKind::Inside);
     p.galley(r.center() - g.size() / 2.0, g, c);
+}
+
+/// What a row of the crate's tree opens, for a controller's browse.
+#[derive(Clone, Debug)]
+pub(crate) enum TreeEntry {
+    Open(Shelf),
+    Fits,
+    Similar,
+}
+
+/// A controller's browse in the crate's tree (rekordbox's DDJ: SHIFT + press the knob is
+/// back to the tree, turning moves along it, a press opens the one marked).
+#[derive(Default)]
+pub(crate) struct TreeBrowse {
+    /// The knob is in the tree, not the rows.
+    pub on: bool,
+    /// The row marked.
+    pub at: usize,
+    /// The tree's rows as last drawn, in order: each one's id (`shelf_row`'s) and what it opens.
+    pub rows: Vec<(i64, TreeEntry)>,
+    /// How many of `rows` sit above the scrolling playlists (the house's own shelves).
+    pub fixed: usize,
+    /// The playlists scrolled to show the mark, once.
+    pub scroll: bool,
+}
+
+/// The tree's row marked for a controller (its id), kept in egui's memory for `shelf_row`.
+fn tree_mark_id() -> egui::Id {
+    egui::Id::unique("crate-tree-mark")
 }
