@@ -9,6 +9,6 @@ pub mod steps;
 pub mod taste;
 
 pub use grid::Grid;
-pub use hands::{Hands, NUDGE, Pad, PadKind, RANGES, Transport};
+pub use hands::{DEFAULT_RANGE, Hands, NUDGE, Pad, PadKind, RANGES, RATE_MIN, Transport, range_name};
 pub use mix::{Style, Timing, Transition};
 pub use steps::{EqSet, Levels, Part, Side, Step};

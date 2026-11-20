@@ -324,9 +324,14 @@ mod tests {
     fn the_ddj_400_reads() {
         let ddj = bundled().into_iter().find(|l| l.id == "pioneer_ddj_400_midi").unwrap();
         assert!(ddj.names_match("DDJ-400:DDJ-400 MIDI 1 24:0") && ddj.names_match("DDJ-400") && !ddj.names_match("DDJ-FLX4"));
-        let pitch = ddj.inputs.iter().find(|i| i.id == "deck.b.pitch").unwrap();
-        assert_eq!((pitch.channel, pitch.cc, pitch.lsb, pitch.max, pitch.invert), (Some(1), Some(0x00), Some(0x20), 0x3FFF, true));
-        assert_eq!(pitch.position(0x2000), 0.5);
+        // TEMPO: 0 at the top, so not inverted (toward you is faster); SHIFT's on CC 0x05
+        let pitches: Vec<_> = ddj.inputs.iter().filter(|i| i.id == "deck.b.pitch").collect();
+        let shapes: Vec<_> = pitches.iter().map(|p| (p.channel, p.cc, p.lsb, p.max, p.invert)).collect();
+        assert_eq!(shapes, [(Some(1), Some(0x00), Some(0x20), 0x3FFF, false), (Some(1), Some(0x05), Some(0x25), 0x3FFF, false)]);
+        assert_eq!(pitches[0].position(0x2000), 0.5);
+        assert_eq!((pitches[0].position(0), pitches[0].position(0x3FFF)), (0.0, 1.0), "the top slowest, the bottom fastest");
+        let search = ddj.inputs.iter().find(|i| i.id == "deck.a.jog.search").unwrap();
+        assert_eq!((search.cc, search.encoding.as_deref()), (Some(0x29), Some("offset64")));
         let jog = ddj.inputs.iter().find(|i| i.id == "deck.a.jog.scratch").unwrap();
         assert_eq!((jog.encoding.as_deref(), jog.per_turn), (Some("offset64"), Some(720.0)));
         assert!(ddj.outputs.iter().any(|o| o.id == "deck.a.meter" && o.meter));

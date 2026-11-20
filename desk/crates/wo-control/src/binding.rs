@@ -1,8 +1,10 @@
 //! One binding for every controller (the v1 booth's, binding.dart): a control's event
 //! as what the booth should do. STOP held is shift (a SHIFT button is too, and only that);
-//! SCRATCH flips the jog wheel (a platter's touched top always scratches); the knob over a
-//! Hercules's fader is the filter; pads 1–4 are hot cues, 5 and 6 loop in and out; shift +
-//! pitch reset cycles the pitch range. Controllers with more say it by name: hot cues 1–8,
+//! SCRATCH flips the jog wheel (a platter's touched top always scratches; a platter that
+//! says it is searching, the DDJ's SHIFT + top, searches); the knob over a Hercules's fader
+//! is the filter; pads 1–4 are hot cues, 5 and 6 loop in and out; shift + pitch reset
+//! cycles both decks' pitch ranges, a TEMPO RANGE button (the DDJ's SHIFT + BEAT SYNC) its
+//! own deck's, the slider then across the new range. Controllers with more say it by name: hot cues 1–8,
 //! beat loops and jumps of so many beats, the loop buttons, a trim, a filter, a browse knob,
 //! an FX section (the echo). Knobs and faders take over only once they reach where the
 //! booth is (soft takeover).
@@ -38,7 +40,8 @@ pub enum Action {
     Sync(usize),
     Keylock(usize),
     PitchReset(usize),
-    CyclePitchRange,
+    /// The deck's pitch range, the next one (the rate kept).
+    CyclePitchRange(usize),
     /// The pitch fader, -1..1 of the deck's range.
     Pitch(usize, f64),
     /// `ticks` as the booth counts them (128 a turn); `shift`: searching.
@@ -140,6 +143,11 @@ impl SoftTakeover {
     pub fn drop(&mut self, id: &str) {
         self.last_hw.remove(id);
         self.taken.remove(id);
+    }
+
+    /// Where the hardware's `id` is, if it has taken over (it is where the booth is).
+    pub fn held(&self, id: &str) -> Option<f64> {
+        if self.taken.get(id) == Some(&true) { self.last_hw.get(id).copied() } else { None }
     }
 
     /// Whether `id` has been heard and is not (or no longer) taken.
@@ -274,7 +282,7 @@ impl Binding {
                 if shift {
                     self.takeover.drop("deck.a.pitch");
                     self.takeover.drop("deck.b.pitch");
-                    vec![Action::CyclePitchRange]
+                    vec![Action::CyclePitchRange(0), Action::CyclePitchRange(1)]
                 } else {
                     vec![Action::PitchReset(d)]
                 }
@@ -282,10 +290,16 @@ impl Binding {
             "pitch" if self.take(e, (at.pitch[d] + 1.0) / 2.0) => vec![Action::Pitch(d, (e.value - 0.5) * 2.0)],
             "jog" => vec![Action::Jog { deck: d, ticks: e.value, scratch: self.scratch, shift }],
             "jog.scratch" => vec![Action::Jog { deck: d, ticks: e.value, scratch: true, shift }],
+            // the controller's own SHIFT + platter (the DDJ's): a search whatever we think of shift
+            "jog.search" => vec![Action::Jog { deck: d, ticks: e.value, scratch: false, shift: true }],
+            // as rekordbox: this deck's range, and the slider (where it has taken over) across
+            // it at once — the rate is where the slider is in the new range
             "tempoRange" if pressed => {
-                self.takeover.drop("deck.a.pitch");
-                self.takeover.drop("deck.b.pitch");
-                vec![Action::CyclePitchRange]
+                let id = format!("deck.{}.pitch", if d == 0 { 'a' } else { 'b' });
+                match self.takeover.held(&id) {
+                    Some(hw) => vec![Action::CyclePitchRange(d), Action::Pitch(d, (hw - 0.5) * 2.0)],
+                    None => vec![Action::CyclePitchRange(d)],
+                }
             }
             "trim" if self.take(e, at.gain[d] as f64) => {
                 let v = if (e.value - 0.5).abs() < 0.012 { 0.5 } else { e.value };
@@ -448,7 +462,7 @@ mod tests {
         assert_eq!(b.handle(&button("deck.b.beatjump.-8", true), &at), vec![Action::Jump(1, -8.0)]);
         assert_eq!(b.handle(&button("deck.a.loop.exit", true), &at), vec![Action::Unloop(0)]);
         assert_eq!(b.handle(&button("deck.a.loop.double", true), &at), vec![Action::DoubleLoop(0)]);
-        assert_eq!(b.handle(&button("deck.a.tempoRange", true), &at), vec![Action::CyclePitchRange]);
+        assert_eq!(b.handle(&button("deck.a.tempoRange", true), &at), vec![Action::CyclePitchRange(0)]);
         let browse = Event { id: "browse.turn".into(), kind: Kind::Encoder, value: -2.0 };
         assert_eq!(b.handle(&browse, &at), vec![Action::Browse(0, -2)]);
     }
@@ -492,6 +506,33 @@ mod tests {
         b.handle(&button("deck.b.shift", true), &at);
         assert_eq!(b.handle(&jog("deck.a.jog"), &at), vec![Action::Jog { deck: 0, ticks: 2.0, scratch: false, shift: true }], "SHIFT: search");
         assert!(b.handle(&button("deck.a.jog.touch", true), &at).is_empty());
+    }
+
+    #[test]
+    fn the_ddj_s_shift_and_platter_searches() {
+        let (mut b, at) = (Binding::default(), Positions::default());
+        let search = Event { id: "deck.b.jog.search".into(), kind: Kind::Jog, value: -4.0 };
+        assert_eq!(b.handle(&search, &at), vec![Action::Jog { deck: 1, ticks: -4.0, scratch: false, shift: true }], "a search, though no SHIFT was heard");
+    }
+
+    /// The DDJ-400's SHIFT + BEAT SYNC: its own deck's range, the slider (taken over) then
+    /// across the new range; one far from the booth's still waits.
+    #[test]
+    fn tempo_range_is_the_deck_s_and_the_slider_follows() {
+        let mut b = Binding::default();
+        let mut at = Positions::default();
+        let slider = |id: &str, v: f64| Event { id: id.into(), kind: Kind::Fader, value: v };
+        assert_eq!(b.handle(&slider("deck.a.pitch", 0.5), &at), vec![Action::Pitch(0, 0.0)]);
+        assert_eq!(b.handle(&slider("deck.a.pitch", 0.75), &at), vec![Action::Pitch(0, 0.5)], "toward you: faster");
+        at.pitch[0] = 0.5;
+        assert_eq!(b.handle(&button("deck.a.tempoRange", true), &at), vec![Action::CyclePitchRange(0), Action::Pitch(0, 0.5)]);
+        assert!(b.handle(&button("deck.a.tempoRange", false), &at).is_empty());
+        // B's slider far from the booth's: the range alone, the rate kept
+        assert!(b.handle(&slider("deck.b.pitch", 0.9), &at).is_empty());
+        assert_eq!(b.handle(&button("deck.b.tempoRange", true), &at), vec![Action::CyclePitchRange(1)]);
+        // the RMX's shift + pitch reset: both decks
+        b.handle(&button("deck.a.stop", true), &at);
+        assert_eq!(b.handle(&button("deck.a.pitchReset", true), &at), vec![Action::CyclePitchRange(0), Action::CyclePitchRange(1)]);
     }
 
     #[test]

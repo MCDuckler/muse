@@ -77,6 +77,21 @@ fn the_ddj_400_plays_the_booth() {
     assert!(shifts.len() == 2 && shifts.iter().all(|l| l.did.is_empty()), "SHIFT down and up, and nothing done for either (no STOP): {shifts:?}");
     assert!(d.snapshot().decks[1].playing, "still playing");
 
+    // B's TEMPO, as rekordbox: from the middle toward you is faster; SHIFT + BEAT SYNC is
+    // B's next range (±10 → ±16 %) alone, the slider then across it
+    send(&[0xB1, 0x00, 0x40]);
+    send(&[0xB1, 0x20, 0x00]);
+    send(&[0xB1, 0x00, 0x60]);
+    send(&[0xB1, 0x20, 0x00]);
+    assert!(until(&mut d, 1.0, |d| (d.snapshot().decks[1].pitch - 0.5).abs() < 0.01), "toward you: + {}", d.snapshot().decks[1].pitch);
+    send(&[0x91, 0x3F, 0x7F]);
+    send(&[0x91, 0x60, 0x7F]);
+    send(&[0x91, 0x60, 0x00]);
+    send(&[0x91, 0x3F, 0x00]);
+    assert!(until(&mut d, 1.0, |d| d.snapshot().decks[1].range == 0.16), "SHIFT + BEAT SYNC: {}", d.snapshot().decks[1].range);
+    let s = d.snapshot();
+    assert!((s.decks[1].pitch - 0.5).abs() < 0.01 && s.decks[0].range == 0.10, "the slider across B's new range, A's kept: {} {}", s.decks[1].pitch, s.decks[0].range);
+
     // the BEAT LOOP pad for 4 beats, then the same again lets go
     send(&[0x99, 0x64, 0x7F]);
     send(&[0x99, 0x64, 0x00]);

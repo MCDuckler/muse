@@ -581,11 +581,12 @@ a click: following rekordbox")).clicked() {
     }
 
     /// The pitch fader: Technics way round (up is slower), a detent mark at the centre,
-    /// double-click centres; the range above it cycles ±8 / 16 / 50.
+    /// double-click centres; the range above it cycles rekordbox's ±6 / 10 / 16 / WIDE (as a
+    /// DDJ's SHIFT + BEAT SYNC).
     pub(crate) fn pitch(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
         let v = &s.decks[d];
         let range = Rect::from_min_size(pos2(r.left() + 2.0, r.top()), vec2(r.width() - 4.0, 20.0));
-        if kit::chip(ui, p, range, &format!("±{:.0}", v.range * 100.0), false, Tone::Neutral, true, (d, "range")).on_hover_text("The fader's range").clicked() {
+        if kit::chip(ui, p, range, &wo_deskcore::range_name(v.range).replace('%', ""), false, Tone::Neutral, true, (d, "range")).on_hover_text("The fader's range: ±6 %, ±10 %, ±16 % or WIDE (±100 %)").clicked() {
             desk.cycle_range(d);
         }
         let pf = Rect::from_min_max(pos2(r.left(), range.bottom() + 12.0), pos2(r.right(), r.bottom() - 22.0));

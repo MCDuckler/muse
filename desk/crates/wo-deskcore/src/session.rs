@@ -26,6 +26,9 @@ pub struct DeckSession {
     pub playing: bool,
     /// The pitch fader, -1..1, and the channel fader and gain.
     pub pitch: f64,
+    /// The pitch fader's range, an index into [crate::RANGES] (kept before it was: the default).
+    #[serde(default)]
+    pub range: Option<usize>,
     pub fader: f32,
     pub gain: f32,
 }
@@ -75,7 +78,7 @@ impl crate::Desk {
             .map(|d| {
                 let st = self.engine.deck(wo_engine::DeckId::new(d).unwrap()).read();
                 let s = &self.slots[d];
-                DeckSession { record: s.record.clone(), position: self.engine.deck(wo_engine::DeckId::new(d).unwrap()).position(), playing: st.playing, pitch: s.hands.pitch, fader: s.fader, gain: s.gain }
+                DeckSession { record: s.record.clone(), position: self.engine.deck(wo_engine::DeckId::new(d).unwrap()).position(), playing: st.playing, pitch: s.hands.pitch, range: Some(s.hands.range), fader: s.fader, gain: s.gain }
             })
             .collect();
         Session { at: now_secs(), live, master: self.master, crossfader: self.crossfader, auto: self.auto, decks, queue: self.hand_queue.clone() }
@@ -140,6 +143,9 @@ impl crate::Desk {
                 continue;
             }
             self.load(d, ds.record.clone());
+            if let Some(r) = ds.range {
+                self.set_range(d, r);
+            }
             self.set_pitch(d, ds.pitch);
             self.set_fader(d, ds.fader);
             self.set_gain(d, ds.gain);

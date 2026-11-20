@@ -222,7 +222,14 @@ mod tests {
         assert_eq!((e[0].id.as_str(), e[0].value), ("deck.b.pitch", 0.5));
         d.decode(&[0xB1, 0x00, 0x00]);
         let e = d.decode(&[0xB1, 0x20, 0x00]);
-        assert_eq!(e[0].value, 1.0, "all the way down (0) is the fastest: inverted");
+        assert_eq!(e[0].value, 0.0, "all the way up (0) is the slowest, as rekordbox");
+        d.decode(&[0xB1, 0x00, 0x7F]);
+        assert_eq!(d.decode(&[0xB1, 0x20, 0x7F])[0].value, 1.0, "all the way toward you the fastest");
+        // with SHIFT held the slider sends on CC 0x05/0x25: the same TEMPO
+        d.decode(&[0xB0, 0x05, 0x60]);
+        let e = d.decode(&[0xB0, 0x25, 0x00]);
+        assert_eq!(e[0].id, "deck.a.pitch");
+        assert!((e[0].value - 0.75).abs() < 1e-3, "{}", e[0].value);
         // the channel fader: 14 bits across 0..1
         d.decode(&[0xB0, 0x13, 0x7F]);
         let e = d.decode(&[0xB0, 0x33, 0x7F]);
@@ -235,6 +242,12 @@ mod tests {
         assert_eq!((e[0].id.as_str(), e[0].kind, e[0].value), ("deck.a.jog.scratch", Kind::Jog, 8.0));
         assert_eq!(d.decode(&[0xB0, 0x21, 0x40 - 45])[0].value, -8.0, "the side, backwards");
         assert!(d.decode(&[0xB0, 0x23, 0x40]).is_empty(), "no turn");
+        assert_eq!(d.decode(&[0xB0, 0x23, 0x40 + 45])[0].id, "deck.a.jog", "the top spun untouched: as the side");
+        // SHIFT + the top: rekordbox's JogSearch
+        let e = d.decode(&[0xB1, 0x29, 0x40 - 45]);
+        assert_eq!((e[0].id.as_str(), e[0].value), ("deck.b.jog.search", -8.0));
+        // SHIFT + BEAT SYNC: TEMPO RANGE
+        assert!(d.decode(&[0x91, 0x60, 0x7F])[0].pressed() && d.decode(&[0x91, 0x60, 0x7F])[0].id == "deck.b.tempoRange");
         // SHIFT is a control; its pads come on their own channel as the same hot cue
         assert!(d.decode(&[0x90, 0x3F, 0x7F])[0].pressed());
         let shifted = d.decode(&[0x98, 0x04, 0x7F]);

@@ -65,10 +65,19 @@ pub use wo_show::Mix as ShowMix;
 pub use wo_show::scenes::DRAWN as RUST_SCENES;
 pub use stage::{Hand as ShowHand, StageView, Thumb};
 pub use transition::{bass_swap_bar, law, levels_at as mix_levels_at};
-pub use wo_booth::{Grid, Hands, Pad, PadKind, RANGES, Style, Timing, Transition, Transport};
+pub use wo_booth::{Grid, Hands, Pad, PadKind, RANGES, Style, Timing, Transition, Transport, range_name};
 pub use wo_engine::Load;
 
 const RATE: u32 = 48_000;
+
+/// Seconds of the record a turn of the jog wheel searches with SHIFT held (the DDJ's SHIFT +
+/// the top, rekordbox's fast search): a quarter turn is half a minute.
+pub const SEARCH_A_TURN: f64 = 120.0;
+
+/// Seconds of a parked record a turn of the jog's side nudges it: a third of what a hand on
+/// the platter's top moves it ([scratch::SECONDS_A_TICK], vinyl at 33⅓), so the top moves
+/// the record more than the side.
+pub const NUDGE_A_TURN: f64 = 0.6;
 /// Bars the Auto DJ's blend takes, and the bar its bass swap lands on.
 /// How far ahead of a transition's out point the next record is started (the engine
 /// then starts it sample-exactly on the point).
@@ -795,6 +804,8 @@ impl Desk {
         }
         let timing = self.timing_of(&record, hands.grid.clone());
         let s = &mut self.slots[slot];
+        // the deck's pitch range is the deck's, whatever is on it (as rekordbox)
+        hands.range = s.hands.range;
         s.record = record;
         s.hands = hands;
         s.timing = timing;
@@ -1650,6 +1661,11 @@ impl Desk {
         self.hands(d, |h, t| h.cycle_range(t));
     }
 
+    /// Deck `d`'s pitch range, an index into [RANGES] (the rate kept).
+    pub fn set_range(&mut self, d: usize, range: usize) {
+        self.hands(d, |h, t| h.set_range(range, t));
+    }
+
     /// A nudge held (-1, 1) or let go (0).
     pub fn nudge(&mut self, d: usize, dir: i8) {
         self.hands(d, |h, t| h.nudge(dir, t));
@@ -1875,6 +1891,7 @@ impl Desk {
                     hands.place_auto(&a.auto);
                     hands.cue = a.cue;
                     let s = &mut self.slots[slot];
+                    hands.range = s.hands.range;
                     s.hands = hands;
                     s.hands.quantize = self.quantize;
                     s.timing = a.timing;
@@ -1963,6 +1980,12 @@ impl Desk {
         }
     }
 
+    /// Rings each time a controller says something (none without controllers): the clock
+    /// waits on it, so a press is acted on at once rather than on the next tick.
+    pub fn doorbell(&self) -> Option<Arc<wo_control::Doorbell>> {
+        self.controls.as_ref().map(|c| c.doorbell())
+    }
+
     /// What the controllers asked of the crate since the last call (browse, load).
     pub fn take_crate_actions(&mut self) -> Vec<wo_control::Action> {
         std::mem::take(&mut self.for_the_crate)
@@ -2042,10 +2065,7 @@ impl Desk {
             A::Sync(d) => self.toggle_sync(d),
             A::Keylock(d) => self.toggle_keylock(d),
             A::PitchReset(d) => self.set_pitch(d, 0.0),
-            A::CyclePitchRange => {
-                self.cycle_range(0);
-                self.cycle_range(1);
-            }
+            A::CyclePitchRange(d) => self.cycle_range(d),
             A::Pitch(d, v) => self.set_pitch(d, v),
             A::Jog { deck, ticks, scratch, shift } => self.jog(deck, ticks, scratch, shift),
             A::Jump(d, beats) => self.jump(d, beats),
@@ -2095,14 +2115,16 @@ impl Desk {
         self.set_eq(d, band, v);
     }
 
-    /// The jog wheel turned `ticks` (128 a turn): a parked record is moved (20 ms a tick);
-    /// with shift any record is searched (250 ms a tick); a playing one bends with the
-    /// speed of the hand (much harder in scratch) — the speed over the last few tens of
-    /// milliseconds, however often the wheel reports.
+    /// The jog wheel turned `ticks` (128 a turn), as rekordbox on a DDJ: with shift any
+    /// record is searched, fast ([SEARCH_A_TURN]); a parked record is nudged, finely
+    /// ([NUDGE_A_TURN], less than a hand on the platter's top moves it); a playing one
+    /// bends with the speed of the hand (much harder in scratch) — the speed over the last
+    /// few tens of milliseconds, however often the wheel reports.
     pub fn jog(&mut self, d: usize, ticks: f64, scratch: bool, shift: bool) {
         let deck = self.engine.deck(DeckId::new(d).unwrap());
         if shift || !deck.read().playing {
-            deck.seek((deck.position() + ticks * if shift { 0.25 } else { 0.02 }).max(0.0));
+            let a_turn = if shift { SEARCH_A_TURN } else { NUDGE_A_TURN };
+            deck.seek((deck.position() + ticks * a_turn / wo_control::layout::JOG_TICKS).max(0.0));
             return;
         }
         let now = Instant::now();

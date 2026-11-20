@@ -70,15 +70,47 @@ fn the_booths_hands_reach_the_engine() {
     let after = d.snapshot().decks[0].heard;
     assert!((after - before - 4.0 * spb).abs() < 0.3, "jumped {:.3} s, wanted {:.3}", after - before, 4.0 * spb);
 
-    // Pitch: half the ±8 % range is 4 % faster, the engine's rate with it.
+    // Pitch: half the ±10 % range (rekordbox's to begin with) is 5 % faster, the engine's
+    // rate with it; the next range (±16 %) keeps the rate, on A alone.
     d.set_pitch(0, 0.5);
     settle();
     let rate = d.snapshot().decks[0].rate;
-    assert!((rate - 1.04).abs() < 0.002, "rate {rate}");
+    assert!((rate - 1.05).abs() < 0.002, "rate {rate}");
+    d.cycle_range(0);
+    settle();
+    let s = d.snapshot();
+    assert!(s.decks[0].range == 0.16 && s.decks[1].range == 0.10, "A's range moved alone: {} {}", s.decks[0].range, s.decks[1].range);
+    assert!((s.decks[0].rate - 1.05).abs() < 0.002, "rate kept {}", s.decks[0].rate);
 
     // CUE on the playing deck: it stops.
     d.cue_down(0);
     d.cue_up(0);
     settle();
     assert!(!d.snapshot().decks[0].playing, "CUE stops a playing deck");
+
+    // The jog wheel on the parked deck, as rekordbox on a DDJ-400: a turn of its side
+    // nudges the record finely; a hand turning the platter's top a turn moves it more
+    // (vinyl at 33⅓); SHIFT + a quarter turn searches half a minute on.
+    let heard = |d: &Desk| d.snapshot().decks[0].heard;
+    let p0 = heard(&d);
+    d.jog(0, 128.0, false, false);
+    settle();
+    let side = heard(&d) - p0;
+    assert!((side - wo_deskcore::NUDGE_A_TURN).abs() < 0.02, "a turn of the side: {side} s");
+    let p1 = heard(&d);
+    d.scratch(0, true);
+    d.scratch_by(0, 128.0 * wo_deskcore::scratch::SECONDS_A_TICK);
+    let t0 = Instant::now();
+    while heard(&d) - p1 < 1.7 && t0.elapsed() < Duration::from_secs(2) {
+        sleep(Duration::from_millis(20));
+    }
+    d.scratch(0, false);
+    settle();
+    let top = heard(&d) - p1;
+    assert!(top > 2.0 * side && !d.snapshot().decks[0].playing, "a turn of the top ({top} s) is more than one of the side ({side} s), and it stays parked");
+    let p2 = heard(&d);
+    d.jog(0, 32.0, false, true);
+    settle();
+    let search = heard(&d) - p2;
+    assert!((search - wo_deskcore::SEARCH_A_TURN / 4.0).abs() < 0.05, "SHIFT + a quarter turn: {search} s");
 }

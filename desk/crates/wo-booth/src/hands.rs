@@ -32,8 +32,20 @@ pub struct Pad {
     pub auto: Option<PadKind>,
 }
 
-/// The pitch fader's ranges, cycled by its label: ±8 %, ±16 %, ±50 %.
-pub const RANGES: [f64; 3] = [0.08, 0.16, 0.5];
+/// The pitch fader's ranges, cycled by its label (a DDJ's SHIFT + BEAT SYNC): rekordbox's
+/// ±6 %, ±10 %, ±16 % and WIDE (±100 %).
+pub const RANGES: [f64; 4] = [0.06, 0.10, 0.16, 1.0];
+
+/// The range a deck starts on: rekordbox's ±10 %.
+pub const DEFAULT_RANGE: usize = 1;
+
+/// The slowest a deck goes (the engine's floor): WIDE all the way up.
+pub const RATE_MIN: f64 = 0.25;
+
+/// The range as rekordbox names it: "±6%", "±10%", "±16%", "WIDE".
+pub fn range_name(range: f64) -> String {
+    if range >= 1.0 { "WIDE".into() } else { format!("±{:.0}%", range * 100.0) }
+}
 
 /// How far a nudge bends the record while it is held.
 pub const NUDGE: f64 = 0.04;
@@ -78,7 +90,7 @@ impl Hands {
             loop_beats: None,
             quantize: false,
             pitch: 0.0,
-            range: 0,
+            range: DEFAULT_RANGE,
             nudging: 0,
         }
     }
@@ -247,13 +259,18 @@ impl Hands {
 
     /// The next range, the rate kept where it can be.
     pub fn cycle_range(&mut self, t: &mut impl Transport) {
+        self.set_range((self.range + 1) % RANGES.len(), t);
+    }
+
+    /// Range `range` (an index into [RANGES]; out of it, the default), the rate kept.
+    pub fn set_range(&mut self, range: usize, t: &mut impl Transport) {
         let rate = self.rate();
-        self.range = (self.range + 1) % RANGES.len();
+        self.range = if range < RANGES.len() { range } else { DEFAULT_RANGE };
         self.set_pitch((rate - 1.0) / RANGES[self.range], t);
     }
 
     pub fn rate(&self) -> f64 {
-        1.0 + self.pitch * RANGES[self.range]
+        (1.0 + self.pitch * RANGES[self.range]).max(RATE_MIN)
     }
 
     /// A nudge held (-1 back, 1 on) or let go (0).
@@ -395,9 +412,19 @@ mod tests {
     #[test]
     fn pitch_ranges_nudge_and_brake() {
         let (mut h, mut t) = (hands(), Fake::default());
-        assert!((h.set_pitch(0.5, &mut t) - 1.04).abs() < 1e-12);
+        assert_eq!(RANGES[h.range], 0.10, "rekordbox's ±10 % to begin with");
+        assert!((h.set_pitch(0.5, &mut t) - 1.05).abs() < 1e-12);
         h.cycle_range(&mut t);
-        assert!((t.rate - 1.04).abs() < 1e-12 && (h.pitch - 0.25).abs() < 1e-12, "a wider range keeps the rate");
+        assert!((t.rate - 1.05).abs() < 1e-12 && (h.pitch - 0.3125).abs() < 1e-12, "a wider range keeps the rate");
+        h.cycle_range(&mut t);
+        assert_eq!(range_name(RANGES[h.range]), "WIDE");
+        assert!((h.set_pitch(1.0, &mut t) - 2.0).abs() < 1e-12, "WIDE: double speed all the way toward you");
+        assert_eq!(h.set_pitch(-1.0, &mut t), RATE_MIN, "and the engine's slowest all the way up");
+        h.set_pitch(0.1, &mut t);
+        h.cycle_range(&mut t);
+        assert_eq!((range_name(RANGES[h.range]), h.pitch), ("±6%".to_string(), 1.0), "a narrower range: as near as it reaches");
+        assert!((t.rate - 1.06).abs() < 1e-12);
+        assert_eq!(["±6%", "±10%", "±16%", "WIDE"], RANGES.map(range_name));
         h.nudge(1, &mut t);
         assert!((t.bend - 1.04).abs() < 1e-12);
         h.nudge(0, &mut t);
