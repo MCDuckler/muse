@@ -478,6 +478,20 @@ impl Readback {
     }
 
     /// The light's mean and spread and the colour's mean, of what was read.
+    /// Each texel's light, 0..1 (row by row).
+    fn lights(&self) -> Vec<f64> {
+        let data = self.buf.slice(..).get_mapped_range();
+        let Ok(data) = data else { return vec![] };
+        let mut v = Vec::with_capacity((LOOK_W * LOOK_H) as usize);
+        for y in 0..LOOK_H as usize {
+            for x in 0..LOOK_W as usize {
+                let p = &data[y * LOOK_ROW as usize + x * 4..][..3];
+                v.push((0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64) / 255.0);
+            }
+        }
+        v
+    }
+
     fn look(&self) -> (f64, f64, f64) {
         let data = self.buf.slice(..).get_mapped_range();
         let Ok(data) = data else { return (0.5, 0.5, 0.5) };
@@ -588,7 +602,7 @@ impl Mosh {
         let [m, s] = &self.looks;
         if m.state == MAPPING && s.state == MAPPING && m.done.load(Ordering::Acquire) != 0 && s.done.load(Ordering::Acquire) != 0 {
             let ok = m.done.load(Ordering::Acquire) == 1 && s.done.load(Ordering::Acquire) == 1;
-            if ok && self.held && muddy(m.look(), s.look()) {
+            if ok && self.held && (muddy(m.look(), s.look()) || dead_share(&m.lights(), &s.lights()) > DEAD_MOST) {
                 self.mud_key = true;
                 self.mud_keys += 1;
             }
@@ -757,6 +771,21 @@ impl Mosh {
     }
 }
 
+/// How much of a held mosh may be a dead hole (black where the scene drawn now is lit)
+/// before it is taken whole again: a big black blob held over a bright scene, its edge in
+/// the reveal's blocks, has the spread of a lively picture, so the whole picture's numbers
+/// miss it.
+const DEAD_MOST: f64 = 0.3;
+
+/// The share of the picture black in the mosh (`m`, each texel's light) where the scene
+/// drawn now (`s`) is lit.
+fn dead_share(m: &[f64], s: &[f64]) -> f64 {
+    if m.is_empty() || m.len() != s.len() {
+        return 0.0;
+    }
+    m.iter().zip(s).filter(|&(&a, &b)| a < 0.04 && b > 0.15).count() as f64 / m.len() as f64
+}
+
 /// Whether the moshed picture (`m`: mean light, its spread, the colour) has gone to mud: flat,
 /// all but black or white, or gone grey or dark where the scene drawn now (`s`) is not.
 fn muddy(m: (f64, f64, f64), s: (f64, f64, f64)) -> bool {
@@ -768,6 +797,18 @@ fn muddy(m: (f64, f64, f64), s: (f64, f64, f64)) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_black_hole_over_a_lit_scene_is_dead() {
+        // the stage's look, 32 × 18: the left third the scene (white), the rest held black
+        let scene = vec![0.9; 32 * 18];
+        let held: Vec<f64> = (0..32 * 18).map(|i| if i % 32 < 11 { 0.9 } else { 0.0 }).collect();
+        assert!(dead_share(&held, &scene) > DEAD_MOST, "two thirds black over a white scene");
+        let dark_scene = vec![0.02; 32 * 18];
+        assert!(dead_share(&held, &dark_scene) < 1e-9, "black where the scene is dark too is the scene's");
+        let lively: Vec<f64> = (0..32 * 18).map(|i| if i % 7 == 0 { 0.0 } else { 0.6 }).collect();
+        assert!(dead_share(&lively, &scene) < DEAD_MOST, "a few black specks are a picture");
+    }
 
     #[test]
     fn mud_is_flat_dark_white_or_grey_against_the_scene() {
