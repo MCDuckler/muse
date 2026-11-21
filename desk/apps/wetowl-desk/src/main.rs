@@ -502,7 +502,7 @@ impl App {
         if let Some(wo_update::State::Ready(m)) = self.updates.as_ref().map(wo_update::Updater::state)
             && self.update_said.as_ref() != Some(&m.stamp)
         {
-            self.toasts.say(format!("A newer Desk ({}) is ready: it goes in at the next start (Settings: restart now)", wo_update::pretty_stamp(&m.stamp)), Tone::Ok);
+            self.toasts.say(format!("A newer Desk ({}) is ready: it goes in at the next start, or now with Update at the top", wo_update::pretty_stamp(&m.stamp)), Tone::Ok);
             self.update_said = Some(m.stamp);
         }
         let trouble = desk.stage().trouble;

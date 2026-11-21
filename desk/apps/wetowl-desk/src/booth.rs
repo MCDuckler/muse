@@ -265,6 +265,38 @@ a click: following rekordbox")).clicked() {
             }
             x = ir.left() - 8.0;
         }
+        // a newer Desk (every push to the desk branch builds one for Windows, macOS and
+        // Linux): being fetched, how far; ready, a click restarts into it — not while the
+        // music plays (it goes in at the next start then)
+        if let Some(u) = self.updates.clone() {
+            match u.state() {
+                wo_update::State::Fetching(m, got) => {
+                    let pct = (got * 100 / m.size.max(1)).min(100);
+                    let tr = kit::text(p, pos2(x - 8.0, right.y), Align2::RIGHT_CENTER, &format!("Update {pct} %"), 11.0, "", t::muted());
+                    ui.interact(tr, ui.scope_id().with("update-fetching"), Sense::hover()).on_hover_text(format!("Fetching the newer Desk ({}) in the background", wo_update::pretty_stamp(&m.stamp)));
+                    x = tr.left() - 8.0;
+                }
+                wo_update::State::Ready(m) => {
+                    let br = Rect::from_min_size(pos2(x - 4.0 - 84.0, right.y - 12.0), vec2(84.0, 24.0));
+                    let playing = s.decks.iter().any(|d| d.playing);
+                    let when = wo_update::pretty_stamp(&m.stamp);
+                    let tip = if playing {
+                        format!("A newer Desk ({when}) is ready: it goes in at the next start (the music is playing now)")
+                    } else {
+                        format!("A newer Desk ({when}) is ready: a click restarts into it")
+                    };
+                    if Btn::new("Update").accent(true).size(11.0).show(ui, p, br, "update-now").on_hover_text(tip).clicked() {
+                        if playing {
+                            self.toasts.say("The music is playing: the newer Desk goes in at the next start (or stop the decks and click again)".to_owned(), Tone::Neutral);
+                        } else if u.restart() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    }
+                    x = br.left() - 6.0;
+                }
+                _ => {}
+            }
+        }
         x
     }
 
