@@ -420,13 +420,26 @@ impl App {
         // the controls
         let body = Rect::from_min_max(pos2(inner.left(), band.bottom() + 8.0), inner.max);
         // rekordbox's JOG panel: the loop box, CUE and PLAY, the platter, SLIP / Q / MT
+        // (deck 2 as rekordbox lays it out: CUE/PLAY, the platter and SLIP/Q/MT by the mixer,
+        // on its left; the loop box and the hot cues out at the right edge)
         let side_w = 42.0;
-        let side_r = Rect::from_min_max(pos2(body.right() - side_w, body.top()), body.max);
         let jog_side = body.height().min(150.0);
-        let jog = Rect::from_min_size(pos2(side_r.left() - 8.0 - jog_side, body.top() + (body.height() - jog_side) / 2.0), vec2(jog_side, jog_side));
-        let tr = Rect::from_min_size(pos2(jog.left() - 8.0 - 50.0, body.top()), vec2(50.0, body.height()));
-        let loops = Rect::from_min_max(pos2(tr.left() - 8.0 - 92.0, body.top()), pos2(tr.left() - 8.0, body.bottom()));
-        let cues = Rect::from_min_max(body.min, pos2(loops.left() - 10.0, body.bottom()));
+        let jog_y = body.top() + (body.height() - jog_side) / 2.0;
+        let (cues, loops, tr, jog, side_r) = if d == 0 {
+            let side_r = Rect::from_min_max(pos2(body.right() - side_w, body.top()), body.max);
+            let jog = Rect::from_min_size(pos2(side_r.left() - 8.0 - jog_side, jog_y), vec2(jog_side, jog_side));
+            let tr = Rect::from_min_size(pos2(jog.left() - 8.0 - 50.0, body.top()), vec2(50.0, body.height()));
+            let loops = Rect::from_min_max(pos2(tr.left() - 8.0 - 92.0, body.top()), pos2(tr.left() - 8.0, body.bottom()));
+            let cues = Rect::from_min_max(body.min, pos2(loops.left() - 10.0, body.bottom()));
+            (cues, loops, tr, jog, side_r)
+        } else {
+            let tr = Rect::from_min_size(body.min, vec2(50.0, body.height()));
+            let jog = Rect::from_min_size(pos2(tr.right() + 8.0, jog_y), vec2(jog_side, jog_side));
+            let side_r = Rect::from_min_size(pos2(jog.right() + 8.0, body.top()), vec2(side_w, body.height()));
+            let loops = Rect::from_min_size(pos2(side_r.right() + 8.0, body.top()), vec2(92.0, body.height()));
+            let cues = Rect::from_min_max(pos2(loops.right() + 10.0, body.top()), body.max);
+            (cues, loops, tr, jog, side_r)
+        };
         self.club_cues(desk, ui, p, cues, s, d);
         self.club_loops(desk, ui, p, loops, s, d);
         self.club_transport(desk, ui, p, tr, s, d);
@@ -543,7 +556,8 @@ impl App {
             }
         }
         // the mode: rekordbox's HOT CUE ▾ (a click the next, a right-click all of them)
-        let mr = Rect::from_min_size(pos2(r.left(), r.bottom() - 16.0), vec2(104.0, 16.0));
+        // (deck 2's at the right end, as rekordbox's)
+        let mr = Rect::from_min_size(pos2(if d == 0 { r.left() } else { r.right() - 104.0 }, r.bottom() - 16.0), vec2(104.0, 16.0));
         let resp = button(ui, p, mr, &format!("{} ▾", mode.name()), false, LIT, ("club-pad-mode", d)).on_hover_text("The pads' mode · right-click: every one");
         let at = PadMode::ALL.iter().position(|m| *m == mode).unwrap_or(0);
         if resp.clicked() {
