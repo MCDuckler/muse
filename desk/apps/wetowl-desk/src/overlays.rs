@@ -425,6 +425,7 @@ impl App {
         let i = Some(self.prefs.crossfader_off as usize);
         if let Some(i) = kit::segmented(ui, p, Rect::from_min_size(pos2(x, y), vec2(w.min(300.0), 28.0)), &["On", "Off"], i, Tone::Neutral, "set-crossfader") {
             self.prefs.crossfader_off = i == 1;
+            desk.set_crossfader_off(self.prefs.crossfader_off);
             self.save_prefs(ui.ctx());
         }
         y += 34.0;

@@ -544,10 +544,8 @@ impl App {
     }
 
     pub(crate) fn save_prefs(&mut self, ctx: &egui::Context) {
+        // (never the Desk's lock here: its callers, the settings and the keys, hold it already)
         motion::set_reduced(ctx, self.prefs.reduced_motion);
-        if let Ok(mut d) = self.desk.lock() {
-            d.set_crossfader_off(self.prefs.crossfader_off);
-        }
         self.prefs.save();
     }
 }
