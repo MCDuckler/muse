@@ -46,6 +46,52 @@ pub(crate) fn likeness(stick_title: &str, stick_artist: &str, title: &str, artis
     0.75 * title_share + 0.25 * artist_share
 }
 
+/// Where the stick's records the house has are kept: `<stick>/<rekordbox id>/<bytes>` → the
+/// house's id (each record sent once).
+fn kept_file() -> Option<std::path::PathBuf> {
+    wo_house::folders::config().map(|d| d.join("wetowl-desk").join("stick-house.json"))
+}
+
+fn kept() -> std::collections::HashMap<String, i64> {
+    kept_file().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+fn keep(key: &str, id: i64) {
+    let Some(f) = kept_file() else { return };
+    let mut all = kept();
+    all.insert(key.to_owned(), id);
+    if let Some(dir) = f.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(b) = serde_json::to_vec_pretty(&all) {
+        let tmp = f.with_extension("json.tmp");
+        if std::fs::write(&tmp, b).is_ok() {
+            let _ = std::fs::rename(tmp, f);
+        }
+    }
+}
+
+/// The house's record for a stick's, and its analysis (on a worker: asks the house): one
+/// sent before, else the same song the house has, else the stick's file sent to it now (it
+/// analyses it; the next time it is the one sent before). The stick is only read.
+pub(crate) fn find_or_send(house: &House, r: &Record) -> Option<(i64, Analysed)> {
+    let crate::records::Audio::Usb { path, .. } = &r.audio else { return find(house, r) };
+    let bytes = std::fs::metadata(path).ok()?.len();
+    let key = format!("{}/{}", r.id, bytes);
+    if let Some(&id) = kept().get(&key)
+        && let Ok(a) = library::analyse(house, id)
+    {
+        return Some((id, a));
+    }
+    if let Some(found) = find(house, r) {
+        keep(&key, found.0);
+        return Some(found);
+    }
+    let t = house.upload(path).map_err(|e| eprintln!("{}: sending it to the house: {e}", r.title)).ok()?;
+    keep(&key, t.id);
+    library::analyse(house, t.id).ok().map(|a| (t.id, a))
+}
+
 /// The house's record for a stick's, and its analysis (on a worker: asks the house).
 pub(crate) fn find(house: &House, r: &Record) -> Option<(i64, Analysed)> {
     let id = match tagged(&r.tags.comment) {
@@ -170,10 +216,14 @@ pub(crate) fn offset(stick: &Timing, house: &Timing) -> Option<f64> {
 /// (sections, drops, the bars' loudness, the voice, the mix points), rekordbox's grid kept.
 pub(crate) fn lay_on(stick: &mut Timing, house: &Timing, off: f64) {
     let at = |t: f64| t + off;
-    stick.sections = house.sections.iter().map(|s| wo_booth::mix::Section { label: s.label.clone(), start: at(s.start).max(0.0), end: at(s.end) }).filter(|s| s.end > s.start).collect();
-    stick.phrases = house.phrases.iter().map(|&p| at(p)).filter(|&p| p >= 0.0).collect();
-    stick.drops = house.drops.iter().map(|&p| at(p)).filter(|&p| p >= 0.0).collect();
-    stick.show_drops = house.show_drops.iter().map(|&p| at(p)).filter(|&p| p >= 0.0).collect();
+    // the house's shape where it has one (a song just sent may have only its beats yet):
+    // else the stick's own, from rekordbox's waveform, stays
+    if !house.sections.is_empty() {
+        stick.sections = house.sections.iter().map(|s| wo_booth::mix::Section { label: s.label.clone(), start: at(s.start).max(0.0), end: at(s.end) }).filter(|s| s.end > s.start).collect();
+        stick.phrases = house.phrases.iter().map(|&p| at(p)).filter(|&p| p >= 0.0).collect();
+        stick.drops = house.drops.iter().map(|&p| at(p)).filter(|&p| p >= 0.0).collect();
+        stick.show_drops = house.show_drops.iter().map(|&p| at(p)).filter(|&p| p >= 0.0).collect();
+    }
     stick.markers = house.markers.iter().map(|&p| at(p)).filter(|&p| p >= 0.0).collect();
     stick.mix_in = house.mix_in.map(at);
     stick.mix_out = house.mix_out.map(at);

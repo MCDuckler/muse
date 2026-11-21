@@ -2123,7 +2123,7 @@ impl Desk {
                     {
                         let (r, tx) = (s.record.clone(), self.done_tx.clone());
                         thread::spawn(move || {
-                            if let Some((id, a)) = matched::find(&house, &r) {
+                            if let Some((id, a)) = matched::find_or_send(&house, &r) {
                                 let _ = tx.send(library::Done::Matched { slot, turn, id, analysed: Box::new(a) });
                             }
                         });

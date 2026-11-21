@@ -694,6 +694,36 @@ impl House {
         self.get_said(&format!("/search/album?place={}&id={}&kind={}", enc(&f.place), enc(&f.id), enc(&f.kind)))
     }
 
+    /// A song file sent to the house (POST /uploads): its record — new, or the one it has
+    /// for the same bytes already. The house analyses it as any other record.
+    pub fn upload(&self, path: &std::path::Path) -> Result<Track> {
+        let bytes = std::fs::read(path).map_err(|e| Error::Net(format!("{}: {e}", path.display())))?;
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("song").replace(['"', '\r', '\n'], "_");
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let boundary = format!("wetowl-desk-{nanos:x}-{:x}", bytes.len());
+        let mut body = Vec::with_capacity(bytes.len() + 512);
+        body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"{name}\"\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes());
+        body.extend_from_slice(&bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let mut r = self
+            .agent
+            .post(format!("{}/uploads", self.session.server))
+            .config()
+            .http_status_as_error(false)
+            .timeout_global(Some(Duration::from_secs(600)))
+            .build()
+            .header("Authorization", &format!("Bearer {}", self.session.token))
+            .header("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
+            .send(&body[..])?;
+        let status = r.status().as_u16();
+        let v: serde_json::Value = r.body_mut().read_json().unwrap_or(serde_json::Value::Null);
+        if status >= 300 {
+            let why = v.get("detail").and_then(|d| d.as_str()).map(str::to_owned).unwrap_or_else(|| format!("the house said {status}"));
+            return Err(Error::Said(status, why));
+        }
+        serde_json::from_value(v).map_err(|e| Error::Net(e.to_string()))
+    }
+
     /// One song found elsewhere, taken (POST /search/add): the house's record for it —
     /// ready when it had it, else queued to be fetched.
     pub fn add_found(&self, f: &Found) -> Result<Track> {
@@ -1108,6 +1138,52 @@ fn parse_pads(row: CuesRow) -> HandPads {
 
 #[cfg(test)]
 mod tests {
+
+    /// A song sent as the house's FastAPI reads an upload: one multipart part `audio` with
+    /// the file's name and its bytes whole; the house's answer read as its record.
+    #[test]
+    fn a_song_sent_as_a_multipart_upload() {
+        use std::io::{Read, Write};
+        let dir = std::env::temp_dir().join(format!("wo-upload-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let song = dir.join("Kalap.mp3");
+        let bytes: Vec<u8> = (0..70_000u32).map(|i| (i * 7 % 251) as u8).collect();
+        std::fs::write(&song, &bytes).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let got = std::thread::spawn(move || {
+            let (mut c, _) = listener.accept().unwrap();
+            let mut buf = vec![];
+            let mut chunk = [0u8; 65536];
+            loop {
+                let n = c.read(&mut chunk).unwrap();
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf);
+                if let Some(h) = text.find("\r\n\r\n") {
+                    let len: usize = text[..h].lines().find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap())).unwrap_or(0);
+                    if buf.len() >= h + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let body = r#"{"id":4242,"title":"Kalap","artists":["Ambrukt"],"state":"ready","duplicate":false}"#;
+            write!(c, "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            buf
+        });
+        let house = House::new(Session { server: format!("http://127.0.0.1:{port}"), token: "t".into(), user: None });
+        let t = house.upload(&song).unwrap();
+        assert_eq!(t.id, 4242);
+        let req = got.join().unwrap();
+        std::fs::write(dir.join("request.bin"), &req).unwrap();
+        let head = String::from_utf8_lossy(&req[..req.windows(4).position(|w| w == b"\r\n\r\n").unwrap()]).to_string();
+        assert!(head.starts_with("POST /uploads "), "{head}");
+        assert!(head.contains("Bearer t"));
+        let at = |needle: &[u8]| req.windows(needle.len()).position(|w| w == needle);
+        assert!(at(b"name=\"audio\"; filename=\"Kalap.mp3\"").is_some());
+        let start = at(&bytes[..64]).expect("the song's bytes");
+        assert_eq!(&req[start..start + bytes.len()], &bytes[..], "whole");
+    }
+
     use super::*;
 
     #[test]
