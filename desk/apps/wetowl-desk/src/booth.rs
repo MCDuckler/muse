@@ -40,6 +40,11 @@ impl App {
             ui.set_opacity(1.0);
             return;
         }
+        if self.page == Page::Board {
+            self.board_page(desk, ui, p, l.page);
+            ui.set_opacity(1.0);
+            return;
+        }
         if self.plan_open {
             self.plan(desk, ui, p, l.waves, s);
         } else {
@@ -69,7 +74,7 @@ impl App {
         // the rooms, an underline gliding to the one up
         let mut x = logo.right() + 18.0;
         let mut here = None;
-        for (i, (word, page)) in [("Booth", Page::Booth), ("Show", Page::Show)].into_iter().enumerate() {
+        for (i, (word, page)) in [("Booth", Page::Booth), ("Board", Page::Board), ("Show", Page::Show)].into_iter().enumerate() {
             let tr = Rect::from_min_size(pos2(x, r.top()), vec2(label_width(p, word, 13.0) + 32.0, r.height()));
             let resp = ui.interact(tr, ui.scope_id().with(("tab", i)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
             let h = motion::tween_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), motion::QUICK, motion::STANDARD);
@@ -697,6 +702,11 @@ a click: following rekordbox")).clicked() {
                     }
                 }
                 label_sized(p, pos2(c.x, c.y + 17.0), Align2::CENTER_TOP, name, 9.5, t::label());
+                // the record's Auto Gain under the gain knob (rekordbox's, GRID EDIT's)
+                if i == 0 && step >= 46.0 {
+                    let (ag, on) = (v.auto_gain, s.auto_gain_on);
+                    crate::auto_gain::tag(ui, desk, d, &ag, on, t::faint(), ("booth", d), |w, col| label_sized(p, pos2(c.x, c.y + 29.0), Align2::CENTER_TOP, w, 8.5, col));
+                }
                 // the bands' kills beside their knobs
                 if (1..=3).contains(&i) {
                     let band = 3 - i;

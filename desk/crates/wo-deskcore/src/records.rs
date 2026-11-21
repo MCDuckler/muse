@@ -38,34 +38,11 @@ pub struct Tags {
 
 /// A record's loudness, as the box measured it: the gain that brings it to the house's
 /// reference (−14 LUFS, the one the phones' player turns songs by), and its true peak.
+/// Auto Gain (autogain.rs) takes the gain until this Desk has measured the record itself.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Loudness {
     pub gain_db: Option<f32>,
     pub true_peak_db: Option<f32>,
-}
-
-impl Loudness {
-    /// The most a quiet record is turned up, dB, and how close to full scale its true peak
-    /// may come then.
-    pub const MOST_UP: f32 = 6.0;
-    pub const CEILING_DB: f32 = -1.0;
-
-    /// The deck's level for it, as a multiplier: a loud record turned down to the
-    /// reference; a quiet one up only as far as its true peak leaves room (not at all
-    /// where its peak is not known — turning a record up is turning its clipping up); 1
-    /// where it was never measured.
-    pub fn trim(&self) -> f32 {
-        let Some(g) = self.gain_db else { return 1.0 };
-        let db = if g > 0.0 {
-            match self.true_peak_db {
-                Some(p) => g.min((Self::CEILING_DB - p).max(0.0)).min(Self::MOST_UP),
-                None => 0.0,
-            }
-        } else {
-            g.max(-24.0)
-        };
-        10f32.powf(db / 20.0)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -379,26 +356,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod loudness_tests {
-    use super::Loudness;
-
-    #[test]
-    fn a_record_is_turned_to_the_house_loudness_and_up_only_into_its_headroom() {
-        let db = |l: Loudness| 20.0 * l.trim().log10();
-        // never measured: as it is
-        assert_eq!(Loudness::default().trim(), 1.0);
-        // a loud club record (−8 LUFS) down 6 dB
-        assert!((db(Loudness { gain_db: Some(-6.0), true_peak_db: Some(0.4) }) + 6.0).abs() < 1e-4);
-        // a quiet one up as far as its peak allows (−4 dBTP: 3 dB to the −1 ceiling)
-        assert!((db(Loudness { gain_db: Some(5.0), true_peak_db: Some(-4.0) }) - 3.0).abs() < 1e-4);
-        // up no more than 6 dB, however much room
-        assert!((db(Loudness { gain_db: Some(10.0), true_peak_db: Some(-20.0) }) - 6.0).abs() < 1e-4);
-        // a quiet one whose peak is not known, or already at the ceiling: not turned up
-        assert_eq!(Loudness { gain_db: Some(4.0), true_peak_db: None }.trim(), 1.0);
-        assert_eq!(Loudness { gain_db: Some(4.0), true_peak_db: Some(-0.5) }.trim(), 1.0);
-    }
-}
 
 #[cfg(test)]
 mod key_tests {

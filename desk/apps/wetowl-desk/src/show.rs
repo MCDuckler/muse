@@ -30,6 +30,8 @@ pub(crate) enum Page {
     #[default]
     Booth,
     Show,
+    /// The board: the soundboard's pads.
+    Board,
     /// Every control of the kit in every state (`--page kit`): the design's review page.
     Kit,
 }

@@ -146,6 +146,9 @@ pub(crate) enum Done {
     /// A record's cover, as the stage's cover ground takes it (None: none to be had).
     Cover { slot: usize, turn: u64, id: i64, cover: Option<Picture> },
     LoadFailed { slot: usize, turn: u64, why: String },
+    /// A deck's record measured as it decoded (its loudness, LUFS; None: silent), and its
+    /// key in the Auto Gain store.
+    Measured { slot: usize, turn: u64, key: Option<String>, lufs: Option<f32> },
     /// A set from the house (set.rs); `rest`: the rest of one playing, built again.
     Set { turn: u64, got: Result<crate::set::DjSet, String>, rest: bool },
     /// This person's taste in the booth's mixes (autodj.rs).

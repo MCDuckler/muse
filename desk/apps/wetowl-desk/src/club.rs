@@ -183,9 +183,13 @@ impl App {
         let (stage_on, auto_on) = self.side_panels();
         let l = layout(full, stage_on || auto_on, self.prefs.club_fx);
         self.club_top(desk, ui, p, l.top, s);
-        if self.page == Page::Show {
+        if self.page == Page::Show || self.page == Page::Board {
             let page = Rect::from_min_max(pos2(full.left() + 4.0, l.top.bottom() + G), full.max - vec2(4.0, 4.0));
-            self.show_page(desk, ui, p, page, s);
+            if self.page == Page::Board {
+                self.board_page(desk, ui, p, page);
+            } else {
+                self.show_page(desk, ui, p, page, s);
+            }
             return;
         }
         for d in 0..2 {
@@ -225,7 +229,7 @@ impl App {
         let logo = kit::mark(p, self.ball.id(), pos2(r.left() + 6.0, r.center().y), 26.0);
         let mut x = logo.right() + 14.0;
         let y = r.center().y;
-        for (word, page) in [("PERFORMANCE", Page::Booth), ("SHOW", Page::Show)] {
+        for (word, page) in [("PERFORMANCE", Page::Booth), ("BOARD", Page::Board), ("SHOW", Page::Show)] {
             let bw = 92.0;
             if button(ui, p, Rect::from_min_size(pos2(x, y - 11.0), vec2(bw, 22.0)), word, self.page == page, rgb(0x3A3A40), ("club-page", word)).clicked() {
                 self.page = page;
@@ -791,7 +795,15 @@ impl App {
                         _ => desk.set_eq(d, 0, nv),
                     }
                 }
-                words(p, pos2(c.x, c.y + 11.0), Align2::CENTER_TOP, name, 7.0, "semi", MUTED);
+                if i == 0 {
+                    // TRIM and the record's Auto Gain under it
+                    let (ag, on) = (v.auto_gain, s.auto_gain_on);
+                    crate::auto_gain::tag(ui, desk, d, &ag, on, MUTED, ("club", d), |w, col| {
+                        words(p, pos2(c.x, c.y + 11.0), Align2::CENTER_TOP, &format!("TRIM · {w}"), 7.0, "semi", col)
+                    });
+                } else {
+                    words(p, pos2(c.x, c.y + 11.0), Align2::CENTER_TOP, name, 7.0, "semi", MUTED);
+                }
             }
             let cue_y = r.top() + 14.0 + 4.0 * step;
             let cue = Rect::from_center_size(pos2(cx, cue_y), vec2(col_w - 8.0, 16.0));

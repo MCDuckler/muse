@@ -13,6 +13,7 @@ pub use wo_wave::{Bin, RbBin};
 pub use marks::{Marks, PadLook, Phrase, PhraseKind};
 
 pub mod backdrop;
+pub mod board;
 pub mod bench;
 pub mod covers;
 pub mod library;
@@ -26,6 +27,7 @@ pub mod move_player;
 pub mod autodj;
 pub mod beat_fx;
 pub mod audio;
+pub mod autogain;
 pub mod elsewhere;
 pub mod fetch;
 pub mod follow;
@@ -152,6 +154,8 @@ pub struct DeckView {
     /// The pitch fader -1..1 and its range (±fraction).
     pub pitch: f64,
     pub range: f64,
+    /// Its Auto Gain (the value whether or not Auto Gain is on: [Snapshot::auto_gain_on]).
+    pub auto_gain: autogain::AutoGain,
 }
 
 /// The Auto DJ's next transition, planned or under way.
@@ -182,6 +186,8 @@ pub struct Snapshot {
     pub crossfader_off: bool,
     /// Each deck's side of the crossfader (rekordbox's crossfader assign).
     pub crossfader_assign: [prefs::XfSide; 2],
+    /// Auto Gain on: each deck turned by its record's [DeckView::auto_gain].
+    pub auto_gain_on: bool,
     pub mix: Option<MixView>,
     pub auto: bool,
     pub load: Load,
@@ -343,6 +349,8 @@ struct Slot {
     marks: Marks,
     /// KEY SHIFT by hand (rekordbox's key ±), semitones: on top of a move's own shift.
     key_semis: i32,
+    /// The record's Auto Gain (autogain.rs).
+    auto: autogain::AutoGain,
 }
 
 /// A transition the Auto DJ has planned (and, once `started`, is making).
@@ -446,6 +454,14 @@ pub struct Desk {
     covers: covers::Covers,
     /// The rekordbox sticks plugged in, read.
     sticks: Vec<Arc<wo_usb::Stick>>,
+    /// Auto Gain: on (rekordbox's Preferences → Controller → Mixer), the records'
+    /// measurements and the hand's values, and the plugged-in sticks' sweep.
+    auto_gain_on: bool,
+    auto_gain: autogain::Store,
+    auto_sweep: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// The board: the soundboard's pads (board.rs), and how far it dips the decks.
+    board: board::Board,
+    board_duck: f32,
     /// The crossfader's law: equal power, or "full" (both whole at the middle) while a
     /// move that shares one record's worth of sound between the decks runs.
     full_law: bool,
@@ -571,6 +587,7 @@ impl Desk {
             vocals: None,
             marks: Marks::default(),
             key_semis: 0,
+            auto: autogain::AutoGain::default(),
         };
         let (done_tx, done_rx) = mpsc::channel();
         let mut desk = Desk {
@@ -619,6 +636,11 @@ impl Desk {
             changes: 0,
             covers: Default::default(),
             sticks: vec![],
+            auto_gain_on: true,
+            auto_gain: autogain::Store::open(),
+            auto_sweep: None,
+            board: if std::env::var("WO_HOUSE").as_deref() == Ok("off") { board::Board::with(board::Doc::default(), None) } else { board::Board::open() },
+            board_duck: 0.0,
             full_law: false,
             xf_assign: prefs::XfSide::USUAL,
             fx: Default::default(),
@@ -647,6 +669,7 @@ impl Desk {
         // WO_HOUSE=off: never the house (tests: no account is read or told anything)
         let borrowed = (std::env::var("WO_APP_SIGN_IN").as_deref() == Ok("1")).then(wo_house::Session::from_wetowl_app).flatten();
         let house_ok = std::env::var("WO_HOUSE").as_deref() != Ok("off");
+        desk.board.apply_level(&desk.engine);
         library::watch_sticks(&desk.done_tx);
         if let Some(session) = wo_house::Session::saved().or(borrowed).filter(|_| house_ok) {
             desk.signed_in(wo_house::House::new(session));
@@ -754,6 +777,10 @@ impl Desk {
         let audio = record.audio.clone();
         let seconds = record.seconds as f64;
         let bpm = record.bpm;
+        // its Auto Gain from what is known (the hand's, a measurement, the house's); the
+        // record measured as it decodes all the same, the measurement kept
+        let auto = self.auto_gain.gain_of(&record);
+        let auto_key = autogain::key(&record);
         let (house, tx) = (self.house.clone(), self.done_tx.clone());
         let loader = thread::spawn(move || {
             match audio {
@@ -815,6 +842,10 @@ impl Desk {
             }
             source.finish();
             analyser.finish();
+            // the whole record decoded (a load that failed part way is not measured)
+            if analyser.fed() > 0 && analyser.fed() as f64 >= 0.8 * seconds * RATE as f64 {
+                let _ = tx.send(library::Done::Measured { slot, turn, key: auto_key, lufs: analyser.lufs() });
+            }
             source
         });
         let len = record.seconds as f64;
@@ -844,6 +875,7 @@ impl Desk {
         s.loader = Some(loader);
         s.vocals = None;
         s.marks = Marks::default();
+        s.auto = auto;
         if s.shift != 0.0 || s.key_semis != 0 {
             s.shift = 0.0;
             s.key_semis = 0;
@@ -890,6 +922,7 @@ impl Desk {
         self.controllers_tick();
         self.previews_tick();
         self.fx_tick();
+        self.board_tick();
         self.audio_tick();
         self.elsewhere_tick();
         // following rekordbox, its set is not this Desk's to keep
@@ -1211,6 +1244,7 @@ impl Desk {
                 loop_open: s.hands.loop_in.is_some(),
                 pitch: s.hands.pitch,
                 range: RANGES[s.hands.range],
+                auto_gain: s.auto,
                 decoded: if wave.done { 1.0 } else { (wave.seconds() / length.max(1.0)).min(1.0) as f32 },
                 part: s.stems.part,
                 stems: s.stems.state.clone(),
@@ -1266,6 +1300,7 @@ impl Desk {
             crossfader: self.crossfader,
             crossfader_off: self.crossfader_off(),
             crossfader_assign: self.xf_assign,
+            auto_gain_on: self.auto_gain_on,
             mix: self.mix.as_ref().map(|m| {
                 let heard = self.engine.deck(DeckId::new(m.from).unwrap()).position();
                 MixView {
@@ -2011,6 +2046,16 @@ impl Desk {
     /// was a stick's (read again, or gone back to all records where it went).
     fn got_sticks(&mut self, sticks: Vec<Arc<wo_usb::Stick>>) {
         self.sticks = sticks;
+        // Auto Gain: the sticks' records measured ahead (the last sweep stopped)
+        if let Some(stop) = self.auto_sweep.take() {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        if !self.sticks.is_empty() && std::env::var("WO_USB").map_or(true, |v| v != "off") {
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let paths = self.sticks.iter().flat_map(|s| s.tracks.iter().map(|t| t.path.clone())).collect();
+            autogain::sweep(self.auto_gain.clone(), paths, stop.clone());
+            self.auto_sweep = Some(stop);
+        }
         self.library.sticks = self.sticks.iter().map(|s| library::StickView::of(s)).collect();
         if let Shelf::Usb { root, .. } = &self.library.shelf {
             let shelf = self.library.shelf.clone();
@@ -2058,6 +2103,7 @@ impl Desk {
         library::fetch_playlists(&self.done_tx, &house);
         self.stage.set_house(Some(wo_wire::House { server: house.session.server.clone(), token: house.session.token.clone() }));
         self.stage.set_show_house(Some(house.clone()));
+        self.board.signed_in(house.clone());
         self.house = Some(house);
         self.open_shelf(Shelf::All);
     }
@@ -2186,6 +2232,7 @@ impl Desk {
                 Err(e) => self.library.error = Some(format!("{}: {e}", self.slots[slot].record.title)),
             },
             Done::Analysed { .. } => {}
+            Done::Measured { slot, turn, key, lufs } => self.measured(slot, turn, key, lufs),
             Done::Matched { slot, turn, id, analysed } if turn == self.load_gen[slot] => {
                 let s = &mut self.slots[slot];
                 let house = &analysed.timing;
@@ -2766,15 +2813,143 @@ impl Desk {
     }
 
     fn apply_levels(&self) {
+        self.apply_levels_over(0.03);
+    }
+
+    /// The decks' levels, reached over `ramp` seconds.
+    fn apply_levels_over(&self, ramp: f64) {
         let (ga, gb) = self.crossfader_gains();
         for (d, g) in [(0, ga), (1, gb)] {
             let s = &self.slots[d];
-            // the hands' gain (±12 dB) over the record brought to the house's loudness
-            let trim = 10f32.powf((s.gain - 0.5) * 24.0 / 20.0) * s.record.loudness.trim();
+            // the hands' gain (±12 dB) over the record's Auto Gain
+            let trim = 10f32.powf((s.gain - 0.5) * 24.0 / 20.0) * self.auto_trim(d) * (1.0 - 0.5 * self.board_duck);
             let deck = self.engine.deck(DeckId::new(d).unwrap());
-            deck.set_level(s.fader * s.fader * g * trim, 0.03);
-            deck.set_cue(self.cue_gain(d, trim), 0.03);
+            deck.set_level(s.fader * s.fader * g * trim, ramp);
+            deck.set_cue(self.cue_gain(d, trim), ramp);
         }
+    }
+
+    fn board_tick(&mut self) {
+        self.board.tick(&self.engine);
+        if (self.board.duck - self.board_duck).abs() > 1e-3 {
+            self.board_duck = self.board.duck;
+            self.apply_levels_over(0.15);
+            self.changes += 1;
+        }
+    }
+
+    /// The board's pad `pad` of bank `bank` pressed: on the master's next beat or bar
+    /// where the pad waits for one and the master plays on a grid.
+    pub fn board_press(&mut self, bank: usize, pad: usize) {
+        let beat = self.master_beats();
+        self.board.press(&self.engine, bank, pad, beat);
+        self.changes += 1;
+    }
+
+    pub fn board_release(&mut self, bank: usize, pad: usize) {
+        self.board.release(&self.engine, bank, pad);
+    }
+
+    /// When the master's next beat and next bar are heard, engine time.
+    fn master_beats(&self) -> Option<(f64, f64)> {
+        let m = self.master;
+        let st = self.engine.deck(DeckId::new(m).unwrap()).read();
+        if !st.playing || st.rate <= 0.01 {
+            return None;
+        }
+        let now = self.engine.now();
+        let heard = st.heard + (now - st.at) * st.rate;
+        let grid = &self.slots[m].timing.grid;
+        // a press just past a beat still lands on the next (a few ms for the voice to start)
+        let at = |t: f64| now + (t - heard) / st.rate;
+        Some((at(grid.next_beat(heard + 0.01, 1)?), at(grid.next_beat(heard + 0.01, 4)?)))
+    }
+
+    pub fn board_view(&self) -> board::View {
+        self.board.view(&self.engine)
+    }
+
+    pub fn board_doc(&self) -> &board::Doc {
+        self.board.doc()
+    }
+
+    pub fn board_set_bank(&mut self, bank: usize) {
+        self.board.set_bank(bank);
+    }
+
+    pub fn board_set_level(&mut self, level: f32) {
+        self.board.set_level(&self.engine, level);
+    }
+
+    pub fn board_stop_all(&mut self) {
+        self.board.stop_all(&self.engine);
+    }
+
+    pub fn board_set_pad(&mut self, bank: usize, pad: usize, p: Option<board::Pad>) {
+        self.board.set_pad(&self.engine, bank, pad, p);
+    }
+
+    /// The sounds there are to put on a pad (asked of the house the first time).
+    pub fn board_shelf(&mut self) -> Option<&Result<Vec<wo_house::SampleRow>, String>> {
+        self.board.want_shelf();
+        self.board.shelf.as_ref()
+    }
+
+    pub fn board_audition(&mut self, id: i64) {
+        self.board.audition(&self.engine, id);
+    }
+
+    /// Deck `d`'s Auto Gain as a multiplier (1: off, or its record not measured yet).
+    fn auto_trim(&self, d: usize) -> f32 {
+        match self.slots[d].auto.db {
+            Some(db) if self.auto_gain_on => 10f32.powf(db / 20.0),
+            _ => 1.0,
+        }
+    }
+
+    /// A deck's record measured: kept, and its Auto Gain where it had none of this Desk's
+    /// yet (the house's number, or none): glided there when it is playing, at once when not.
+    fn measured(&mut self, slot: usize, turn: u64, key: Option<String>, lufs: Option<f32>) {
+        let Some(l) = lufs else { return };
+        if let Some(k) = &key
+            && self.auto_gain.measured(k) != Some(l)
+        {
+            self.auto_gain.set_measured(k, l);
+        }
+        if turn != self.load_gen[slot] {
+            return;
+        }
+        let s = &mut self.slots[slot];
+        let was = s.auto;
+        s.auto.lufs = Some(l);
+        if matches!(was.source, Some(autogain::Source::Hand | autogain::Source::Measured)) {
+            return;
+        }
+        s.auto = autogain::AutoGain { db: Some(autogain::gain_for(l)), source: Some(autogain::Source::Measured), lufs: Some(l) };
+        eprintln!("auto gain: {}: {l:.1} LUFS → {:+.1} dB (was {:?})", s.record.title, autogain::gain_for(l), was.db);
+        let playing = self.engine.deck(DeckId::new(slot).unwrap()).read().playing;
+        self.apply_levels_over(if playing { 1.5 } else { 0.03 });
+        self.changes += 1;
+    }
+
+    /// Auto Gain on or off (rekordbox's Preferences → Controller → Mixer → Auto Gain).
+    pub fn set_auto_gain_on(&mut self, on: bool) {
+        self.auto_gain_on = on;
+        self.apply_levels_over(0.3);
+    }
+
+    /// Deck `d`'s Auto Gain set by hand, dB, kept for its record (rekordbox's Auto Gain
+    /// knob in GRID EDIT); None: the measured value again.
+    pub fn set_auto_gain(&mut self, d: usize, db: Option<f32>) {
+        let s = &mut self.slots[d];
+        if let Some(k) = autogain::key(&s.record) {
+            self.auto_gain.set_by_hand(&k, db.map(|v| v.clamp(autogain::MOST_DOWN, autogain::MOST_UP)));
+            s.auto = self.auto_gain.gain_of(&s.record);
+        } else {
+            s.auto.db = db.or(s.auto.lufs.map(autogain::gain_for));
+            s.auto.source = Some(if db.is_some() { autogain::Source::Hand } else { autogain::Source::Measured });
+        }
+        self.apply_levels_over(0.05);
     }
 
     fn spb(&self, deck: usize) -> f64 {

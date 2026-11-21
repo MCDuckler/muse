@@ -20,6 +20,8 @@ use eframe::egui::{self, Color32, ColorImage, Rect, TextureHandle, TextureOption
 use wo_deskcore::bench::Bench;
 use wo_deskcore::{Desk, Prefs, ShowHand};
 
+mod auto_gain;
+mod board;
 mod booth;
 mod club;
 mod club_browser;
@@ -141,6 +143,8 @@ pub(crate) struct App {
     pub(crate) show_room: usize,
     /// A scene's page open over the rotation, and the page's own state.
     pub(crate) show_scene: Option<String>,
+    /// The BOARD page's own (board.rs).
+    pub(crate) board: board::BoardUi,
     pub(crate) scene_ui: scene::SceneUi,
     /// The favourites room's filters and pictures; a name being asked for.
     pub(crate) faves_ui: faves::FavesUi,
@@ -279,8 +283,13 @@ impl App {
         app.page = match arg("--page").as_deref() {
             Some("show") => show::Page::Show,
             Some("kit") => show::Page::Kit,
+            Some("board") => show::Page::Board,
             _ => show::Page::Booth,
         };
+        // --board-pad N: the BOARD page with pad N's card open (screenshots)
+        if let Some(n) = arg("--board-pad").and_then(|n| n.parse::<usize>().ok()) {
+            app.board.edit = Some((0, n.min(15)));
+        }
         app.overlay = match arg("--overlay").as_deref() {
             Some("keys") => Some(Overlay::Keys),
             Some("settings") => Some(Overlay::Settings),
@@ -407,6 +416,7 @@ impl App {
         ui::style(ctx);
         let prefs = Prefs::read();
         desk.set_crossfader_assign(prefs.xf_assign());
+        desk.set_auto_gain_on(prefs.auto_gain);
         motion::set_reduced(ctx, prefs.reduced_motion);
         let tex = |name: &str, b: wo_deskcore::Backdrop| {
             ctx.load_texture(name, ColorImage::from_rgba_unmultiplied([b.width as usize, b.height as usize], &b.rgba), TextureOptions::LINEAR)
@@ -444,6 +454,7 @@ impl App {
             show_tab: 0,
             show_room: 0,
             show_scene: None,
+            board: Default::default(),
             scene_ui: Default::default(),
             faves_ui: Default::default(),
             prompt: None,
@@ -643,6 +654,7 @@ impl App {
             for (k, m) in keys {
                 self.key(desk, k, m, &ui.ctx().clone());
             }
+            self.board_keys(desk, ui);
         } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.overlay = None;
         }

@@ -380,7 +380,7 @@ fn normalise(out: &mut [f32], peak: f32) {
     }
 }
 
-fn to_pcm(stereo: &[f32]) -> Vec<i16> {
+pub(crate) fn to_pcm(stereo: &[f32]) -> Vec<i16> {
     stereo.iter().map(|v| (v.clamp(-1.0, 1.0) * 32767.0).round() as i16).collect()
 }
 

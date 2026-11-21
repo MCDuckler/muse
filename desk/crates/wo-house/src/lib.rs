@@ -865,6 +865,59 @@ impl House {
         }
     }
 
+    /// The board (the soundboard) as the house keeps it, and its revision (None: never saved).
+    pub fn board(&self) -> Result<(Option<serde_json::Value>, i64)> {
+        let v: serde_json::Value = self.json("/booth/board")?;
+        let doc = v.get("doc").filter(|d| d.is_object()).cloned();
+        Ok((doc, v.get("rev").and_then(|r| r.as_i64()).unwrap_or(0)))
+    }
+
+    /// The board saved over the house's — if `rev` is still its revision: Ok(Ok(the new
+    /// revision)); stale: Ok(Err((the board as kept, its revision))).
+    pub fn put_board(&self, doc: &serde_json::Value, rev: i64) -> Result<std::result::Result<i64, (serde_json::Value, i64)>> {
+        let mut r = self
+            .authed(self.agent.put(format!("{}/booth/board", self.session.server)))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(serde_json::json!({"doc": doc, "rev": rev}))?;
+        let status = r.status().as_u16();
+        let v: serde_json::Value = r.body_mut().read_json().unwrap_or_default();
+        match status {
+            200..=299 => Ok(Ok(v.get("rev").and_then(|r| r.as_i64()).unwrap_or(rev + 1))),
+            409 => {
+                let d = v.get("detail").cloned().unwrap_or(v);
+                Ok(Err((d.get("doc").cloned().unwrap_or_default(), d.get("rev").and_then(|r| r.as_i64()).unwrap_or(0))))
+            }
+            c => Err(Error::Status(c)),
+        }
+    }
+
+    /// The sounds a board can play: this account's own, and the house shelf's.
+    pub fn samples(&self) -> Result<Vec<SampleRow>> {
+        #[derive(Deserialize)]
+        struct All {
+            #[serde(default)]
+            samples: Vec<SampleRow>,
+            #[serde(default)]
+            house: Vec<SampleRow>,
+        }
+        let all: All = self.json("/samples")?;
+        Ok(all.samples.into_iter().chain(all.house.into_iter().map(|r| SampleRow { house: true, ..r })).collect())
+    }
+
+    /// A sample's sound on this computer: the WetOwl app's copy, else the Desk's cache,
+    /// else downloaded into the cache now.
+    pub fn sample_audio(&self, id: i64) -> Result<PathBuf> {
+        if let Some(local) = sample_here(id) {
+            return Ok(local);
+        }
+        let file = folders::cache().map(|c| c.join("wetowl-desk").join("samples").join(format!("{id}.audio"))).ok_or_else(|| Error::Net("no cache folder".into()))?;
+        std::fs::create_dir_all(file.parent().unwrap())?;
+        download(self.get(&format!("/samples/{id}/audio")).call()?, &file)?;
+        Ok(file)
+    }
+
     /// A set this account shared, taken away from everyone.
     pub fn unshare_show_snapshot(&self, id: i64) -> Result<()> {
         self.agent.delete(format!("{}/booth/show/snapshots/{id}", self.session.server)).header("Authorization", &format!("Bearer {}", self.session.token)).call()?;
@@ -1049,6 +1102,29 @@ impl House {
         download(self.get(&format!("/tracks/{id}/stream")).call()?, &file)?;
         Ok(file)
     }
+}
+
+/// A board sample's sound already on this computer (the WetOwl app's, or the Desk's cache).
+pub fn sample_here(id: i64) -> Option<PathBuf> {
+    let app = app_folder().map(|a| a.join("samples").join(format!("{id}.audio")));
+    let desk = folders::cache().map(|c| c.join("wetowl-desk").join("samples").join(format!("{id}.audio")));
+    [app, desk].into_iter().flatten().find(|p| p.exists())
+}
+
+/// A sound the board can play, as the house lists it.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct SampleRow {
+    pub id: i64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub duration_ms: Option<i64>,
+    /// The house shelf's heading.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// On the house shelf (everyone's), not this account's own.
+    #[serde(default)]
+    pub house: bool,
 }
 
 /// Where the Desk keeps a house record's audio (fetched from the house, or here).

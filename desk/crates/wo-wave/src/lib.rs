@@ -8,6 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 pub mod rb;
+pub mod loudness;
 pub use rb::{Fold, RbBin, RbCol};
 
 /// Columns a second.
@@ -203,6 +204,9 @@ pub struct Analyser {
     mid_lp: Biquad,
     high: Biquad,
     batch: Vec<Col>,
+    /// The record's loudness (BS.1770), measured from the same frames.
+    meter: loudness::Meter,
+    fed: u64,
 }
 
 impl Analyser {
@@ -220,6 +224,8 @@ impl Analyser {
             mid_lp: Biquad::new(true, 2500.0, r),
             high: Biquad::new(false, 2500.0, r),
             batch: vec![],
+            meter: loudness::Meter::new(rate),
+            fed: 0,
         }
     }
 
@@ -228,6 +234,8 @@ impl Analyser {
     }
 
     pub fn feed(&mut self, stereo: &[i16]) {
+        self.meter.feed(stereo);
+        self.fed += (stereo.len() / 2) as u64;
         for f in stereo.as_chunks::<2>().0 {
             let x = (f[0] as f32 + f[1] as f32) * (0.5 / 32768.0);
             let b = [self.low.run(x), self.mid_lp.run(self.mid_hp.run(x)), self.high.run(x)];
@@ -250,6 +258,17 @@ impl Analyser {
         if self.batch.len() >= 150 {
             self.flush();
         }
+    }
+
+    /// The integrated loudness of what it was fed, LUFS (None: silence). Whole once
+    /// [`Analyser::finish`]ed.
+    pub fn lufs(&self) -> Option<f32> {
+        self.meter.integrated()
+    }
+
+    /// Frames fed so far.
+    pub fn fed(&self) -> u64 {
+        self.fed
     }
 
     pub fn finish(&mut self) {

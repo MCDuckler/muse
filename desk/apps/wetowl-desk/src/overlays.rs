@@ -12,7 +12,7 @@ use wo_deskcore::{DeskLayout, WaveStyle};
 
 /// The keys, by where they act.
 const KEYS: [(&str, &[(&str, &str)]); 4] = [
-    ("Decks", &[("1 2", "Play A / B"), ("Q W", "Sync A / B"), ("Z X", "Start A / B in step"), ("F G", "The bass off and on, A / B"), ("[ ]", "A 16-beat loop on A / B")]),
+    ("Decks", &[("1 2", "Play A / B"), ("Q W", "Sync A / B"), ("Z X", "Start A / B in step"), ("F G", "The bass off and on, A / B"), ("[ ]", "A 16-beat loop on A / B"), ("F1–F8 ⇧", "The board's pads (BOARD)")]),
     ("Mixer and Auto DJ", &[("← →", "The crossfader"), ("⇧← ⇧→", "Nudge the master"), ("A", "The Auto DJ on and off"), ("M Space", "Mix now"), ("S N", "Not that: another record next"), ("P", "The plan: the move drawn out")]),
     ("Show", &[("K", "The Show page and the booth"), ("H B", "A hit · the blackout"), (", .", "The scene before / after"), ("J", "Mosh into the next"), ("L V", "Hold the scene · freeze")]),
     ("Desk", &[("?", "These keys"), ("Ctrl ,", "The settings"), ("C", "The stage and the Auto DJ folded away"), ("Ctrl L", "The WetOwl's layout or rekordbox's"), ("E", "The effects (rekordbox's)"), ("+ −", "The waveforms zoomed in / out"), ("Esc", "Close what is over the page")]),
@@ -431,7 +431,20 @@ impl App {
         y += words(p, y, "Beside the crate, each on its own (this layout's Auto DJ panel: rekordbox's has it hidden at first). C on the keyboard folds every side panel away and back.", t::faint()) + 16.0;
         row(p, y, "Crossfader");
         let i = Some((self.prefs.xf_assign() == [wo_deskcore::XfSide::Thru; 2]) as usize);
-        if let Some(i) = kit::segmented(ui, p, Rect::from_min_size(pos2(x, y), vec2(w.min(300.0), 28.0)), &["On", "Off"], i, Tone::Neutral, "set-crossfader") {
+        // Auto Gain beside it (rekordbox's Mixer tab has the two together)
+        let half = (w.min(300.0) - 12.0) / 2.0;
+        let ag_x = x + half + 12.0;
+        kit::text(p, pos2(ag_x, y - 9.0), Align2::LEFT_CENTER, "Auto Gain", 10.5, "", t::faint());
+        let ag = Rect::from_min_size(pos2(ag_x, y), vec2(half, 28.0));
+        if let Some(i) = kit::segmented(ui, p, ag, &["On", "Off"], Some(!self.prefs.auto_gain as usize), Tone::Neutral, "set-auto-gain") {
+            self.prefs.auto_gain = i == 0;
+            desk.set_auto_gain_on(self.prefs.auto_gain);
+            self.save_prefs(ui.ctx());
+        }
+        ui.interact(ag, ui.scope_id().with("set-auto-gain-tip"), egui::Sense::hover()).on_hover_text(
+            "Auto Gain, as rekordbox's: every record measured for its loudness (EBU R128) as it loads — a stick's all at once when it goes in — and its deck turned so all play equally loud (−14 LUFS). Each deck shows its value under TRIM: drag it to set it for that record (kept), double-click for the measured one. The master's limiter keeps a record turned up from clipping.",
+        );
+        if let Some(i) = kit::segmented(ui, p, Rect::from_min_size(pos2(x, y), vec2(half, 28.0)), &["On", "Off"], i, Tone::Neutral, "set-crossfader") {
             self.prefs.crossfader_off = false;
             self.prefs.crossfader_assign = if i == 1 { [wo_deskcore::XfSide::Thru; 2] } else { wo_deskcore::XfSide::USUAL };
             desk.set_crossfader_assign(self.prefs.crossfader_assign);

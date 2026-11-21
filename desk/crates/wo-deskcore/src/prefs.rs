@@ -33,6 +33,9 @@ pub struct Prefs {
     pub crossfader_off: bool,
     /// Each deck's side of the crossfader (rekordbox's crossfader assign).
     pub crossfader_assign: [XfSide; 2],
+    /// Auto Gain (rekordbox's Preferences → Controller → Mixer): every record played
+    /// equally loud (autogain.rs).
+    pub auto_gain: bool,
     /// Follow a set played in rekordbox: the Desk silent, the show with rekordbox's decks.
     pub follow_rekordbox: bool,
     /// Where rekordbox's audio is looked for (none: Music, Downloads and the Desktop).
@@ -112,6 +115,7 @@ impl Default for Prefs {
             club_auto_dj: false,
             crossfader_off: false,
             crossfader_assign: XfSide::USUAL,
+            auto_gain: true,
             follow_rekordbox: false,
             music_folders: vec![],
             rkbx_link: None,
