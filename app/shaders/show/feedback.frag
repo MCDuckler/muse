@@ -40,6 +40,15 @@ float noise(vec2 p) {
   return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
+// A colour kept finite and in range: fed back frame after frame, one NaN or infinity (a
+// scene's stray pixel, or light piled past a half float's 65504) would stay in the trail
+// for good, spread by every look-up round it, and show as black — the stair-stepped black
+// hole over the show.
+vec3 finite(vec3 c) {
+  if (any(isnan(c)) || any(isinf(c))) return vec3(0.0);
+  return clamp(c, 0.0, 64.0);
+}
+
 // The hue turned by [t] radians: a rotation in the YIQ plane.
 vec3 turnHue(vec3 c, float t) {
   const mat3 toYIQ = mat3(0.299, 0.596, 0.211, 0.587, -0.274, -0.523, 0.114, -0.322, 0.312);
@@ -72,7 +81,7 @@ void main() {
   }
   c.x /= aspect;
   vec2 back = c + 0.5 + vec2(uShiftX, uShiftY);
-  vec3 prev = texture(uPrev, clamp(back, 0.0, 1.0)).rgb * uDecay;
+  vec3 prev = finite(texture(uPrev, clamp(back, 0.0, 1.0)).rgb) * uDecay;
   // Off the edge is dark, softly.
   float inside = smoothstep(0.0, 0.02, back.x) * smoothstep(0.0, 0.02, back.y)
       * smoothstep(1.0, 0.98, back.x) * smoothstep(1.0, 0.98, back.y);
@@ -81,8 +90,8 @@ void main() {
   // The trail's colour drifts: light that lingers goes the colour of the room.
   float lum = dot(prev, vec3(0.299, 0.587, 0.114));
   prev = mix(prev, uTintColour * lum, uTint);
-  vec3 now = texture(uNow, uv).rgb;
+  vec3 now = finite(texture(uNow, uv).rgb);
   // Light over light: added — with this frame's share held back by as much as the
   // trail keeps, so a long trail is a long trail and not a brighter room.
-  fragColor = vec4(now * (1.0 - 0.6 * uDecay) + prev, 1.0);
+  fragColor = vec4(finite(now * (1.0 - 0.6 * uDecay) + prev), 1.0);
 }

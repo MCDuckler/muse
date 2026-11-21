@@ -247,6 +247,16 @@ impl Slit {
 
 // ------------------------------------------------------------------ the datamosh
 
+/// Finite or not, by the bits (a NaN's `x != x` may be folded away by a shader compiler):
+/// one NaN or infinity in the picture the mosh reads (a 3D text's degenerate normal) would
+/// live on in its field — carried from frame to frame, spread by the smoothing — and every
+/// look-up at a NaN place reads black: the show's stair-stepped black hole.
+const FINITE: &str = "
+fn fin(x: f32) -> bool { return (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u; }
+fn fin2(v: vec2<f32>) -> vec2<f32> { return select(vec2<f32>(0.0), v, fin(v.x) && fin(v.y)); }
+fn fin3(v: vec3<f32>) -> vec3<f32> { return select(vec3<f32>(0.0), clamp(v, vec3<f32>(0.0), vec3<f32>(8.0)), fin(v.x) && fin(v.y) && fin(v.z)); }
+";
+
 const HASH: &str = "
 fn hash12(p: vec2<f32>) -> f32 {
     var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
@@ -267,7 +277,8 @@ struct U { texel: vec2<f32>, pad: vec2<f32> };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var src: texture_2d<f32>;
 @group(0) @binding(2) var smp: sampler;
-fn l(uv: vec2<f32>, o: vec2<f32>) -> f32 { return dot(textureSampleLevel(src, smp, uv + o * u.texel, 0.0).rgb, vec3<f32>(0.299, 0.587, 0.114)); }
+FINITE
+fn l(uv: vec2<f32>, o: vec2<f32>) -> f32 { return dot(fin3(textureSampleLevel(src, smp, uv + o * u.texel, 0.0).rgb), vec3<f32>(0.299, 0.587, 0.114)); }
 @fragment fn fs(v: VOut) -> @location(0) vec4<f32> {
     let uv = v.uv;
     return vec4<f32>((l(uv, vec2(-1.0, -1.0)) + l(uv, vec2(1.0, -1.0)) + l(uv, vec2(-1.0, 1.0)) + l(uv, vec2(1.0, 1.0))) * 0.25, 0.0, 0.0, 1.0);
@@ -325,6 +336,7 @@ struct U { size: vec2<f32>, kick: f32, fresh: f32, time: f32, seed: f32, swirl: 
 @group(0) @binding(7) var prev_t: texture_2d<f32>;
 @group(0) @binding(8) var s3: sampler;
 HASH
+FINITE
 fn swirl(uv: vec2<f32>) -> vec2<f32> {
     let p = uv * vec2<f32>(2.6, 1.6) + vec2<f32>(u.seed, u.time * 0.15);
     let e = 0.05;
@@ -363,9 +375,9 @@ fn at(t: texture_2d<f32>, s: sampler, uv: vec2<f32>) -> f32 { return textureSamp
     let was = (textureSampleLevel(field_t, s1, back, 0.0).xy * 4.0 + textureSampleLevel(field_t, s1, back + vec2<f32>(t.x, 0.0), 0.0).xy
              + textureSampleLevel(field_t, s1, back - vec2<f32>(t.x, 0.0), 0.0).xy + textureSampleLevel(field_t, s1, back + vec2<f32>(0.0, t.y), 0.0).xy
              + textureSampleLevel(field_t, s1, back - vec2<f32>(0.0, t.y), 0.0).xy) / 8.0;
-    var f = mix(was, m, u.fresh);
+    var f = mix(fin2(was), fin2(m), u.fresh);
     f *= 1.0 + u.kick * 0.5;
-    return vec4<f32>(clamp(f, vec2<f32>(-24.0), vec2<f32>(24.0)), 0.0, 1.0);
+    return vec4<f32>(fin2(clamp(f, vec2<f32>(-24.0), vec2<f32>(24.0))), 0.0, 1.0);
 }
 ";
 
@@ -388,9 +400,10 @@ struct U { res: vec2<f32>, k: f32, strength: f32, kick: f32, have_prev: f32, see
 @group(0) @binding(11) var luma_t: texture_2d<f32>;
 @group(0) @binding(12) var s5: sampler;
 HASH
+FINITE
 fn to_ycc(c: vec3<f32>) -> vec3<f32> { return vec3<f32>(dot(c, vec3<f32>(0.25, 0.5, 0.25)), dot(c, vec3<f32>(0.5, 0.0, -0.5)), dot(c, vec3<f32>(-0.25, 0.5, -0.25))); }
 fn to_rgb(y: vec3<f32>) -> vec3<f32> { return vec3<f32>(y.x + y.y - y.z, y.x + y.z, y.x - y.y - y.z); }
-fn old(uv: vec2<f32>) -> vec3<f32> { return textureSampleLevel(old_t, s0, uv, 0.0).rgb; }
+fn old(uv: vec2<f32>) -> vec3<f32> { return fin3(textureSampleLevel(old_t, s0, uv, 0.0).rgb); }
 @fragment fn fs(v: VOut) -> @location(0) vec4<f32> {
     let px = v.pos.xy;
     let uv = px / u.res;
@@ -407,7 +420,7 @@ fn old(uv: vec2<f32>) -> vec3<f32> { return textureSampleLevel(old_t, s0, uv, 0.
     let block = textureLoad(mv_t, clamp(vec2<i32>(px / bs), vec2<i32>(0), hi), 0).xy * scale * u.have_prev;
     let moving = smoothstep(0.3, 2.0, length(block_field));
     let blocky = u.glitch * mix(0.15, 0.85, moving);
-    var mv = mix(field, mix(block_field, block, 0.35), blocky);
+    var mv = fin2(mix(field, mix(block_field, block, 0.35), blocky));
     let wild = step(1.0 - u.glitch * (0.12 + 0.3 * u.kick), hash12(cell + floor(u.k * 9.0) + u.seed));
     mv *= (1.4 + 0.8 * u.strength) * (1.0 + wild * 2.2);
     let lt = 1.0 / vec2<f32>(textureDimensions(luma_t));
@@ -424,7 +437,7 @@ fn old(uv: vec2<f32>) -> vec3<f32> { return textureSampleLevel(old_t, s0, uv, 0.
     let cc = mix(ycc.yz, to_ycc(old(chroma_at)).yz, 0.5 + 0.4 * u.glitch);
     ycc = vec3<f32>(ycc.x, cc);
     o = to_rgb(ycc) * u.fade;
-    let now = textureSampleLevel(now_t, s1, uv, 0.0).rgb;
+    let now = fin3(textureSampleLevel(now_t, s1, uv, 0.0).rgb);
     var res = (now - textureSampleLevel(prev_t, s2, uv + mv * r, 0.0).rgb) * u.have_prev;
     let rb = (floor(px / 8.0) * 8.0 + 4.0) * r;
     var res_block = (textureSampleLevel(now_t, s1, rb, 0.0).rgb - textureSampleLevel(prev_t, s2, rb + mv * r, 0.0).rgb) * u.have_prev;
@@ -441,7 +454,9 @@ fn old(uv: vec2<f32>) -> vec3<f32> { return textureSampleLevel(old_t, s0, uv, 0.
     let reveal = 1.0 - smoothstep(edge - soft, edge + soft, n);
     col = mix(col, now, reveal);
     col = mix(col, now, smoothstep(0.9, 1.0, u.k));
-    return vec4<f32>(clamp(col, vec3<f32>(0.0), vec3<f32>(8.0)), 1.0);
+    // a place gone non-finite is the scene's (else it would be black, and carried on)
+    let ok = fin(col.x) && fin(col.y) && fin(col.z);
+    return vec4<f32>(select(now, clamp(col, vec3<f32>(0.0), vec3<f32>(8.0)), ok), 1.0);
 }
 ";
 
@@ -549,7 +564,7 @@ pub struct Mosh {
 
 impl Mosh {
     pub fn new(gpu: &Gpu) -> Mosh {
-        let own = |name, body: &str, n| Own::new(gpu, name, &body.replace("HASH", HASH), n, WORK, None);
+        let own = |name, body: &str, n| Own::new(gpu, name, &body.replace("HASH", HASH).replace("FINITE", FINITE), n, WORK, None);
         Mosh {
             luma: own("the mosh's light", MOSH_LUMA, 1),
             matcher: own("the mosh's motion", MOSH_MATCH, 2),
