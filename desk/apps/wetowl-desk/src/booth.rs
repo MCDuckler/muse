@@ -1807,6 +1807,8 @@ a click: following rekordbox")).clicked() {
         let on = v.stages > 0;
         let ctx = ui.ctx().clone();
         let round = CornerRadius::same(if t::club() { 0 } else { t::R_PANEL });
+        // (its words are measured against this section, as any panel's)
+        crate::ui::fit::panel(r);
         p.rect_filled(r, round, Color32::BLACK);
         let over = ctx.pointer_hover_pos().is_some_and(|q| r.contains(q));
         let k = motion::tween_bool(&ctx, ui.scope_id().with("stage-over"), over, motion::QUICK, motion::STANDARD);
