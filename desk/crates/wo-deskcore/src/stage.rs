@@ -43,6 +43,12 @@ pub(crate) struct Stage {
     covers: [Option<Vec<u8>>; 2],
     /// The picture asked of the stage (so many a second, so wide), as last told.
     pictures: Option<(u32, u32)>,
+    /// The director's last word (its cue line), for the black-hole watch.
+    last_cue: Option<String>,
+    /// The black-hole watch: the picture last looked at, when one was last kept, how many.
+    hole_seen: Option<u64>,
+    hole_at: Option<Instant>,
+    holes: u32,
 }
 
 /// A deck's record and how much of its timing is known.
@@ -313,9 +319,49 @@ impl Stage {
     pub(crate) fn direct(&mut self, frame: &wo_wire::Frame) {
         let milk = self.wire.as_ref().and_then(wo_wire::Server::shown).and_then(|s| s.milk);
         let line = self.show().tick(frame, milk.as_ref());
+        if let Some(line) = &line {
+            self.last_cue = Some(line.clone());
+        }
         if let (Some(line), Some(w)) = (line, &self.wire) {
             w.keep("cue", line);
         }
+        self.watch_holes();
+    }
+
+    /// A watch for the show's black hole (a large patch of pure black, stair-stepped, over a
+    /// lit picture — seen on Linux and Windows, not yet caught): when the stage's picture is
+    /// a quarter or more pure black while a sixth or more is bright, the picture is kept
+    /// and what the show was told is logged (once in 15 s, 30 a run at most). Blackout is not
+    /// one.
+    fn watch_holes(&mut self) {
+        let Some((n, pic)) = self.thumb() else { return };
+        if self.hole_seen == Some(n) || self.blackout || self.holes >= 30 {
+            return;
+        }
+        self.hole_seen = Some(n);
+        let (black, bright) = hole_share(&pic.rgba);
+        if black < 0.25 || bright < 0.16 || self.hole_at.is_some_and(|t| t.elapsed() < Duration::from_secs(15)) {
+            return;
+        }
+        self.hole_at = Some(Instant::now());
+        self.holes += 1;
+        let at = crate::session::now_secs();
+        let kept = wo_house::folders::config().map(|d| d.join("wetowl-desk").join("holes")).and_then(|dir| {
+            std::fs::create_dir_all(&dir).ok()?;
+            let file = dir.join(format!("hole-{at}.png"));
+            image::RgbaImage::from_raw(pic.width as u32, pic.height as u32, pic.rgba.clone())?.save(&file).ok()?;
+            Some(file)
+        });
+        let shown = self.view();
+        eprintln!(
+            "stage: a black hole over the show at {at} ({:.0} % pure black, {:.0} % bright): scene {:?}, look {:?}; picture {}; cue {}",
+            black * 100.0,
+            bright * 100.0,
+            shown.scene,
+            shown.told.look,
+            kept.map_or("not kept".to_owned(), |f| f.display().to_string()),
+            self.last_cue.as_deref().unwrap_or("none yet")
+        );
     }
 
     fn show(&mut self) -> &mut crate::show::Show {
@@ -520,3 +566,43 @@ impl Drop for Stage {
         self.close();
     }
 }
+
+/// How much of a picture (RGBA) is pure black, and how much bright (each pixel's three
+/// channels summed: at most 3, at least 600), every fourth pixel.
+pub(crate) fn hole_share(rgba: &[u8]) -> (f64, f64) {
+    let (mut black, mut bright, mut n) = (0usize, 0usize, 0usize);
+    for px in rgba.chunks_exact(4).step_by(4) {
+        let s = px[0] as u32 + px[1] as u32 + px[2] as u32;
+        if s <= 3 {
+            black += 1;
+        } else if s >= 600 {
+            bright += 1;
+        }
+        n += 1;
+    }
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+    (black as f64 / n as f64, bright as f64 / n as f64)
+}
+
+#[cfg(test)]
+mod hole_tests {
+    use super::hole_share;
+
+    #[test]
+    fn a_black_hole_over_white_is_seen_and_a_dark_scene_is_not() {
+        // half pure black, half white: a hole
+        let mut pic = vec![];
+        for i in 0..400 {
+            let v = if i < 200 { 0 } else { 255 };
+            pic.extend_from_slice(&[v, v, v, 255]);
+        }
+        let (b, w) = hole_share(&pic);
+        assert!(b > 0.4 && w > 0.4, "{b} {w}");
+        // a dark scene: near black (a ground's noise), never pure
+        let dark: Vec<u8> = (0..400).flat_map(|i| [3 + (i % 3) as u8, 2, 4, 255]).collect();
+        assert_eq!(hole_share(&dark).0, 0.0);
+    }
+}
+
