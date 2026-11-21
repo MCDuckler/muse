@@ -30,6 +30,7 @@ pub mod elsewhere;
 pub mod fetch;
 pub mod follow;
 pub mod history;
+mod matched;
 mod crate_;
 pub mod plan_view;
 pub mod player;
@@ -2116,6 +2117,17 @@ impl Desk {
                             s.timing.energy = phrases::bar_energy(&all, &g.beats, g.bar_one);
                         }
                     }
+                    // and the same song in the house, where it has it: its analysis for the show
+                    if s.record.on_usb()
+                        && let Some(house) = self.house.clone()
+                    {
+                        let (r, tx) = (s.record.clone(), self.done_tx.clone());
+                        thread::spawn(move || {
+                            if let Some((id, a)) = matched::find(&house, &r) {
+                                let _ = tx.send(library::Done::Matched { slot, turn, id, analysed: Box::new(a) });
+                            }
+                        });
+                    }
                     if let Some(k) = a.camelot {
                         s.record.key = k;
                     }
@@ -2137,6 +2149,22 @@ impl Desk {
                 Err(e) => self.library.error = Some(format!("{}: {e}", self.slots[slot].record.title)),
             },
             Done::Analysed { .. } => {}
+            Done::Matched { slot, turn, id, analysed } if turn == self.load_gen[slot] => {
+                let s = &mut self.slots[slot];
+                let house = &analysed.timing;
+                match matched::offset(&s.timing, house) {
+                    Some(off) => {
+                        if let Some(v) = &analysed.vocals {
+                            s.vocals = Some(matched::vocals_on(&s.timing, house, v, off));
+                        }
+                        matched::lay_on(&mut s.timing, house, off);
+                        let title = s.record.title.clone();
+                        self.note(autodj::LogKind::Plan, format!("{title}: the house's analysis (its record {id}) for the show"));
+                    }
+                    None => eprintln!("{}: the house's record {id} does not line up with the stick's", s.record.title),
+                }
+            }
+            Done::Matched { .. } => {}
             Done::Cover { slot, turn, id, cover } if turn == self.load_gen[slot] => self.stage.cover(slot, id, cover),
             Done::Cover { .. } => {}
             Done::LoadFailed { slot, turn, why } if turn == self.load_gen[slot] => {
@@ -2629,7 +2657,9 @@ impl Desk {
         for i in 0..2 {
             let s = &self.slots[i];
             let t = &s.timing;
-            let key = (s.record.id, s.record.title.clone(), t.grid.beats.len(), t.grid.bar_one, t.sections.len(), t.energy.len(), t.drops.len());
+            // (the loudness's sum and the show's drops too: a stick's shape swapped for the
+            // house's may keep the counts)
+            let key = (s.record.id, s.record.title.clone(), t.grid.beats.len(), t.grid.bar_one, t.sections.len(), t.energy.len() + 4096 * t.energy.iter().map(|&e| e as usize).sum::<usize>(), t.drops.len() + 4096 * t.show_drops.len());
             self.stage.record(i, key, || show::facts_of(&s.record, t));
         }
         self.stage.direct(&frame);

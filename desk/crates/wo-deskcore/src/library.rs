@@ -141,6 +141,8 @@ pub(crate) enum Done {
     More { turn: u64, rows: Result<(Vec<Record>, i64), String> },
     Playlists(Result<Vec<PlaylistSummary>, String>),
     Analysed { slot: usize, turn: u64, result: Result<Box<Analysed>, String> },
+    /// A stick's record's song found in the house: its id and analysis (matched.rs).
+    Matched { slot: usize, turn: u64, id: i64, analysed: Box<Analysed> },
     /// A record's cover, as the stage's cover ground takes it (None: none to be had).
     Cover { slot: usize, turn: u64, id: i64, cover: Option<Picture> },
     LoadFailed { slot: usize, turn: u64, why: String },
