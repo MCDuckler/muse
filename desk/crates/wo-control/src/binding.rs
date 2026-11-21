@@ -82,6 +82,8 @@ pub enum Action {
     BrowseSwitch,
     /// The waveforms zoomed in (+) or out (−) by steps (rekordbox's SHIFT + the browse knob).
     Zoom(i32),
+    /// The browser's related tracks for the MASTER deck, on or off (rekordbox's SHIFT + LOAD 1).
+    Related,
     /// The show (the stage's director), as the v1 booth binds it.
     Show(ShowCue),
 }
@@ -243,6 +245,7 @@ impl Binding {
                 "browse.press" if pressed => vec![Action::Browse(1, 0)],
                 "browse.back" if pressed => vec![Action::Browse(-1, 0)],
                 "browse.switch" if pressed => vec![Action::BrowseSwitch],
+                "browse.related" if pressed => vec![Action::Related],
                 "browse.zoom" if e.value != 0.0 => vec![Action::Zoom(e.value.signum() as i32)],
                 "show.scene.prev" if pressed => vec![Action::Show(ShowCue::Previous)],
                 "show.scene.next" if pressed => vec![Action::Show(ShowCue::Next)],

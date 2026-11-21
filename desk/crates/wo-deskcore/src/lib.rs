@@ -484,6 +484,8 @@ pub struct Desk {
     doubling: [bool; 2],
     /// Whether the master played last tick (it hands on when it stops, not while stopped).
     master_played: bool,
+    /// The browser narrowed to the MASTER deck's related tracks.
+    related: bool,
     resumed: Option<String>,
     /// Following rekordbox (follow.rs): its decks drive these, silently.
     follow: Option<follow::Follow>,
@@ -635,6 +637,7 @@ impl Desk {
             history: history::History::today(),
             doubling: [false; 2],
             master_played: false,
+            related: false,
             resumed: None,
             follow: None,
             dice: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_nanos() as u64) | 1,
@@ -1311,10 +1314,29 @@ impl Desk {
                 note: self.library.notes.get(&r.id).cloned(),
             })
             .collect();
+        // rekordbox's related tracks for the MASTER deck: the shelf's records that go with
+        // what the master plays (its key or the wheel's next, the tempo within 6 %, or half or
+        // double it), the best first; the master's own record out
+        if self.related {
+            let m = &self.slots[self.master].record;
+            rows.retain(|r| r.on_deck != Some(self.master) && records::related(&r.record, master_bpm, &m.key));
+            rows.sort_by_key(|r| std::cmp::Reverse(r.fits));
+            return rows;
+        }
         if !matches!(self.library.shelf, Shelf::Fits { .. } | Shelf::Queue | Shelf::Similar { .. } | Shelf::Check | Shelf::Usb { playlist: Some(_), .. } | Shelf::History { .. }) || (self.house.is_none() && !on_usb) {
             rows.sort_by_key(|r| (r.on_deck.is_none(), std::cmp::Reverse(r.fits)));
         }
         rows
+    }
+
+    /// rekordbox's MASTER related tracks in the browser, on or off (SHIFT + LOAD 1 on a DDJ).
+    pub fn set_related(&mut self, on: bool) {
+        self.related = on;
+        self.changes += 1;
+    }
+
+    pub fn related(&self) -> bool {
+        self.related
     }
 
     /// A deck's waveform lane around `heard`, `width` px wide with the playhead in the
@@ -2313,6 +2335,7 @@ impl Desk {
             }
             A::Sync(d) => self.toggle_sync(d),
             A::Master(d) => self.set_master(d),
+            A::Related => self.set_related(!self.related),
             A::Keylock(d) => self.toggle_keylock(d),
             A::PitchReset(d) => self.set_pitch(d, 0.0),
             A::CyclePitchRange(d) => self.cycle_range(d),

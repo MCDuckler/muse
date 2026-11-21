@@ -1065,6 +1065,19 @@ a click: following rekordbox")).clicked() {
             "Search these records"
         };
         let typed = kit::field(ui, p, field, &mut self.search, hint, Some(Icon::Search), false, "search");
+        // rekordbox's MASTER: the list narrowed to the tracks that go with the master deck's
+        // (its key or the wheel's next, its tempo within 6 %), the best first (SHIFT + LOAD 1)
+        let related = desk.related();
+        let mr = Rect::from_min_size(pos2(field.right() + 8.0, field.top()), vec2(if club { 70.0 } else { 86.0 }, field.height()));
+        let tip = "Only the tracks that go with the master deck's: its key or the wheel's next, its tempo within 6 %  (SHIFT + LOAD 1)";
+        let clicked = if club {
+            crate::club::button(ui, p, mr, "MASTER", related, crate::club::LIT, "crate-related").on_hover_text(tip).clicked()
+        } else {
+            Btn::new("Master").icon(Icon::Similar).tone(Tone::Ok).on(related).size(11.0).show(ui, p, mr, "crate-related").on_hover_text(tip).clicked()
+        };
+        if clicked {
+            desk.set_related(!related);
+        }
         if !self.search.is_empty() {
             let x = Rect::from_center_size(pos2(field.right() - 16.0, field.center().y), vec2(22.0, 22.0));
             if Btn::new("").icon(Icon::Close).quiet().show(ui, p, x, "search-clear").clicked() {

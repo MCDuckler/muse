@@ -2,7 +2,7 @@
  "id": "pioneer_ddj_400_midi",
  "name": "Pioneer DDJ-400",
  "protocol": "midi",
- "about": "The DDJ-400 as it comes, USB MIDI class (no driver). Each deck on its own channel (1, 2), its pads on 8 and 10 (9 and 11 with SHIFT), the mixer and the browser on 7, Beat FX on 5. SHIFT is the controller's own: held, its buttons send other notes, which this layout names as the same controls. Knobs and faders are 14-bit (MSB, then LSB), the browse knob turns on CC 0x40 and presses on note 0x41 (0x42 with SHIFT: rekordbox's Library Forward and Back, into a playlist and back to the tree), turns with SHIFT on CC 0x64 (rekordbox's waveform zoom), SHIFT + LOAD 2 is note 0x7A (its browse view switch), the jogs count from 0x40, 720 ticks a turn; the platter touched sends on one CC (0x22), spun untouched on another (0x23), its side on a third (0x21), and with SHIFT on 0x29. TEMPO sends 0 at the top (away from you) and 0x3FFF at the bottom, on CC 0x00 (0x05 with SHIFT). rekordbox's own mapping (MidiMappings/DDJ-400.midi.csv) agrees. Lights: the button's own note, 0x7F/0x00; the level meters CC 0x02 on the deck's channel; a deck's jog ring flashes on note n of channel 16 when a record is loaded. From Mixxx's mapping by Warker, nschloe, dj3730, jusko and tiesjan.",
+ "about": "The DDJ-400 as it comes, USB MIDI class (no driver). Each deck on its own channel (1, 2), its pads on 8 and 10 (9 and 11 with SHIFT), the mixer and the browser on 7, Beat FX on 5. SHIFT is the controller's own: held, its buttons send other notes, which this layout names as the same controls. Knobs and faders are 14-bit (MSB, then LSB), the browse knob turns on CC 0x40 and presses on note 0x41 (0x42 with SHIFT: rekordbox's Library Forward and Back, into a playlist and back to the tree), turns with SHIFT on CC 0x64 (rekordbox's waveform zoom), SHIFT + LOAD 2 is note 0x7A (its browse view switch), SHIFT + LOAD 1 note 0x68 (its Related Tracks), the jogs count from 0x40, 720 ticks a turn; the platter touched sends on one CC (0x22), spun untouched on another (0x23), its side on a third (0x21), and with SHIFT on 0x29. TEMPO sends 0 at the top (away from you) and 0x3FFF at the bottom, on CC 0x00 (0x05 with SHIFT). rekordbox's own mapping (MidiMappings/DDJ-400.midi.csv) agrees. Lights: the button's own note, 0x7F/0x00; the level meters CC 0x02 on the deck's channel; a deck's jog ring flashes on note n of channel 16 when a record is loaded. From Mixxx's mapping by Warker, nschloe, dj3730, jusko and tiesjan.",
  "match": {
   "names": [
    "DDJ-400"
@@ -1241,6 +1241,12 @@
    "kind": "button",
    "channel": 6,
    "note": "0x7A"
+  },
+  {
+   "id": "browse.related",
+   "kind": "button",
+   "channel": 6,
+   "note": "0x68"
   },
   {
    "id": "fx.on",

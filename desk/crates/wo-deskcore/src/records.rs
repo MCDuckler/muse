@@ -303,6 +303,26 @@ pub fn semis_to(from: &str, to: &str) -> Option<i32> {
     Some(if s > 5 { s - 12 } else { s })
 }
 
+/// Whether a record goes with the master's (rekordbox's related tracks, as a DJ means it):
+/// its key the same or the wheel's next (or its relative), and its tempo within 6 % of the
+/// master's, or of half or double it. A record or a master without a key or a tempo: by the
+/// one known.
+pub fn related(r: &Record, bpm: f64, key: &str) -> bool {
+    let parse = |k: &str| -> Option<(i32, char)> {
+        let letter = k.chars().last()?;
+        Some((k.strip_suffix(letter)?.parse().ok()?, letter))
+    };
+    let key_ok = match (parse(&r.key), parse(key)) {
+        (Some((n, l)), Some((m, k))) => {
+            let d = (n - m).abs().min(12 - (n - m).abs());
+            d == 0 || (d == 1 && l == k)
+        }
+        _ => true,
+    };
+    let tempo_ok = bpm <= 0.0 || r.bpm <= 0.0 || [1.0, 0.5, 2.0].iter().any(|&k| ((r.bpm * k) / bpm - 1.0).abs() <= 0.06);
+    key_ok && tempo_ok
+}
+
 pub fn fits(r: &Record, bpm: f64, key: &str) -> u8 {
     let parse = |k: &str| -> Option<(i32, char)> {
         let letter = k.chars().last()?;
@@ -328,6 +348,17 @@ pub fn fits(r: &Record, bpm: f64, key: &str) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn related_by_the_wheel_and_the_tempo() {
+        let mut r = parse_fixture()[0].clone();
+        (r.key, r.bpm) = ("8A".into(), 128.0);
+        assert!(related(&r, 126.0, "8A"), "the same key, 1.6 % apart");
+        assert!(related(&r, 130.0, "9A") && related(&r, 130.0, "7A") && related(&r, 128.0, "8B"), "the wheel's next and the relative");
+        assert!(!related(&r, 128.0, "10A") && !related(&r, 128.0, "9B"), "two steps, or across and along");
+        assert!(!related(&r, 140.0, "8A"), "9 % apart");
+        assert!(related(&r, 64.5, "8A") && related(&r, 255.0, "8A"), "half and double time");
+    }
 
     #[test]
     fn the_fixture_reads() {

@@ -261,6 +261,7 @@ mod tests {
         assert_eq!(d.decode(&[0x96, 0x41, 0x7F])[0].id, "browse.press");
         assert_eq!(d.decode(&[0x96, 0x42, 0x7F])[0].id, "browse.back");
         assert_eq!(d.decode(&[0x96, 0x7A, 0x7F])[0].id, "browse.switch", "SHIFT + LOAD 2");
+        assert_eq!(d.decode(&[0x96, 0x68, 0x7F])[0].id, "browse.related", "SHIFT + LOAD 1");
         let z = d.decode(&[0xB6, 0x64, 0x01]);
         assert_eq!((z[0].id.as_str(), z[0].value), ("browse.zoom", 1.0), "SHIFT + the knob turned");
         // a note off as a note on of nothing
