@@ -93,7 +93,14 @@ pub struct Layout {
 /// The booth's grid for a window: fixed rows for what has a fixed shape (the top bar, the
 /// overviews, the decks), the rest shared between waveforms and the crate.
 /// `wide`: the stage and the Auto DJ folded away, the crate the whole width.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn layout(full: Rect, wide: bool) -> Layout {
+    layout_parts(full, !wide, !wide)
+}
+
+/// The booth's grid with the stage's picture and the Auto DJ each shown or not (one shown
+/// takes its own width; none: the crate wide).
+pub fn layout_parts(full: Rect, stage_on: bool, auto_on: bool) -> Layout {
     let (m, g) = (12.0, t::GAP);
     let r = full.shrink(m);
     // a short window (a laptop's): the overviews and the decks a little shorter, the
@@ -113,12 +120,13 @@ pub fn layout(full: Rect, wide: bool) -> Layout {
     let decks = [Rect::from_min_size(mid.min, vec2(dw, mid_h)), Rect::from_min_size(pos2(mid.right() - dw, mid.top()), vec2(dw, mid_h))];
     let mixer = Rect::from_min_max(pos2(decks[0].right() + g, mid.top()), pos2(decks[1].left() - g, mid.bottom()));
     let rest = Rect::from_min_max(pos2(r.left(), mid.bottom() + g), r.max);
-    let auto_w = if wide { 0.0 } else { (r.width() * 0.21).clamp(360.0, 440.0) };
-    let stage_w = if wide { 0.0 } else { (r.width() * 0.17).clamp(280.0, 360.0) };
-    let g_side = if wide { 0.0 } else { g };
+    let auto_w = if auto_on { (r.width() * 0.21).clamp(360.0, 440.0) } else { 0.0 };
+    let stage_w = if stage_on { (r.width() * 0.17).clamp(280.0, 360.0) } else { 0.0 };
     let auto = Rect::from_min_max(pos2(rest.right() - auto_w, rest.top()), rest.max);
-    let stage = Rect::from_min_max(pos2(auto.left() - g_side - stage_w, rest.top()), pos2(auto.left() - g_side, rest.bottom()));
-    let crate_ = Rect::from_min_max(rest.min, pos2(stage.left() - g_side, rest.bottom()));
+    let stage_right = if auto_on { auto.left() - g } else { rest.right() };
+    let stage = Rect::from_min_max(pos2(stage_right - stage_w, rest.top()), pos2(stage_right, rest.bottom()));
+    let crate_right = if stage_on { stage.left() - g } else { stage_right };
+    let crate_ = Rect::from_min_max(rest.min, pos2(crate_right, rest.bottom()));
     Layout { top, overview, waves, decks, mixer, crate_, stage, auto, page }
 }
 

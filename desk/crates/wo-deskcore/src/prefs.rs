@@ -23,6 +23,11 @@ pub struct Prefs {
     pub bar_groups: bool,
     /// rekordbox's layout shows its effect panel under the decks.
     pub club_fx: bool,
+    /// The side panels one by one (C still folds them all away): the stage's picture, and
+    /// the Auto DJ in the WetOwl's layout and in rekordbox's (which has none of its own).
+    pub stage_panel: bool,
+    pub auto_dj_panel: bool,
+    pub club_auto_dj: bool,
     /// The crossfader off, as rekordbox's (Preferences → Controller → Mixer): both channels
     /// straight through, the channel faders mix. (Kept for older settings: the assign says it.)
     pub crossfader_off: bool,
@@ -102,6 +107,9 @@ impl Default for Prefs {
             layout: DeskLayout::WetOwl,
             bar_groups: true,
             club_fx: true,
+            stage_panel: true,
+            auto_dj_panel: true,
+            club_auto_dj: false,
             crossfader_off: false,
             crossfader_assign: XfSide::USUAL,
             follow_rekordbox: false,

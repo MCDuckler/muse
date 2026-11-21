@@ -208,12 +208,13 @@ struct Picture {
     row: u32,
     /// 0 free, 1 being read, 2 read.
     state: Arc<AtomicU8>,
-    due: Instant,
+    /// When this picture was drawn and its copy asked for: the next is due a period after
+    /// that (not after it was read back, which takes a frame or two).
+    asked: std::cell::Cell<Instant>,
 }
 
 impl Picture {
-    fn new(gpu: &Gpu, out_w: u32, out_h: u32) -> Picture {
-        let w = 640u32;
+    fn new(gpu: &Gpu, out_w: u32, out_h: u32, w: u32) -> Picture {
         let h = ((w as f32 * out_h as f32 / out_w.max(1) as f32).round() as u32).clamp(2, 1024);
         let texture = wo_render::target(gpu, w, h);
         let view = texture.create_view(&Default::default());
@@ -224,7 +225,7 @@ impl Picture {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        Picture { texture, view, buffer, w, h, row, state: Arc::new(AtomicU8::new(0)), due: Instant::now() }
+        Picture { texture, view, buffer, w, h, row, state: Arc::new(AtomicU8::new(0)), asked: std::cell::Cell::new(Instant::now()) }
     }
 
     /// Four bytes of size, then RGBA, top row first (wo_wire::Thumb).
@@ -255,7 +256,10 @@ struct Window_ {
     config: wgpu::SurfaceConfiguration,
     gpu: Gpu,
     stage: Stage,
-    picture: Option<Picture>,
+    /// The Desk's pictures, two in turn: one read back while the next is drawn.
+    picture: [Option<Picture>; 2],
+    /// When the next picture is due.
+    picture_due: Instant,
     adapt: Adapt,
     /// The last frame's time, microseconds: from its start to the GPU's end of it.
     took: Arc<AtomicU64>,
@@ -291,6 +295,9 @@ struct App {
     shown_due: Instant,
     /// Counted since the start: pictures sent, lines heard, cues among them.
     pictures: u64,
+    /// The picture the Desk asked for: so many a second, so wide (10 and 640 till it says).
+    picture_hz: f32,
+    picture_w: u32,
     heard: u64,
     cues: u64,
     black: f32,
@@ -426,6 +433,10 @@ impl App {
                     In::Said(Said::Record(deck, f)) => facts[if deck == "B" { 1 } else { 0 }] = f.map(|f| *f),
                     In::Said(Said::Cue(c)) => *cue = c,
                     In::Said(Said::Hand(h)) => hands.push(h),
+                    In::Said(Said::Pictures { hz, w }) => {
+                        self.picture_hz = hz.clamp(1.0, 120.0);
+                        self.picture_w = w.clamp(160, 1280);
+                    }
                     In::Said(Said::Other) => {}
                     In::Pcm(b) => self.milk.pcm(&b),
                     In::Cover(c) => {
@@ -487,10 +498,14 @@ impl App {
         let now = Instant::now();
         let Some(d) = &mut self.win else { return };
         let (ww, wh) = (d.config.width, d.config.height);
-        let picture_h = ((640.0 * wh as f32 / ww.max(1) as f32).round() as u32).clamp(2, 1024);
-        // the picture for the Desk, ten times a second, when the last one has been read
-        let picture_now = matches!(self.source, Source::Desk { joined: true, .. })
-            && d.picture.as_ref().is_none_or(|p| p.state.load(Ordering::Acquire) == 0 && now >= p.due);
+        let pw = self.picture_w;
+        let picture_h = ((pw as f32 * wh as f32 / ww.max(1) as f32).round() as u32).clamp(2, 1024);
+        // the picture for the Desk, as often as it asked (ten a second unless it shows it
+        // large), when the last one has been read
+        let slot = d.picture.iter().position(|p| p.as_ref().is_none_or(|p| p.state.load(Ordering::Acquire) == 0));
+        let picture_now = matches!(self.source, Source::Desk { joined: true, .. }) && slot.is_some() && now >= d.picture_due;
+        let slot = slot.unwrap_or(0);
+        let period = Duration::from_secs_f32(1.0 / self.picture_hz);
         if !present && !picture_now {
             let _ = d.gpu.device.poll(wgpu::PollType::Poll);
             self.send_picture();
@@ -557,11 +572,11 @@ impl App {
         }
         let view = out.as_ref().map(|o| o.texture.create_view(&Default::default()));
         // unseen, the picture's own size is all there is to draw
-        let (w, h) = if present { (ww, wh) } else { (640, picture_h) };
-        if picture_now && d.picture.as_ref().is_none_or(|p| p.h != picture_h) {
-            d.picture = Some(Picture::new(&d.gpu, ww, wh));
+        let (w, h) = if present { (ww, wh) } else { (pw, picture_h) };
+        if picture_now && d.picture[slot].as_ref().is_none_or(|p| p.h != picture_h || p.w != pw) {
+            d.picture[slot] = Some(Picture::new(&d.gpu, ww, wh, pw));
         }
-        let pic = if picture_now { d.picture.as_ref() } else { None };
+        let pic = if picture_now { d.picture[slot].as_ref() } else { None };
         // the dancers, where the scene is theirs: posed and painted at the working size
         if let Some((co, sim)) = &mut self.dance
             && f.figure.is_none()
@@ -592,6 +607,8 @@ impl App {
             let _ = d.timer.send((index, began));
         }
         if let Some(p) = pic {
+            p.asked.set(began);
+            d.picture_due = began + period;
             p.state.store(1, Ordering::Release);
             let state = p.state.clone();
             p.buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| state.store(if r.is_ok() { 2 } else { 0 }, Ordering::Release));
@@ -659,12 +676,15 @@ impl App {
     /// The Desk's picture, once it has been read back.
     fn send_picture(&mut self) {
         let Some(d) = &mut self.win else { return };
-        if let (Some(p), Source::Desk { link, .. }) = (d.picture.as_mut(), &self.source)
-            && let Some(bytes) = p.take()
-        {
-            p.due = Instant::now() + Duration::from_millis(100);
-            link.send(Message::binary(bytes));
-            self.pictures += 1;
+        let Source::Desk { link, .. } = &self.source else { return };
+        // the older first, so the Desk sees them in order
+        let mut ready: Vec<&mut Picture> = d.picture.iter_mut().flatten().filter(|p| p.state.load(Ordering::Acquire) == 2).collect();
+        ready.sort_by_key(|p| p.asked.get());
+        for p in ready {
+            if let Some(bytes) = p.take() {
+                link.send(Message::binary(bytes));
+                self.pictures += 1;
+            }
         }
     }
 }
@@ -740,7 +760,7 @@ impl ApplicationHandler for App {
         eprintln!("stage: presenting {present_mode:?}");
         let took = Arc::new(AtomicU64::new(0));
         let timer = timer(gpu.device.clone(), took.clone());
-        self.win = Some(Window_ { window, surface, config, gpu, stage, picture: None, adapt: Adapt::new(self.args.scale), took, timer });
+        self.win = Some(Window_ { window, surface, config, gpu, stage, picture: [None, None], picture_due: Instant::now(), adapt: Adapt::new(self.args.scale), took, timer });
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
@@ -834,7 +854,7 @@ fn main() {
             None
         }
     };
-    let mut app = App { args, instance, book, source, play: Play::default(), win: None, started: now, last: now, frames: 0, since: now, shown_due: now, pictures: 0, heard: 0, cues: 0, black: 0.0, presented: now, missing: None, milk, covers: [None, None], ground: None, dance, picture_cam: Default::default(), type3d: Default::default(), video: video::VideoRun::new(wo_video::Library::here()), paced: false, due: now, phase: 0.0 };
+    let mut app = App { args, instance, book, source, play: Play::default(), win: None, started: now, last: now, frames: 0, since: now, shown_due: now, pictures: 0, picture_hz: 10.0, picture_w: 640, heard: 0, cues: 0, black: 0.0, presented: now, missing: None, milk, covers: [None, None], ground: None, dance, picture_cam: Default::default(), type3d: Default::default(), video: video::VideoRun::new(wo_video::Library::here()), paced: false, due: now, phase: 0.0 };
     el.run_app(&mut app).expect("the stage ran");
 }
 

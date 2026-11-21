@@ -25,8 +25,8 @@ impl App {
             self.club(desk, ui, p, full, s);
             return;
         }
-        let wide = self.prefs.wide_crate;
-        let l = crate::ui::layout(full, wide);
+        let (stage_on, auto_on) = self.side_panels();
+        let l = crate::ui::layout_parts(full, stage_on, auto_on);
         self.top_bar(desk, ui, p, l.top, s);
         self.overviews(desk, ui, p, l.overview, s);
         // the page under them fades in when it changes
@@ -50,8 +50,10 @@ impl App {
         }
         self.mixer(desk, ui, p, l.mixer, s);
         self.crate_(desk, ui, p, l.crate_, s);
-        if !wide {
+        if stage_on {
             self.stage_card(desk, ui, p, l.stage);
+        }
+        if auto_on {
             self.auto_dj(desk, ui, p, l.auto, s);
         }
         ui.set_opacity(1.0);
@@ -132,12 +134,17 @@ impl App {
         if Btn::new("Auto DJ").icon(Icon::AutoMix).tone(Tone::Ok).on(s.auto).show(ui, p, auto, "auto").on_hover_text("The Auto DJ mixes the next record in  (A)").clicked() {
             desk.set_auto(!s.auto);
         }
-        // the booth's side panels (the stage and the Auto DJ's) out, or folded away
+        // the booth's side panels one by one: the stage's picture, the Auto DJ's (C: all)
+        let (stage_on, auto_on) = self.side_panels();
         let panels = Rect::from_min_size(pos2(auto.left() - 10.0 - 32.0, y - 16.0), vec2(32.0, 32.0));
-        let shown = !self.prefs.wide_crate;
-        let hint = if shown { "Fold the stage and the Auto DJ away: the crate wide  (C)" } else { "The stage and the Auto DJ back  (C)" };
-        if self.page == Page::Booth && Btn::new("").icon(Icon::PanelRight).quiet().on(shown).show(ui, p, panels, "panels").on_hover_text(hint).clicked() {
-            self.toggle_wide_crate(ui.ctx());
+        let pic = Rect::from_min_size(pos2(panels.left() - 6.0 - 32.0, y - 16.0), vec2(32.0, 32.0));
+        if self.page == Page::Booth {
+            if Btn::new("").icon(Icon::Screen).quiet().on(stage_on).show(ui, p, pic, "panel-stage").on_hover_text(if stage_on { "Fold the show's picture away" } else { "The show's picture beside the crate" }).clicked() {
+                self.toggle_stage_panel(ui.ctx());
+            }
+            if Btn::new("").icon(Icon::PanelRight).quiet().on(auto_on).show(ui, p, panels, "panels").on_hover_text(if auto_on { "Fold the Auto DJ's panel away  (C: every side panel)" } else { "The Auto DJ's panel beside the crate" }).clicked() {
+                self.toggle_auto_dj_panel(ui.ctx());
+            }
         }
         // a list playing in order: where it is, back, next, let go
         if let Some(pl) = s.player.as_ref() {
@@ -1794,83 +1801,102 @@ a click: following rekordbox")).clicked() {
 
     /// The show's window, small: its picture under a glass caption, and four hands.
     pub(crate) fn stage_card(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect) {
-        kit::panel(p, r, false);
-        let inner = r.shrink(t::INSET);
+        // the show itself, the whole section: no frame, no words, no buttons — they come over
+        // it while a hand is on it (always while there is no show)
         let v = desk.stage();
         let on = v.stages > 0;
-        kit::section(p, inner.left_top(), Align2::LEFT_TOP, "Stage");
-        // on the stage now: the tally; opening: the screen with its arc; closed: nothing to say
-        if on {
-            let w = crate::paint::label_width(p, "Live", 9.5) + 12.0;
-            kit::tally(p, pos2(inner.right() - w, inner.top() + 6.0), "Live");
-        } else if v.starting {
-            kit::status(ui, p, Rect::from_center_size(pos2(inner.right() - 11.0, inner.top() + 6.0), vec2(22.0, 22.0)), Icon::Screen, kit::State::Busy, "stage-busy");
-        }
-        let buttons = 30.0 + 8.0 + 30.0;
-        let room = inner.height() - 26.0 - buttons - 10.0;
-        // the picture as large as the card lets it be, 16:9
-        let pic_size = if inner.width() * 9.0 / 16.0 <= room { vec2(inner.width(), inner.width() * 9.0 / 16.0) } else { vec2(room * 16.0 / 9.0, room) };
-        let scene = match (on, v.untold) {
-            (true, true) => "an older stage: it says nothing of its scene".to_owned(),
-            (true, false) => v.told.look.clone().or(v.scene.clone()).unwrap_or_else(|| "—".into()),
-            _ => "—".into(),
+        let ctx = ui.ctx().clone();
+        let round = CornerRadius::same(if t::club() { 0 } else { t::R_PANEL });
+        p.rect_filled(r, round, Color32::BLACK);
+        let over = ctx.pointer_hover_pos().is_some_and(|q| r.contains(q));
+        let k = motion::tween_bool(&ctx, ui.scope_id().with("stage-over"), over, motion::QUICK, motion::STANDARD);
+        let shown = match (&self.stage_pic, on) {
+            (Some((_, tex)), true) => {
+                self.preview_seen = true;
+                // filled and cropped to the section, as the show fills its screen
+                let [tw, th] = tex.size();
+                let (pa, ra) = (tw as f32 / th.max(1) as f32, r.width() / r.height().max(1.0));
+                let uv = if ra > pa {
+                    let f = pa / ra;
+                    Rect::from_min_max(pos2(0.0, (1.0 - f) / 2.0), pos2(1.0, (1.0 + f) / 2.0))
+                } else {
+                    let f = ra / pa;
+                    Rect::from_min_max(pos2((1.0 - f) / 2.0, 0.0), pos2((1.0 + f) / 2.0, 1.0))
+                };
+                p.add(egui::epaint::RectShape::filled(r, round, Color32::WHITE).with_texture(tex.id(), uv));
+                // the next picture as soon as it comes
+                ctx.request_repaint_after(std::time::Duration::from_millis(8));
+                true
+            }
+            _ => false,
         };
-        if pic_size.y >= 60.0 {
-            let pic = Rect::from_min_size(pos2(inner.center().x - pic_size.x / 2.0, inner.top() + 26.0), pic_size);
-            match (&self.stage_pic, on) {
-                (Some((_, tex)), true) => {
-                    p.rect_filled(pic, CornerRadius::same(t::R_PAD), Color32::BLACK);
-                    p.add(egui::epaint::RectShape::filled(pic, CornerRadius::same(t::R_PAD), Color32::WHITE).with_texture(tex.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
-                    // the caption on glass over the picture's foot
-                    let cap = Rect::from_min_max(pos2(pic.left() + 6.0, pic.bottom() - 30.0), pos2(pic.right() - 6.0, pic.bottom() - 6.0));
-                    kit::glass_tab(p, cap);
-                    let held = if v.held { label_sized(p, pos2(cap.right() - 8.0, cap.center().y), Align2::RIGHT_CENTER, "Held", 10.0, t::warm()).left() } else { cap.right() };
-                    kit::clipped(p, pos2(cap.left() + 8.0, cap.center().y), &scene, 11.5, "", t::text(), held - cap.left() - 16.0);
-                    p.rect_stroke(pic, CornerRadius::same(t::R_PAD), Stroke::new(1.0, white(0.08)), StrokeKind::Inside);
-                }
-                _ => {
-                    // no show: a screen's outline, dashed, and what to do
-                    p.rect_filled(pic, CornerRadius::same(t::R_PAD), Color32::from_black_alpha(70));
-                    dashed_rect(p, pic.shrink(1.0), white(0.14));
-                    let (say, ink) = match (&v.trouble, v.starting) {
-                        (Some(why), _) => (why.clone(), t::warm()),
-                        (None, true) => ("The stage window is opening".to_owned(), t::muted()),
-                        (None, false) => ("The show, in a window of its own".to_owned(), t::faint()),
-                    };
-                    crate::ui::icons::paint(p, Rect::from_center_size(pic.center() - vec2(0.0, 12.0), vec2(22.0, 22.0)), Icon::Screen, alpha_of(t::faint(), 0.7));
-                    let mut job = egui::text::LayoutJob::simple(say, egui::FontId::new(12.0, crate::paint::family("")), ink, pic.width() - 24.0);
-                    job.halign = egui::Align::Center;
-                    let g = p.layout_job(job);
-                    p.galley(pos2(pic.center().x, pic.center().y + 6.0), g, ink);
-                }
-            }
-            // the picture opens the Show page, where the show is played
-            if ui.interact(pic, ui.scope_id().with("stage-pic"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("The Show page  (K)").clicked() {
-                self.page = Page::Show;
-            }
-        } else {
-            kit::clipped(p, pos2(inner.left(), inner.top() + 36.0), &scene, 13.0, "", if on { t::text() } else { t::faint() }, inner.width());
+        // a click on the show opens the Show page (under the buttons that come over it)
+        if shown && ui.interact(r, ui.scope_id().with("stage-pic"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("The Show page  (K)").clicked() {
+            self.page = Page::Show;
         }
-        // the hands: they go to the stage's director
-        let bw = (inner.width() - 3.0 * 6.0) / 4.0;
-        let hy = inner.bottom() - buttons;
+        let a = if shown { k } else { 1.0 };
+        if a <= 0.01 {
+            return;
+        }
+        let inner = r.shrink(t::INSET);
+        let mut over_ui = ui.new_child(egui::UiBuilder::new().max_rect(r));
+        over_ui.set_opacity(a);
+        let p = over_ui.painter().clone();
+        if shown {
+            // scrims, top and foot, so the words read over any picture
+            let top = Rect::from_min_max(r.min, pos2(r.right(), (r.top() + 44.0).min(r.bottom())));
+            let foot = Rect::from_min_max(pos2(r.left(), (r.bottom() - 52.0).max(r.top())), r.max);
+            p.rect_filled(top, CornerRadius::ZERO, Color32::from_black_alpha(150));
+            p.rect_filled(foot, CornerRadius::ZERO, Color32::from_black_alpha(170));
+        } else {
+            // no show: a screen's outline, dashed, and what to do
+            dashed_rect(&p, r.shrink(6.0), white(0.14));
+            let (say, ink) = match (&v.trouble, v.starting) {
+                (Some(why), _) => (why.clone(), t::warm()),
+                (None, true) => ("The stage window is opening".to_owned(), t::muted()),
+                (None, false) => ("The show, in a window of its own".to_owned(), t::faint()),
+            };
+            crate::ui::icons::paint(&p, Rect::from_center_size(r.center() - vec2(0.0, 22.0), vec2(22.0, 22.0)), Icon::Screen, alpha_of(t::faint(), 0.7));
+            let mut job = egui::text::LayoutJob::simple(say, egui::FontId::new(12.0, crate::paint::family("")), ink, (r.width() - 24.0).max(40.0));
+            job.halign = egui::Align::Center;
+            let g = p.layout_job(job);
+            p.galley(pos2(r.center().x, r.center().y - 4.0), g, ink);
+        }
+        kit::section(&p, inner.left_top(), Align2::LEFT_TOP, "Stage");
+        if on {
+            let w = crate::paint::label_width(&p, "Live", 9.5) + 12.0;
+            kit::tally(&p, pos2(inner.right() - w, inner.top() + 6.0), "Live");
+            let scene = if v.untold { "an older stage: it says nothing of its scene".to_owned() } else { v.told.look.clone().or(v.scene.clone()).unwrap_or_else(|| "—".into()) };
+            let held = if v.held { label_sized(&p, pos2(inner.right() - w - 10.0, inner.top() + 6.0), Align2::RIGHT_CENTER, "Held", 10.0, t::warm()).left() } else { inner.right() - w - 10.0 };
+            kit::clipped(&p, pos2(inner.left() + 52.0, inner.top() + 6.0), &scene, 11.5, "", t::text(), held - inner.left() - 60.0);
+        } else if v.starting {
+            kit::status(&mut over_ui, &p, Rect::from_center_size(pos2(inner.right() - 11.0, inner.top() + 6.0), vec2(22.0, 22.0)), Icon::Screen, kit::State::Busy, "stage-busy");
+        }
+        // the foot: the hands for the show's director, and the window's switch
+        let row_h = 30.0;
+        let hy = inner.bottom() - row_h;
+        let open_w = if on || v.starting { 34.0 } else { inner.width().min(180.0) };
         let hands: [(&str, Icon, Tone, bool, ShowHand); 4] = [
             ("Hit", Icon::Bolt, Tone::Neutral, false, ShowHand::Hit),
             ("Next", Icon::Next, Tone::Neutral, false, ShowHand::Next),
             ("Hold", Icon::Lock, Tone::Neutral, v.held, ShowHand::Hold(!v.held)),
             ("Black", Icon::Power, Tone::Danger, v.blackout, ShowHand::Blackout(!v.blackout)),
         ];
-        let hand_r = |i: usize| Rect::from_min_size(pos2(inner.left() + i as f32 * (bw + 6.0), hy), vec2(bw, 30.0));
-        let bare = kit::bare_row(p, &hands.iter().enumerate().map(|(i, (w, ic, ..))| (Btn::new(w).icon(*ic).size(11.0), hand_r(i))).collect::<Vec<_>>());
-        for (i, (name, icon, tone, lit, hand)) in hands.into_iter().enumerate() {
-            let br = hand_r(i);
-            if Btn::new(name).icon(icon).tone(tone).on(lit).enabled(on).size(11.0).bare(bare).show(ui, p, br, ("show", i)).clicked() {
-                desk.show(hand);
+        if on {
+            let room = inner.width() - open_w - 6.0;
+            let bw = ((room - 3.0 * 6.0) / 4.0).max(20.0);
+            let words_fit = bw >= 64.0;
+            for (i, (name, icon, tone, lit, hand)) in hands.into_iter().enumerate() {
+                let br = Rect::from_min_size(pos2(inner.left() + i as f32 * (bw + 6.0), hy), vec2(bw, row_h));
+                if Btn::new(if words_fit { name } else { "" }).icon(icon).tone(tone).on(lit).size(11.0).show(&mut over_ui, &p, br, ("show", i)).on_hover_text(name).clicked() {
+                    desk.show(hand);
+                }
             }
         }
-        let open = Rect::from_min_size(pos2(inner.left(), inner.bottom() - 30.0), vec2(inner.width(), 30.0));
-        let word = if on || v.starting { "Close the stage" } else { "Open the stage" };
-        if Btn::new(word).icon(Icon::Screen).quiet().show(ui, p, open, "stage-open").clicked() {
+        let open = Rect::from_min_size(pos2(if on || v.starting { inner.right() - open_w } else { inner.center().x - open_w / 2.0 }, hy), vec2(open_w, row_h));
+        let word = if on || v.starting { "" } else { "Open the stage" };
+        let tip = if on || v.starting { "Close the stage" } else { "The show in its own window" };
+        if Btn::new(word).icon(Icon::Screen).quiet().show(&mut over_ui, &p, open, "stage-open").on_hover_text(tip).clicked() {
             if on || v.starting {
                 desk.close_stage();
             } else {

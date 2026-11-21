@@ -28,6 +28,12 @@ pub fn cue(c: &Cue) -> String {
     format!(r#"{{"t":"cue","cue":{}}}"#, c.to_json())
 }
 
+/// How often and how wide the Desk wants the stage's picture: often while it shows it large
+/// (its booth's preview), seldom while it only lights its glass with it.
+pub fn pictures(hz: f32, width: u32) -> String {
+    format!(r#"{{"t":"pictures","hz":{hz},"w":{width}}}"#)
+}
+
 /// What a v2 stage says first.
 pub const STAGE_HELLO: &str = r#"{"t":"hello","v":2,"from":"stage"}"#;
 
@@ -38,6 +44,8 @@ pub enum Said {
     Record(String, Option<Box<RecordFacts>>),
     Cue(Box<Cue>),
     Hand(Hand),
+    /// The picture the Desk wants: so many a second, so wide.
+    Pictures { hz: f32, w: u32 },
     /// The Desk's hello, or anything else.
     Other,
 }
@@ -53,6 +61,10 @@ pub fn said(line: &str) -> Said {
         }
         Some("cue") => j.get("cue").map(|c| Said::Cue(Box::new(Cue::from_json(c)))).unwrap_or(Said::Other),
         Some("hands") => hand_of(&j).map(Said::Hand).unwrap_or(Said::Other),
+        Some("pictures") => Said::Pictures {
+            hz: j.get("hz").and_then(|v| v.as_f64()).unwrap_or(10.0) as f32,
+            w: j.get("w").and_then(|v| v.as_u64()).unwrap_or(640) as u32,
+        },
         _ => Said::Other,
     }
 }

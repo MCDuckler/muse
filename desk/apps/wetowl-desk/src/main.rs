@@ -90,6 +90,8 @@ pub(crate) struct App {
     clock: Option<(Arc<AtomicBool>, JoinHandle<()>)>,
     /// The stage's picture, and which of its pictures it is.
     pub(crate) stage_pic: Option<(u64, TextureHandle)>,
+    /// The stage's picture shown in the booth this frame (it is then asked for often).
+    pub(crate) preview_seen: bool,
     /// The light behind the glass.
     glass: Glass,
     ball: TextureHandle,
@@ -414,6 +416,7 @@ impl App {
             clock: clock.then(|| keep_time(desk.clone(), ctx.clone())),
             desk,
             stage_pic: None,
+            preview_seen: false,
             glass: Glass::new(ctx),
             ball: tex("ball", wo_deskcore::backdrop::ball()),
             search: String::new(),
@@ -509,6 +512,34 @@ impl App {
             }
             self.seen.2 = trouble;
         }
+    }
+
+    /// The side panels shown: the stage's picture, the Auto DJ (this layout's), neither
+    /// where C folded them all away.
+    pub(crate) fn side_panels(&self) -> (bool, bool) {
+        let wide = self.prefs.wide_crate;
+        let club = self.prefs.layout == wo_deskcore::DeskLayout::Club;
+        (!wide && self.prefs.stage_panel, !wide && if club { self.prefs.club_auto_dj } else { self.prefs.auto_dj_panel })
+    }
+
+    /// The stage's picture shown or not; kept (C's fold lifted, so it shows).
+    pub(crate) fn toggle_stage_panel(&mut self, ctx: &egui::Context) {
+        let (on, _) = self.side_panels();
+        self.prefs.stage_panel = !on;
+        self.prefs.wide_crate = false;
+        self.save_prefs(ctx);
+    }
+
+    /// The Auto DJ (this layout's) shown or not; kept.
+    pub(crate) fn toggle_auto_dj_panel(&mut self, ctx: &egui::Context) {
+        let (_, on) = self.side_panels();
+        if self.prefs.layout == wo_deskcore::DeskLayout::Club {
+            self.prefs.club_auto_dj = !on;
+        } else {
+            self.prefs.auto_dj_panel = !on;
+        }
+        self.prefs.wide_crate = false;
+        self.save_prefs(ctx);
     }
 
     /// The booth's side panels folded away (the crate wide), or back; kept.
@@ -627,10 +658,18 @@ impl App {
         let p = ui.painter().clone();
         // (the glass is opaque: no ground under it)
         self.glass.draw(ui.ctx(), &p, full, self.prefs.backdrop_light);
+        self.preview_seen = false;
         if self.page == show::Page::Kit {
             gallery::draw(self, ui, &p, full);
         } else {
             self.draw(desk, ui, &p, full, &s);
+        }
+        // the stage's picture as smooth as the show while the booth shows it; else a few a
+        // second for the glass
+        if self.preview_seen {
+            desk.want_stage_pictures(60, 480);
+        } else {
+            desk.want_stage_pictures(10, 640);
         }
         self.overlays(desk, ui, full);
         self.prompt_window(desk, ui.ctx(), full);

@@ -180,7 +180,8 @@ impl App {
     pub(crate) fn club(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, full: Rect, s: &Snapshot) {
         // matte: the glass's light does not come through
         p.rect_filled(full, CornerRadius::ZERO, GROUND);
-        let l = layout(full, !self.prefs.wide_crate, self.prefs.club_fx);
+        let (stage_on, auto_on) = self.side_panels();
+        let l = layout(full, stage_on || auto_on, self.prefs.club_fx);
         self.club_top(desk, ui, p, l.top, s);
         if self.page == Page::Show {
             let page = Rect::from_min_max(pos2(full.left() + 4.0, l.top.bottom() + G), full.max - vec2(4.0, 4.0));
@@ -198,13 +199,17 @@ impl App {
         }
         self.crate_(desk, ui, p, l.browser, s);
         if let Some(side) = l.side {
-            // short (a laptop's, the effects out): the Auto DJ alone, the stage on SHOW
-            if side.height() < 540.0 {
-                self.auto_dj(desk, ui, p, side, s);
-            } else {
-                let stage_h = (side.width() * 9.0 / 16.0 + 64.0).min(side.height() - 330.0);
-                self.stage_card(desk, ui, p, Rect::from_min_size(side.min, vec2(side.width(), stage_h)));
-                self.auto_dj(desk, ui, p, Rect::from_min_max(pos2(side.left(), side.top() + stage_h + G), side.max), s);
+            match (stage_on, auto_on) {
+                (true, false) => self.stage_card(desk, ui, p, side),
+                (false, true) => self.auto_dj(desk, ui, p, side, s),
+                // both: the picture 16:9 across the side, the Auto DJ under it (short: the
+                // Auto DJ alone, the stage on SHOW)
+                _ if side.height() < 540.0 => self.auto_dj(desk, ui, p, side, s),
+                _ => {
+                    let stage_h = (side.width() * 9.0 / 16.0).min(side.height() - 330.0);
+                    self.stage_card(desk, ui, p, Rect::from_min_size(side.min, vec2(side.width(), stage_h)));
+                    self.auto_dj(desk, ui, p, Rect::from_min_max(pos2(side.left(), side.top() + stage_h + G), side.max), s);
+                }
             }
         }
         self.drag_ghost(desk, ui);
@@ -228,11 +233,16 @@ impl App {
             x += bw + 4.0;
         }
         x += 10.0;
-        // the side panels, and the way back to the WetOwl's layout
-        let side = !self.prefs.wide_crate;
-        if button(ui, p, Rect::from_min_size(pos2(x, y - 11.0), vec2(96.0, 22.0)), "STAGE · AUTO", side, rgb(0x3A3A40), "club-side").on_hover_text("The stage and the Auto DJ beside the browser  (C)").clicked() {
-            self.toggle_wide_crate(ui.ctx());
+        // the side panels one by one (C: all away, or back), and the way back to the WetOwl's layout
+        let (stage_on, auto_on) = self.side_panels();
+        if button(ui, p, Rect::from_min_size(pos2(x, y - 11.0), vec2(56.0, 22.0)), "STAGE", stage_on, rgb(0x3A3A40), "club-side-stage").on_hover_text("The show's picture beside the browser  (C: every side panel)").clicked() {
+            self.toggle_stage_panel(ui.ctx());
         }
+        x += 60.0;
+        if button(ui, p, Rect::from_min_size(pos2(x, y - 11.0), vec2(36.0, 22.0)), "AUTO", auto_on, rgb(0x3A3A40), "club-side-auto").on_hover_text("The Auto DJ's panel beside the browser").clicked() {
+            self.toggle_auto_dj_panel(ui.ctx());
+        }
+        x -= 60.0;
         x += 100.0;
         let units = desk.fx_units();
         let fx_lit = units.iter().any(|u| u.on);

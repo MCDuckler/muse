@@ -41,6 +41,8 @@ pub(crate) struct Stage {
     facts_key: [Option<FactsKey>; 2],
     /// Each deck's cover as the wire carries it (wo_wire::cover), for stages now and to come.
     covers: [Option<Vec<u8>>; 2],
+    /// The picture asked of the stage (so many a second, so wide), as last told.
+    pictures: Option<(u32, u32)>,
 }
 
 /// A deck's record and how much of its timing is known.
@@ -154,6 +156,7 @@ impl Stage {
                             s.keep_binary(["cover.A", "cover.B"][i], c.clone());
                         }
                     }
+                    self.pictures = None;
                     self.wire = Some(s)
                 }
                 Err(e) => self.trouble = Some(format!("the Desk could not listen for a stage: {e}")),
@@ -487,6 +490,18 @@ impl Stage {
             rust_here: rust_program().is_some(),
             why: None,
             hands: None,
+        }
+    }
+
+    /// The picture the booth wants of the stage: often and larger while it shows it as a
+    /// preview, else seldom (told on a change; kept for a stage that comes later).
+    pub(crate) fn want_pictures(&mut self, hz: u32, w: u32) {
+        if self.pictures == Some((hz, w)) {
+            return;
+        }
+        if let Some(wire) = &self.wire {
+            wire.keep("pictures", wo_wire::v2::pictures(hz as f32, w));
+            self.pictures = Some((hz, w));
         }
     }
 

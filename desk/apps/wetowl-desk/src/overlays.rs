@@ -413,14 +413,22 @@ impl App {
         y += 18.0;
         kit::section(p, pos2(r.left(), y), Align2::LEFT_TOP, "Booth");
         y += 26.0;
-        row(p, y, "Side panels");
-        let i = Some(self.prefs.wide_crate as usize);
-        if let Some(i) = kit::segmented(ui, p, Rect::from_min_size(pos2(x, y), vec2(w.min(300.0), 28.0)), &["Shown", "Hidden"], i, Tone::Neutral, "set-wide-crate") {
-            self.prefs.wide_crate = i == 1;
-            self.save_prefs(ui.ctx());
+        let (stage_on, auto_on) = self.side_panels();
+        row(p, y, "Show's picture");
+        if let Some(i) = kit::segmented(ui, p, Rect::from_min_size(pos2(x, y), vec2(w.min(300.0), 28.0)), &["Shown", "Hidden"], Some(!stage_on as usize), Tone::Neutral, "set-side-stage") {
+            if (i == 0) != stage_on {
+                self.toggle_stage_panel(ui.ctx());
+            }
         }
         y += 34.0;
-        y += words(p, y, "Hidden: the stage and the Auto DJ fold away and the crate takes the width (C on the keyboard, or the panel button by the Auto DJ).", t::faint()) + 16.0;
+        row(p, y, "Auto DJ panel");
+        if let Some(i) = kit::segmented(ui, p, Rect::from_min_size(pos2(x, y), vec2(w.min(300.0), 28.0)), &["Shown", "Hidden"], Some(!auto_on as usize), Tone::Neutral, "set-side-auto") {
+            if (i == 0) != auto_on {
+                self.toggle_auto_dj_panel(ui.ctx());
+            }
+        }
+        y += 34.0;
+        y += words(p, y, "Beside the crate, each on its own (this layout's Auto DJ panel: rekordbox's has it hidden at first). C on the keyboard folds every side panel away and back.", t::faint()) + 16.0;
         row(p, y, "Crossfader");
         let i = Some((self.prefs.xf_assign() == [wo_deskcore::XfSide::Thru; 2]) as usize);
         if let Some(i) = kit::segmented(ui, p, Rect::from_min_size(pos2(x, y), vec2(w.min(300.0), 28.0)), &["On", "Off"], i, Tone::Neutral, "set-crossfader") {

@@ -2499,6 +2499,12 @@ impl Desk {
     }
 
     /// The stage's picture, and its count (a new count is a new picture).
+    /// How often (and how wide) the stage's picture should come: the booth's preview on
+    /// screen wants it as smooth as the show; the glass behind the booth a few a second.
+    pub fn want_stage_pictures(&mut self, hz: u32, width: u32) {
+        self.stage.want_pictures(hz, width);
+    }
+
     pub fn stage_thumb(&self) -> Option<(u64, std::sync::Arc<Thumb>)> {
         self.stage.thumb()
     }
