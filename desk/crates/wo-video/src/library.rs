@@ -100,9 +100,10 @@ impl Library {
         out
     }
 
-    /// The sources with no proxy yet (nor one that failed: `failed`, by id).
+    /// The sources with no proxy yet, or one made as an older version (nor one that failed:
+    /// `failed`, by id).
     pub fn pending(&self, failed: &[String]) -> Vec<Pending> {
-        let made: std::collections::BTreeSet<String> = self.stored().into_iter().map(|s| s.meta.id).collect();
+        let made: std::collections::BTreeSet<String> = self.stored().into_iter().filter(|s| s.version >= crate::import::PROXY_VERSION).map(|s| s.meta.id).collect();
         self.sources()
             .into_iter()
             .filter(|p| p.size > 0)
@@ -162,7 +163,7 @@ mod tests {
         for i in [id.as_str(), "gone-00000000"] {
             std::fs::create_dir_all(prox.join(i)).unwrap();
             std::fs::write(prox.join(i).join("proxy.wov"), b"").unwrap();
-            let s = Stored { meta: ClipMeta { id: i.into(), name: i.into(), frames: 3, ..Default::default() }, ..Default::default() };
+            let s = Stored { meta: ClipMeta { id: i.into(), name: i.into(), frames: 3, ..Default::default() }, version: crate::import::PROXY_VERSION, ..Default::default() };
             std::fs::write(prox.join(i).join("clip.json"), serde_json::to_vec(&s).unwrap()).unwrap();
         }
         assert!(lib.pending(&[]).is_empty());

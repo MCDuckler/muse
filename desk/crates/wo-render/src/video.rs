@@ -46,6 +46,41 @@ fn tap(which: i32, p: vec2<f32>) -> vec3<f32> {
     return textureSampleLevel(tb, sb, q, 0.0).rgb;
 }
 
+// the clip's dark passages without their JPEG blocks: a proxy crushes near-black to
+// flat squares (8 texels, some of them pure black), stair-stepped once a look or a blend
+// lifts what is round them; where it is dark the picture is the average of its
+// neighbourhood a block away, the light left sharp
+fn clean(which: i32, p: vec2<f32>) -> vec3<f32> {
+    let c = tap(which, p);
+    let l = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let w = 1.0 - smoothstep(0.03, 0.14, l);
+    if (w <= 0.0) {
+        return c;
+    }
+    var dims: vec2<f32>;
+    if (which == 0) { dims = vec2<f32>(textureDimensions(ta)); } else { dims = vec2<f32>(textureDimensions(tb)); }
+    let t = 8.0 / max(dims, vec2<f32>(1.0));
+    // the dark neighbours only: light (a title, a lamp) is not smeared into the shadow
+    var s = c;
+    var n = 1.0;
+    for (var i = 0; i < 14; i = i + 1) {
+        var o: vec2<f32>;
+        if (i < 8) {
+            let ang = f32(i) * 0.7854 + 0.39;
+            o = vec2<f32>(cos(ang), sin(ang)) * t;
+        } else {
+            // a ring further, so a block between two others is evened out too
+            let ang = f32(i - 8) * 1.0472;
+            o = vec2<f32>(cos(ang), sin(ang)) * t * 2.0;
+        }
+        let q = tap(which, p + o);
+        let k = 1.0 - smoothstep(0.08, 0.2, dot(q, vec3<f32>(0.2126, 0.7152, 0.0722)));
+        s = s + q * k;
+        n = n + k;
+    }
+    return mix(c, s / n, w);
+}
+
 // a soft copy: twelve taps on two rings
 fn blurred(which: i32, p: vec2<f32>) -> vec3<f32> {
     var c = tap(which, p) * 0.2;
@@ -59,11 +94,11 @@ fn blurred(which: i32, p: vec2<f32>) -> vec3<f32> {
 
 fn picture(which: i32, uv: vec2<f32>, a: f32) -> vec3<f32> {
     if (u.fit < 0.5) {
-        return tap(which, place(uv, a, true));
+        return clean(which, place(uv, a, true));
     }
     let p = place(uv, a, false);
     if (inside(p)) {
-        return tap(which, p);
+        return clean(which, p);
     }
     if (u.fit < 1.5) {
         return vec3<f32>(0.0);

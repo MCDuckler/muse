@@ -21,8 +21,13 @@ use crate::proxy::{JpegSplitter, Proxy, ProxyWriter};
 pub const HEIGHT: u32 = 540;
 /// Their rate at most.
 pub const MAX_FPS: f64 = 30.0;
-/// ffmpeg's JPEG quality (2 best .. 31).
-const QUALITY: u32 = 8;
+/// ffmpeg's JPEG quality (2 best .. 31): 4, as 8 flattened a dark passage's noise into
+/// 8-pixel squares, some of them pure black — stair-stepped black on the stage once a look
+/// or a blend lifted what was round them.
+const QUALITY: u32 = 4;
+/// What the proxies are made as: a proxy made before (an older version) is made again,
+/// played as it is till then.
+pub const PROXY_VERSION: u32 = 2;
 
 /// What clip.json holds: the facts, and the source they were made from (to know it again).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -34,6 +39,8 @@ pub struct Stored {
     pub source: String,
     pub size: u64,
     pub modified: u64,
+    /// [PROXY_VERSION] when made (0: before there was one).
+    pub version: u32,
 }
 
 /// A tool of ffmpeg's: WETOWL_FFMPEG's folder, beside this program, on the PATH.
@@ -237,7 +244,7 @@ pub fn import(src: &Path, rel: &str, proxies: &Path, stop: &AtomicBool, mut prog
     let poster_s = poster_second(&meta);
     let poster = proxy.jpeg((poster_s * fps) as usize).map_err(|e| fail(e.to_string()))?;
     std::fs::write(part.join("poster.jpg"), poster).map_err(|e| fail(e.to_string()))?;
-    let stored = Stored { meta, source: rel.to_owned(), size, modified };
+    let stored = Stored { meta, source: rel.to_owned(), size, modified, version: PROXY_VERSION };
     std::fs::write(part.join("clip.json"), serde_json::to_vec_pretty(&stored).unwrap()).map_err(|e| fail(e.to_string()))?;
     drop(proxy);
     let done = proxies.join(&id);

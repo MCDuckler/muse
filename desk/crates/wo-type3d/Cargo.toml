@@ -15,3 +15,4 @@ wo-dance = { path = "../wo-dance" }
 wo-render = { path = "../wo-render" }
 wgpu = "30.0.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = "1.0.154"
