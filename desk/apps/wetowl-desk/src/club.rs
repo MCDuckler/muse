@@ -97,9 +97,12 @@ pub(crate) fn layout(full: Rect, side: bool, fx: bool) -> ClubLayout {
     let r = full.shrink(4.0);
     let h = r.height();
     let top = Rect::from_min_size(r.min, vec2(r.width(), 38.0));
+    // rekordbox's effect panel: under the global section, over the waveforms
+    let fx = fx.then(|| Rect::from_min_size(pos2(r.left(), top.bottom() + G), vec2(r.width(), 64.0)));
+    let lanes_top = fx.map_or(top.bottom(), |f| f.bottom()) + G;
     let lanes_h = (h * 0.15).clamp(112.0, 300.0);
     let lane_h = (lanes_h - G) / 2.0;
-    let l0 = Rect::from_min_size(pos2(r.left(), top.bottom() + G), vec2(r.width(), lane_h));
+    let l0 = Rect::from_min_size(pos2(r.left(), lanes_top), vec2(r.width(), lane_h));
     let l1 = Rect::from_min_size(pos2(r.left(), l0.bottom() + G), vec2(r.width(), lane_h));
     let decks_h = if h < 900.0 { 248.0 } else { 270.0 };
     let deck_top = l1.bottom() + G;
@@ -108,8 +111,7 @@ pub(crate) fn layout(full: Rect, side: bool, fx: bool) -> ClubLayout {
     let decks = [Rect::from_min_size(pos2(r.left(), deck_top), vec2(dw, decks_h)), Rect::from_min_size(pos2(r.right() - dw, deck_top), vec2(dw, decks_h))];
     let mixer = Rect::from_min_max(pos2(decks[0].right() + G, deck_top), pos2(decks[1].left() - G, deck_top + decks_h));
     let strip = Rect::from_min_size(pos2(r.left(), deck_top + decks_h + G), vec2(r.width(), 40.0));
-    let fx = fx.then(|| Rect::from_min_size(pos2(r.left(), strip.bottom() + G), vec2(r.width(), 64.0)));
-    let rest = Rect::from_min_max(pos2(r.left(), fx.map_or(strip.bottom(), |f| f.bottom()) + G), r.max);
+    let rest = Rect::from_min_max(pos2(r.left(), strip.bottom() + G), r.max);
     let side_w = if side { (r.width() * 0.2).clamp(320.0, 420.0) } else { 0.0 };
     let browser = Rect::from_min_max(rest.min, pos2(rest.right() - if side { side_w + G } else { 0.0 }, rest.bottom()));
     let side = side.then(|| Rect::from_min_max(pos2(rest.right() - side_w, rest.top()), rest.max));
@@ -407,18 +409,19 @@ impl App {
 
         // the controls
         let body = Rect::from_min_max(pos2(inner.left(), band.bottom() + 8.0), inner.max);
-        let pitch_w = 40.0;
-        let pitch_r = Rect::from_min_max(pos2(body.right() - pitch_w, body.top()), body.max);
+        // rekordbox's JOG panel: the loop box, CUE and PLAY, the platter, SLIP / Q / MT
+        let side_w = 42.0;
+        let side_r = Rect::from_min_max(pos2(body.right() - side_w, body.top()), body.max);
         let jog_side = body.height().min(150.0);
-        let jog = Rect::from_min_size(pos2(pitch_r.left() - 8.0 - jog_side, body.top() + (body.height() - jog_side) / 2.0), vec2(jog_side, jog_side));
+        let jog = Rect::from_min_size(pos2(side_r.left() - 8.0 - jog_side, body.top() + (body.height() - jog_side) / 2.0), vec2(jog_side, jog_side));
         let tr = Rect::from_min_size(pos2(jog.left() - 8.0 - 50.0, body.top()), vec2(50.0, body.height()));
-        let loops = Rect::from_min_max(pos2(tr.left() - 8.0 - 128.0, body.top()), pos2(tr.left() - 8.0, body.bottom()));
+        let loops = Rect::from_min_max(pos2(tr.left() - 8.0 - 92.0, body.top()), pos2(tr.left() - 8.0, body.bottom()));
         let cues = Rect::from_min_max(body.min, pos2(loops.left() - 10.0, body.bottom()));
         self.club_cues(desk, ui, p, cues, s, d);
         self.club_loops(desk, ui, p, loops, s, d);
         self.club_transport(desk, ui, p, tr, s, d);
         self.club_jog(desk, ui, p, jog, s, d);
-        self.pitch(desk, ui, p, pitch_r, s, d);
+        self.club_deck_switches(desk, ui, p, side_r, s, d);
     }
 
     /// The hot cues as rekordbox lists them: A–H in two columns, each its colour's square
@@ -549,89 +552,86 @@ impl App {
     /// The loop and the jumps: an auto loop of the length shown (‹ › halve and double it),
     /// IN, OUT and EXIT; the jumps back and ahead.
     fn club_loops(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
+        // rekordbox's loop box (JOG panel): AU, its length in beats (a click on it loops so
+        // many beats, again lets go) and ‹ › for half and double; MA, IN and OUT by hand, and
+        // EXIT
         let v = &s.decks[d];
         let len_id = ui.scope_id().with(("club-loop-len", d));
+        let ma_id = ui.scope_id().with(("club-loop-ma", d));
         let mut beats: f64 = ui.ctx().data(|m| m.get_temp(len_id)).unwrap_or(4.0);
+        let mut manual: bool = ui.ctx().data(|m| m.get_temp(ma_id)).unwrap_or(false);
         if let Some(b) = v.loop_beats {
             beats = b;
         }
+        let g = 4.0;
         let rh = 22.0;
-        let g = 5.0;
-        let row = |i: f32| Rect::from_min_size(pos2(r.left(), r.top() + i * (rh + g)), vec2(r.width(), rh));
-        // the length: ‹ n ›
-        let r0 = row(0.0);
-        let bw = 24.0;
-        let less = Rect::from_min_size(r0.min, vec2(bw, rh));
-        let more = Rect::from_min_size(pos2(r0.right() - bw, r0.top()), vec2(bw, rh));
-        p.rect_filled(Rect::from_min_max(pos2(less.right() + 2.0, r0.top()), pos2(more.left() - 2.0, r0.bottom())), CornerRadius::same(2), rgb(0x0A0A0B));
-        let shown = if beats < 1.0 { format!("1/{}", (1.0 / beats).round()) } else { format!("{beats}") };
-        words(p, r0.center(), Align2::CENTER_CENTER, &shown, 13.0, "mono-semi", CUE);
-        if button(ui, p, less, "‹", false, LIT, ("club-loop-less", d)).clicked() {
-            beats = (beats / 2.0).max(0.25);
-            if v.looped.is_some() {
-                desk.halve_loop(d);
+        let top_h = (r.height() - 2.0 * (rh + g)).clamp(30.0, 56.0);
+        let box_r = Rect::from_min_size(pos2(r.left(), r.top() + (r.height() - top_h - 2.0 * (rh + g)) / 2.0), vec2(r.width(), top_h));
+        let r1 = Rect::from_min_size(pos2(r.left(), box_r.bottom() + g), vec2(r.width(), rh));
+        let r2 = Rect::from_min_size(pos2(r.left(), r1.bottom() + g), vec2(r.width(), rh));
+        let half = |row: Rect, i: f32| Rect::from_min_size(pos2(row.left() + i * (row.width() / 2.0 + 1.5), row.top()), vec2(row.width() / 2.0 - 1.5, row.height()));
+        let auto_on = v.looped.is_some() && v.loop_beats.is_some();
+        if manual {
+            let by_hand = v.looped.is_some() && v.loop_beats.is_none();
+            if button(ui, p, half(box_r, 0.0), "IN", v.loop_open, CUE, ("club-in", d)).on_hover_text("Loop in here (the cue point too)").clicked() {
+                desk.loop_in(d);
+            }
+            if button(ui, p, half(box_r, 1.0), "OUT", by_hand, CUE, ("club-out", d)).on_hover_text("Loop out here: the loop plays").clicked() {
+                desk.loop_out(d);
+            }
+            if button(ui, p, r1, if v.looped.is_some() { "EXIT" } else { "RELOOP" }, v.looped.is_some(), CUE, ("club-exit", d)).clicked() {
+                if v.looped.is_some() {
+                    desk.unloop(d);
+                } else {
+                    desk.loop_out(d);
+                }
+            }
+        } else {
+            let shown = if beats < 1.0 { format!("1/{}", (1.0 / beats).round()) } else { format!("{beats}") };
+            let resp = ui.interact(box_r, ui.scope_id().with(("club-loop", d)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("A loop this many beats long from the bar (again lets go)");
+            p.rect(box_r, CornerRadius::same(2), if auto_on { mix(PANEL, CUE, 0.22) } else { rgb(0x0A0A0B) }, Stroke::new(1.0, if auto_on { CUE } else { LINE }), StrokeKind::Inside);
+            words(p, box_r.center(), Align2::CENTER_CENTER, &shown, 15.0, "mono-semi", if auto_on { CUE } else { TEXT });
+            if resp.clicked() {
+                desk.loop_beats(d, beats);
+            }
+            if button(ui, p, half(r1, 0.0), "‹", false, LIT, ("club-loop-less", d)).clicked() {
+                beats = (beats / 2.0).max(1.0 / 32.0);
+                if v.looped.is_some() {
+                    desk.halve_loop(d);
+                }
+            }
+            if button(ui, p, half(r1, 1.0), "›", false, LIT, ("club-loop-more", d)).clicked() {
+                beats = (beats * 2.0).min(512.0);
+                if v.looped.is_some() {
+                    desk.double_loop(d);
+                }
             }
         }
-        if button(ui, p, more, "›", false, LIT, ("club-loop-more", d)).clicked() {
-            beats = (beats * 2.0).min(32.0);
-            if v.looped.is_some() {
-                desk.double_loop(d);
-            }
+        if button(ui, p, half(r2, 0.0), "AU", !manual, LIT, ("club-au", d)).on_hover_text("Auto beat loop").clicked() {
+            manual = false;
         }
-        ui.ctx().data_mut(|m| m.insert_temp(len_id, beats));
-        // the auto loop, and the hand's: IN, OUT, EXIT
-        let r1 = row(1.0);
-        if button(ui, p, r1, "AUTO LOOP", v.looped.is_some() && v.loop_beats.is_some(), CUE, ("club-loop", d)).on_hover_text("A loop this many beats long from the bar (again lets go)").clicked() {
-            desk.loop_beats(d, beats);
+        if button(ui, p, half(r2, 1.0), "MA", manual, LIT, ("club-ma", d)).on_hover_text("Manual loop: IN and OUT").clicked() {
+            manual = true;
         }
-        let r2 = row(2.0);
-        let w3 = (r2.width() - 2.0 * 4.0) / 3.0;
-        let cell = |i: f32| Rect::from_min_size(pos2(r2.left() + i * (w3 + 4.0), r2.top()), vec2(w3, rh));
-        let by_hand = v.looped.is_some() && v.loop_beats.is_none();
-        if button(ui, p, cell(0.0), "IN", v.loop_open, CUE, ("club-in", d)).clicked() {
-            desk.loop_in(d);
+        ui.ctx().data_mut(|m| {
+            m.insert_temp(len_id, beats);
+            m.insert_temp(ma_id, manual);
+        });
+    }
+
+    /// The JOG panel's right edge, as rekordbox's: SLIP and Q at the top, MT at the foot.
+    fn club_deck_switches(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot, d: usize) {
+        let v = &s.decks[d];
+        let bh = 20.0;
+        let cell = |y: f32| Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), bh));
+        if button(ui, p, cell(r.top() + 4.0), "SLIP", v.slip, LIT, ("club-slip", d)).on_hover_text("Slip: a scratch or a loop let go, the record goes on from where it would have been").clicked() {
+            desk.toggle_slip(d);
         }
-        if button(ui, p, cell(1.0), "OUT", by_hand, CUE, ("club-out", d)).clicked() {
-            desk.loop_out(d);
+        if button(ui, p, cell(r.top() + 8.0 + bh), "Q", s.quantize, LIT, ("club-q", d)).on_hover_text("Quantize: cues and loops set by hand land on the beat").clicked() {
+            desk.set_quantize(!s.quantize);
         }
-        if button(ui, p, cell(2.0), "EXIT", false, CUE, ("club-exit", d)).clicked() {
-            desk.unloop(d);
-        }
-        // the jumps: ◀ its size ▶ (the size a click on it: 1, 2, 4 … 32 beats)
-        let r3 = row(3.0);
-        let jump_id = ui.scope_id().with(("club-jump-len", d));
-        let mut jump: f64 = ui.ctx().data(|m| m.get_temp(jump_id)).unwrap_or(4.0);
-        let bw = 28.0;
-        let back = Rect::from_min_size(r3.min, vec2(bw, rh));
-        let ahead = Rect::from_min_size(pos2(r3.right() - bw, r3.top()), vec2(bw, rh));
-        let size = Rect::from_min_max(pos2(back.right() + 3.0, r3.top()), pos2(ahead.left() - 3.0, r3.bottom()));
-        if button(ui, p, back, "◀", false, LIT, ("club-back", d)).on_hover_text("Back by the jump's size").clicked() {
-            desk.jump(d, -jump);
-        }
-        let sz = button(ui, p, size, &format!("JUMP {}", crate::fx_panel::beat_words(jump)), false, LIT, ("club-jump-size", d)).on_hover_text("The jump's size: a click the next · right-click the one before");
-        if sz.clicked() {
-            jump = if jump >= 32.0 { 1.0 } else { jump * 2.0 };
-        }
-        if sz.secondary_clicked() {
-            jump = if jump <= 1.0 { 32.0 } else { jump / 2.0 };
-        }
-        ui.ctx().data_mut(|m| m.insert_temp(jump_id, jump));
-        if button(ui, p, ahead, "▶", false, LIT, ("club-ahead", d)).on_hover_text("Ahead by the jump's size").clicked() {
-            desk.jump(d, jump);
-        }
-        let r4 = row(4.0);
-        if r4.bottom() <= r.bottom() + 0.5 {
-            let w3 = (r4.width() - 8.0) / 3.0;
-            let cell = |i: f32| Rect::from_min_size(pos2(r4.left() + i * (w3 + 4.0), r4.top()), vec2(w3, rh));
-            if button(ui, p, cell(0.0), "Q", s.quantize, LIT, ("club-q", d)).on_hover_text("Quantize: cues and loops set by hand land on the beat").clicked() {
-                desk.set_quantize(!s.quantize);
-            }
-            if button(ui, p, cell(1.0), "SLIP", v.slip, rgb(0xC8342C), ("club-slip", d)).on_hover_text("Slip: a scratch or a loop let go, the record goes on from where it would have been").clicked() {
-                desk.toggle_slip(d);
-            }
-            if button(ui, p, cell(2.0), "MT", v.keylock, LIT, ("club-mt", d)).on_hover_text("Master tempo: its key stays as its tempo moves").clicked() {
-                desk.toggle_keylock(d);
-            }
+        if button(ui, p, cell(r.bottom() - 4.0 - bh), "MT", v.keylock, LIT, ("club-mt", d)).on_hover_text("Master tempo: its key stays as its tempo moves").clicked() {
+            desk.toggle_keylock(d);
         }
     }
 
@@ -720,6 +720,23 @@ impl App {
             desk.scratch(d, false);
             ui.ctx().data_mut(|m| m.remove::<f32>(id));
         }
+        // rekordbox's − and + on the platter: the tempo a step (0.02 % at ±6, 0.04 % at ±10
+        // and ±16, 0.5 % at WIDE), held: on and on
+        let step_pct = if v.range <= 0.061 { 0.02 } else if v.range <= 0.161 { 0.04 } else { 0.5 };
+        let step = step_pct / 100.0 / v.range.max(0.01);
+        for (dir, word, dx) in [(-1.0, "−", -13.0), (1.0, "+", 13.0)] {
+            let b = Rect::from_center_size(pos2(c.x + dx, c.y + rad * 0.62), vec2(20.0, 15.0));
+            let r = ui.interact(b, ui.scope_id().with(("club-tempo", d, word)), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(if dir < 0.0 { "Slower a step" } else { "Faster a step" });
+            p.rect(b, CornerRadius::same(2), if r.is_pointer_button_down_on() { RAISED } else { rgb(0x1A1A1D) }, Stroke::new(1.0, LINE), StrokeKind::Inside);
+            words(p, b.center(), Align2::CENTER_CENTER, word, 11.0, "semi", TEXT);
+            let held_for = r.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map_or(0.0, |t| i.time - t))).unwrap_or(0.0);
+            if r.clicked() || (held_for > 0.4 && r.is_pointer_button_down_on()) {
+                desk.set_pitch(d, (v.pitch + dir * step).clamp(-1.0, 1.0));
+                if held_for > 0.4 {
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
     }
 
     /// The mixer between the decks, rekordbox's narrow one: each channel TRIM, HIGH, MID,
@@ -728,7 +745,7 @@ impl App {
         panel(p, r);
         let level = |pk: f32| (1.0 + 20.0 * pk.max(1e-6).log10() / 48.0).clamp(0.0, 1.0);
         let phones = desk.audio_view().headphones;
-        let names = ["TRIM", "HIGH", "MID", "LOW", "CFX"];
+        let names = ["TRIM", "HIGH", "MID", "LOW"];
         let col_w = (r.width() - 6.0) / 2.0;
         let step = ((r.height() - 120.0) / 5.0).clamp(26.0, 34.0);
         for d in 0..2 {
@@ -740,28 +757,23 @@ impl App {
                     0 => (v.gain, false),
                     1 => (v.eq[2], true),
                     2 => (v.eq[1], true),
-                    3 => (v.eq[0], true),
-                    _ => (v.filter, true),
+                    _ => (v.eq[0], true),
                 };
                 if let Some(nv) = knob(ui, p, c, val, bip, 0.5, ("club-knob", d, i)) {
                     match i {
                         0 => desk.set_gain(d, nv),
                         1 => desk.set_eq(d, 2, nv),
                         2 => desk.set_eq(d, 1, nv),
-                        3 => desk.set_eq(d, 0, nv),
-                        _ => desk.set_filter(d, nv),
+                        _ => desk.set_eq(d, 0, nv),
                     }
                 }
                 words(p, pos2(c.x, c.y + 11.0), Align2::CENTER_TOP, name, 7.0, "semi", MUTED);
             }
-            let cue_y = r.top() + 14.0 + 5.0 * step;
+            let cue_y = r.top() + 14.0 + 4.0 * step;
             let cue = Rect::from_center_size(pos2(cx, cue_y), vec2(col_w - 8.0, 16.0));
-            if phones {
-                if button(ui, p, cue, "CUE", v.headphones, CUE, ("club-phones", d)).on_hover_text("In the headphones, before the fader").clicked() {
-                    desk.toggle_headphones(d);
-                }
-            } else {
-                words(p, cue.center(), Align2::CENTER_CENTER, &(d + 1).to_string(), 11.0, "semi", MUTED);
+            let tip = if phones { "In the headphones, before the fader" } else { "In the headphones (Settings › Sound: a headphones output first)" };
+            if button(ui, p, cue, "CUE", v.headphones, CUE, ("club-phones", d)).on_hover_text(tip).clicked() {
+                desk.toggle_headphones(d);
             }
             let fr = Rect::from_min_max(pos2(cx - 20.0, cue.bottom() + 4.0), pos2(cx + 8.0, r.bottom() - 2.0));
             if fr.height() > 40.0 {
@@ -780,8 +792,9 @@ impl App {
         panel(p, r);
         let y = r.center().y;
         let audio = desk.audio_view();
-        if audio.headphones && !audio.console_mixes {
-            icons::paint(p, Rect::from_center_size(pos2(r.left() + 18.0, y), vec2(16.0, 16.0)), Icon::Headphones, MUTED);
+        // the headphones' panel, as rekordbox's always is (not where the controller mixes them)
+        if !audio.console_mixes {
+            icons::paint(p, Rect::from_center_size(pos2(r.left() + 18.0, y), vec2(16.0, 16.0)), Icon::Headphones, if audio.headphones { MUTED } else { mix(MUTED, PANEL, 0.5) });
             if let Some(nv) = knob(ui, p, pos2(r.left() + 48.0, y), audio.prefs.head_mix, false, 0.0, "club-head-mix") {
                 desk.set_head_mix(nv);
             }
@@ -792,8 +805,26 @@ impl App {
             words(p, pos2(r.left() + 118.0, y), Align2::LEFT_CENTER, "LEVEL", 9.0, "semi", MUTED);
         }
         let cf = Rect::from_center_size(pos2(r.center().x, y), vec2(220.0, 30.0));
-        words(p, pos2(cf.left() - 8.0, y), Align2::RIGHT_CENTER, "1", 11.0, "semi", MUTED);
-        words(p, pos2(cf.right() + 8.0, y), Align2::LEFT_CENTER, "2", 11.0, "semi", MUTED);
+        // rekordbox's crossfader assign: the decks on the left, the decks on the right (a
+        // deck on neither side THRU: its fader alone)
+        use wo_deskcore::XfSide;
+        let mut assign = s.crossfader_assign;
+        for (side, x0) in [(XfSide::Left, cf.left() - 12.0 - 2.0 * 26.0), (XfSide::Right, cf.right() + 12.0)] {
+            for dk in 0..2 {
+                let b = Rect::from_min_size(pos2(x0 + dk as f32 * 26.0, y - 10.0), vec2(24.0, 20.0));
+                let on = assign[dk] == side;
+                let tip = format!("Deck {} on the crossfader's {} (again: THRU)", dk + 1, if side == XfSide::Left { "left" } else { "right" });
+                if button(ui, p, b, &(dk + 1).to_string(), on, LIT, ("club-xf-assign", side == XfSide::Left, dk)).on_hover_text(tip).clicked() {
+                    assign[dk] = if on { XfSide::Thru } else { side };
+                }
+            }
+        }
+        if assign != s.crossfader_assign {
+            desk.set_crossfader_assign(assign);
+            self.prefs.crossfader_off = false;
+            self.prefs.crossfader_assign = assign;
+            self.save_prefs(ui.ctx());
+        }
         if s.crossfader_off {
             kit::crossfader_off(p, cf);
         } else if let Some(x) = kit::crossfader(ui, p, cf, s.crossfader, "club-xf") {

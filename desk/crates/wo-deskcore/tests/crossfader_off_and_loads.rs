@@ -57,6 +57,19 @@ fn the_crossfader_off_and_loading_onto_any_deck() {
     assert_eq!(d.crossfader(), x, "off: a hand's crossfader does nothing");
     d.set_crossfader_off(false);
     assert!(d.snapshot().decks[b].audible < 1e-3, "on again: as it was");
+    // rekordbox's assign: B THRU alone, A still on its side (all A's way): B through, A whole
+    let mut sides = d.crossfader_assign();
+    sides[b] = wo_deskcore::XfSide::Thru;
+    d.set_crossfader_assign(sides);
+    let s = d.snapshot();
+    assert!((s.decks[b].audible - 0.25).abs() < 1e-3, "B THRU: its fader alone: {}", s.decks[b].audible);
+    assert!(!s.crossfader_off, "one THRU is not the crossfader off");
+    // the crossfader across to B's side: A out, B (THRU) still there
+    d.hand_crossfader(if a == 0 { 1.0 } else { 0.0 });
+    let s = d.snapshot();
+    assert!(s.decks[a].audible < 1e-3 && (s.decks[b].audible - 0.25).abs() < 1e-3, "A out, B through: {} {}", s.decks[a].audible, s.decks[b].audible);
+    d.hand_crossfader(if a == 0 { 0.0 } else { 1.0 });
+    d.set_crossfader_assign(wo_deskcore::XfSide::USUAL);
     d.set_fader(b, 1.0);
 
     // a record onto the PLAYING master: A stops and waits at the new one's start, B the master

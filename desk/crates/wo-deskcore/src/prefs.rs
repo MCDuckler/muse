@@ -24,14 +24,37 @@ pub struct Prefs {
     /// rekordbox's layout shows its effect panel under the decks.
     pub club_fx: bool,
     /// The crossfader off, as rekordbox's (Preferences → Controller → Mixer): both channels
-    /// straight through, the channel faders mix.
+    /// straight through, the channel faders mix. (Kept for older settings: the assign says it.)
     pub crossfader_off: bool,
+    /// Each deck's side of the crossfader (rekordbox's crossfader assign).
+    pub crossfader_assign: [XfSide; 2],
     /// Follow a set played in rekordbox: the Desk silent, the show with rekordbox's decks.
     pub follow_rekordbox: bool,
     /// Where rekordbox's audio is looked for (none: Music, Downloads and the Desktop).
     pub music_folders: Vec<PathBuf>,
     /// rkbx_link chosen by hand (the program or its folder).
     pub rkbx_link: Option<PathBuf>,
+}
+
+/// A deck's side of the crossfader: rekordbox's crossfader assign (neither side: THRU).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum XfSide {
+    Left,
+    Right,
+    #[default]
+    Thru,
+}
+
+impl XfSide {
+    /// Deck 1 on the left, deck 2 on the right.
+    pub const USUAL: [XfSide; 2] = [XfSide::Left, XfSide::Right];
+}
+
+impl Prefs {
+    /// The crossfader assign kept (an older setting's crossfader off: both THRU).
+    pub fn xf_assign(&self) -> [XfSide; 2] {
+        if self.crossfader_off { [XfSide::Thru; 2] } else { self.crossfader_assign }
+    }
 }
 
 /// rekordbox's waveform colours (Preferences → View → Waveform color), and the Desk's own.
@@ -80,6 +103,7 @@ impl Default for Prefs {
             bar_groups: true,
             club_fx: true,
             crossfader_off: false,
+            crossfader_assign: XfSide::USUAL,
             follow_rekordbox: false,
             music_folders: vec![],
             rkbx_link: None,

@@ -165,7 +165,7 @@ impl Desk {
         let x = steps::fader_at(&run.steps, k);
         let x = if from == 0 { x } else { 1.0 - x };
         // (crossfader off: the law comes in with the move, so the levels from its first tick)
-        if (x - self.crossfader).abs() > 1e-4 || self.crossfader_off {
+        if (x - self.crossfader).abs() > 1e-4 || self.xf_assign != crate::prefs::XfSide::USUAL {
             self.set_crossfader(x);
         }
         let beat_k = 1.0 / (bars.max(1) as f64 * 4.0);

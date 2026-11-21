@@ -50,7 +50,7 @@ pub mod videos;
 
 pub use backdrop::Backdrop;
 pub use covers::Cover;
-pub use prefs::{DeskLayout, Prefs, WaveStyle};
+pub use prefs::{DeskLayout, Prefs, WaveStyle, XfSide};
 pub use player::PlayerView;
 pub use library::{GRID_VERDICTS, Library, Shelf, StickView, verdict_word};
 pub use records::{Audio, Loudness, Record, Tags};
@@ -180,6 +180,8 @@ pub struct Snapshot {
     pub crossfader: f32,
     /// The crossfader off: the channels straight through (`Desk::set_crossfader_off`).
     pub crossfader_off: bool,
+    /// Each deck's side of the crossfader (rekordbox's crossfader assign).
+    pub crossfader_assign: [prefs::XfSide; 2],
     pub mix: Option<MixView>,
     pub auto: bool,
     pub load: Load,
@@ -394,7 +396,9 @@ pub struct Desk {
     /// only the channel faders mix; the hands' crossfader (screen, keys, controller) does
     /// nothing. The Auto DJ's moves (while it is on) and following rekordbox still use it
     /// inside.
-    crossfader_off: bool,
+    /// Each deck's side of the crossfader (rekordbox's crossfader assign: both THRU is the
+    /// crossfader off).
+    xf_assign: [prefs::XfSide; 2],
     rows: Vec<Record>,
     queue: Vec<Record>,
     next: usize,
@@ -614,7 +618,7 @@ impl Desk {
             covers: Default::default(),
             sticks: vec![],
             full_law: false,
-            crossfader_off: false,
+            xf_assign: prefs::XfSide::USUAL,
             fx: Default::default(),
             recent: vec![],
             mind: Default::default(),
@@ -1257,7 +1261,8 @@ impl Desk {
         Snapshot {
             master_bpm,
             crossfader: self.crossfader,
-            crossfader_off: self.crossfader_off,
+            crossfader_off: self.crossfader_off(),
+            crossfader_assign: self.xf_assign,
             mix: self.mix.as_ref().map(|m| {
                 let heard = self.engine.deck(DeckId::new(m.from).unwrap()).position();
                 MixView {
@@ -1551,23 +1556,33 @@ impl Desk {
         self.apply_levels();
     }
 
-    /// The crossfader off (both channels through, the faders mix) or on again.
+    /// The crossfader off (both channels THRU, the faders mix) or on again (1 left, 2 right).
     pub fn set_crossfader_off(&mut self, off: bool) {
-        if self.crossfader_off != off {
-            self.crossfader_off = off;
+        self.set_crossfader_assign(if off { [prefs::XfSide::Thru; 2] } else { prefs::XfSide::USUAL });
+    }
+
+    /// Each deck's side of the crossfader (rekordbox's assign buttons: a deck on neither
+    /// side is THRU, its fader alone).
+    pub fn set_crossfader_assign(&mut self, a: [prefs::XfSide; 2]) {
+        if self.xf_assign != a {
+            self.xf_assign = a;
             self.changes += 1;
             self.apply_levels();
         }
     }
 
+    pub fn crossfader_assign(&self) -> [prefs::XfSide; 2] {
+        self.xf_assign
+    }
+
     pub fn crossfader_off(&self) -> bool {
-        self.crossfader_off
+        self.xf_assign == [prefs::XfSide::Thru; 2]
     }
 
     /// A hand's crossfader (the screen's, the keys', a controller's): takes a running move
     /// of the Auto DJ's over; nothing while the crossfader is off.
     pub fn hand_crossfader(&mut self, x: f32) {
-        if self.crossfader_off {
+        if self.crossfader_off() {
             return;
         }
         if self.mix.as_ref().is_some_and(|m| m.started) {
@@ -2619,18 +2634,16 @@ impl Desk {
             onset: f.onset,
         };
         let x = self.crossfader;
-        let thru = self.crossfader_bypassed();
+        let sides = self.xf_sides();
         let deck = |i: usize| {
             let s = &self.slots[i];
             let id = DeckId::new(i).unwrap();
             let e = self.engine.deck(id);
             let st = e.read();
-            let g = if thru {
-                1.0
-            } else if i == 0 {
-                (2.0 * (1.0 - x)).min(1.0)
-            } else {
-                (2.0 * x).min(1.0)
+            let g = match sides[i] {
+                prefs::XfSide::Thru => 1.0,
+                prefs::XfSide::Left => (2.0 * (1.0 - x)).min(1.0),
+                prefs::XfSide::Right => (2.0 * x).min(1.0),
             };
             let eq = eq_db(s.eq);
             let k = (s.filter - 0.5) * 2.0;
@@ -2705,13 +2718,22 @@ impl Desk {
 
     /// Whether the crossfader is left out now: off, and no move of the Auto DJ's running
     /// nor rekordbox followed (those mix with it).
-    fn crossfader_bypassed(&self) -> bool {
-        self.crossfader_off && self.follow.is_none() && !(self.auto && self.mix.as_ref().is_some_and(|m| m.started))
+    /// Each deck's side now: the hands' assign, except while a move of the Auto DJ's runs or
+    /// rekordbox is followed (those mix 1 left, 2 right).
+    fn xf_sides(&self) -> [prefs::XfSide; 2] {
+        if self.follow.is_some() || (self.auto && self.mix.as_ref().is_some_and(|m| m.started)) { prefs::XfSide::USUAL } else { self.xf_assign }
     }
 
-    /// The crossfader's gains on A and B now (both whole while it is left out).
+    /// The crossfader's gains on A and B now (a deck THRU whole).
     fn crossfader_gains(&self) -> (f32, f32) {
-        if self.crossfader_bypassed() { (1.0, 1.0) } else { transition::law(self.crossfader, self.full_law) }
+        let (l, r) = transition::law(self.crossfader, self.full_law);
+        let g = |side: prefs::XfSide| match side {
+            prefs::XfSide::Left => l,
+            prefs::XfSide::Right => r,
+            prefs::XfSide::Thru => 1.0,
+        };
+        let s = self.xf_sides();
+        (g(s[0]), g(s[1]))
     }
 
     fn apply_levels(&self) {

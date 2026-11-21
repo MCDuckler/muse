@@ -13,7 +13,7 @@ use crate::wave::{self, Anchor, Columns};
 use crate::{App, Sort};
 
 /// A row's height.
-pub(crate) const ROW: f32 = 18.0;
+pub(crate) const ROW: f32 = 15.0;
 
 const fn rgb(v: u32) -> Color32 {
     Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
@@ -197,9 +197,9 @@ impl App {
             let cell = Rect::from_min_size(pos2(left, rr.top()), vec2(w, rr.height()));
             let text = |s: &str, ink: Color32| {
                 if c.right() {
-                    kit::clipped_at(p, pos2(cell.right(), y), Align2::RIGHT_CENTER, s, 11.5, "", ink, w);
+                    kit::clipped_at(p, pos2(cell.right(), y), Align2::RIGHT_CENTER, s, 11.0, "", ink, w);
                 } else {
-                    kit::clipped(p, pos2(cell.left(), y), s, 11.5, "", ink, w);
+                    kit::clipped(p, pos2(cell.left(), y), s, 11.0, "", ink, w);
                 }
             };
             match c {

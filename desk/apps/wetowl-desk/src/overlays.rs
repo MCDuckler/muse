@@ -422,14 +422,15 @@ impl App {
         y += 34.0;
         y += words(p, y, "Hidden: the stage and the Auto DJ fold away and the crate takes the width (C on the keyboard, or the panel button by the Auto DJ).", t::faint()) + 16.0;
         row(p, y, "Crossfader");
-        let i = Some(self.prefs.crossfader_off as usize);
+        let i = Some((self.prefs.xf_assign() == [wo_deskcore::XfSide::Thru; 2]) as usize);
         if let Some(i) = kit::segmented(ui, p, Rect::from_min_size(pos2(x, y), vec2(w.min(300.0), 28.0)), &["On", "Off"], i, Tone::Neutral, "set-crossfader") {
-            self.prefs.crossfader_off = i == 1;
-            desk.set_crossfader_off(self.prefs.crossfader_off);
+            self.prefs.crossfader_off = false;
+            self.prefs.crossfader_assign = if i == 1 { [wo_deskcore::XfSide::Thru; 2] } else { wo_deskcore::XfSide::USUAL };
+            desk.set_crossfader_assign(self.prefs.crossfader_assign);
             self.save_prefs(ui.ctx());
         }
         y += 34.0;
-        y += words(p, y, "Off, as in rekordbox: both decks go straight through and the channel faders do the mixing; the crossfader on screen, the keys and the controller's do nothing. The Auto DJ still mixes its own way.", t::faint()) + 22.0;
+        y += words(p, y, "Off, as in rekordbox with both channels assigned THRU: the channel faders do the mixing; the crossfader on screen, the keys and the controller's do nothing. The Auto DJ still mixes its own way. Each deck's side is also set by the 1 / 2 buttons beside the crossfader in rekordbox's layout.", t::faint()) + 22.0;
 
         kit::section(p, pos2(r.left(), y), Align2::LEFT_TOP, "Waveforms and layout");
         y += 26.0;

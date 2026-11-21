@@ -404,7 +404,7 @@ impl App {
         fonts(ctx);
         ui::style(ctx);
         let prefs = Prefs::read();
-        desk.set_crossfader_off(prefs.crossfader_off);
+        desk.set_crossfader_assign(prefs.xf_assign());
         motion::set_reduced(ctx, prefs.reduced_motion);
         let tex = |name: &str, b: wo_deskcore::Backdrop| {
             ctx.load_texture(name, ColorImage::from_rgba_unmultiplied([b.width as usize, b.height as usize], &b.rgba), TextureOptions::LINEAR)
