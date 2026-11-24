@@ -684,6 +684,10 @@ impl App {
             desk.want_stage_pictures(10, 640);
         }
         self.overlays(desk, ui, full);
+        // a control being mapped stops listening with the controllers page closed (Esc, ×)
+        if self.overlay != Some(Overlay::Controllers) && matches!(desk.learning_control(), wo_control::Learning::Listening(_)) {
+            desk.stop_learning_control();
+        }
         self.prompt_window(desk, ui.ctx(), full);
         self.toasts.draw(ui.ctx(), full);
         // repaint while anything moves; else a few times a second (the set's clock, a search

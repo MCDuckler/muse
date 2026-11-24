@@ -122,6 +122,34 @@ bytes 9–24 8-bit faders/pots (centre `0x80`). Output report id `0x00`, 2 LED
 bytes: bit masks per LED. Full tables live in `assets/controllers/
 hercules_dj_console_rmx.hid.json`.
 
+## Any MIDI controller, mapped by hand (the Desk, v2)
+
+A controller no layout names (a keyboard such as the **M-Audio Oxygen Pro 49**, USB
+`0763:0039`) is mapped onto the booth in the Desk: Controllers → **Map by hand** → click a
+booth control (Deck 1 · EQ low, Crossfader, Hot cue 1…) → move the knob, fader or pad you
+want for it. Code: `desk/crates/wo-control/src/learn.rs` (the targets, the learning rules,
+the store), `manager.rs` (ports, live decoder swap), `apps/wetowl-desk/src/controllers.rs`.
+
+- **What counts as the control moved:** a knob/fader target takes the first CC that moves
+  at least 6 steps (a resting fader's jitter or a brushed knob does not count); a button
+  target takes the first note-on or CC press. A knob mapped onto *Browse* is read by its
+  turn: a relative knob (`signed7`/`offset64`) or an ordinary one (`wrap7`, the change from
+  one value to the next).
+- While listening, every MIDI port is opened and what moves goes to the learner, not the
+  booth. Afterwards only ports a layout names or with something mapped stay open (on
+  Windows an open port is one no other program can use).
+- One knob maps to one booth control; a booth control can have several knobs mapped
+  (on several ports). Mappings sit over a known layout's and win on the same bytes.
+  Knobs and faders go through soft takeover like a console's.
+- Kept in `<config>/wetowl-desk/controllers-mapped.json`, per port name (Linux's
+  ` 24:0` sequencer suffix taken off so a replug finds it again).
+- The Oxygen Pro 49 on Windows shows four inputs: `Oxygen Pro 49` and `MIDIIN2..4 (Oxygen
+  Pro 49)` (Windows lists its USB and DIN functions twice). Learning listens on all of
+  them; the mapped row says which port the knob arrived on. Watched 2026-11-24: a knob in
+  its DAW mode came as **CC 18 on channel 16, on `MIDIIN3 (Oxygen Pro 49)`**, an absolute
+  0..127 value (mapped onto deck 1's EQ low and read back 0.118..0.472 as it turned). A
+  mapping is per port, so a knob that sends on another port in another mode is mapped again.
+
 ## Testing without the hardware
 
 - Unit tests feed MIDI bytes / HID packets through the decoders and a `BoothBinding`

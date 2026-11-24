@@ -619,7 +619,8 @@ impl Desk {
             // WO_CONTROLLERS=off: none (tests)
             controls: (!follow && std::env::var("WO_CONTROLLERS").as_deref() != Ok("off")).then(|| {
                 let s = scratcher.clone();
-                wo_control::Manager::start_with(Arc::new(move |e: &wo_control::Event| s.heard(e)))
+                let mapped = wo_house::folders::config().map(|d| d.join("wetowl-desk").join("controllers-mapped.json"));
+                wo_control::Manager::start_mapped(Arc::new(move |e: &wo_control::Event| s.heard(e)), mapped)
             }),
             scratcher,
             binding: wo_control::Binding::default(),
@@ -2296,6 +2297,45 @@ impl Desk {
             Some(c) => c.layouts().to_vec(),
             None => wo_control::layout::bundled(),
         }
+    }
+
+    /// The MIDI ports there are, opened or not: the ones a control can be mapped from.
+    pub fn midi_ports(&self) -> Vec<String> {
+        self.controls.as_ref().map(|c| c.midi_ports()).unwrap_or_default()
+    }
+
+    /// The controls mapped by hand onto the booth's (any MIDI controller's knobs, faders, pads).
+    pub fn control_mappings(&self) -> Vec<wo_control::Mapped> {
+        self.controls.as_ref().map(|c| c.mappings()).unwrap_or_default()
+    }
+
+    /// Map the next control moved on a MIDI controller onto the booth's `target`.
+    pub fn learn_control(&mut self, target: wo_control::Target) {
+        if let Some(c) = &self.controls {
+            c.learn(target);
+        }
+    }
+
+    pub fn stop_learning_control(&mut self) {
+        if let Some(c) = &self.controls {
+            c.stop_learning();
+        }
+    }
+
+    pub fn learning_control(&self) -> wo_control::Learning {
+        self.controls.as_ref().map(|c| c.learning()).unwrap_or(wo_control::Learning::Off)
+    }
+
+    /// Booth control `id` no longer mapped by hand.
+    pub fn forget_control(&mut self, id: &str) {
+        if let Some(c) = &self.controls {
+            c.forget(id, None);
+        }
+    }
+
+    /// Whether controllers are listened to at all (not in tests, nor following rekordbox).
+    pub fn has_controllers(&self) -> bool {
+        self.controls.is_some()
     }
 
     /// Rings each time a controller says something (none without controllers): the clock
