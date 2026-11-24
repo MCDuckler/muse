@@ -5,7 +5,9 @@
 //! and its newest frame made a texture for the stage.
 //!
 //! Unwanted for two seconds it draws two frames a second (warm for when it is looked at
-//! again); for half a minute, it stops. A helper that dies is started again after a second,
+//! again); for ten minutes, it stops. (It was half a minute: a show that comes back to
+//! MilkDrop every few minutes then started it cold each time, its picture black for the
+//! seconds the helper takes to open OpenGL.) A helper that dies is started again after a second,
 //! then longer while it keeps dying soon after starting, up to half a minute; the preset it
 //! died on is told to the Desk (and not put on again this run).
 use std::path::PathBuf;
@@ -23,6 +25,8 @@ pub const WIDTH: u32 = 960;
 pub const HEIGHT: u32 = 540;
 const FPS: u32 = 60;
 const IDLE_FPS: u32 = 2;
+/// Unwanted this long, the helper stops.
+const KEEP_WARM: Duration = Duration::from_secs(600);
 
 /// The helper: WETOWL_MILK, beside this program, in the WetOwl app's bundle beside the Desk
 /// (Linux: stage/lib; a Mac: the nested WetOwl.app), or the WetOwl app's own install.
@@ -166,7 +170,7 @@ impl MilkRun {
             self.trouble = Some("MilkDrop stopped".into());
             self.stop();
         }
-        if self.milk.is_some() && unwanted > Duration::from_secs(30) {
+        if self.milk.is_some() && unwanted > KEEP_WARM {
             self.stop();
         }
         if self.milk.is_none() && wanted && self.not_before.is_none_or(|t| now >= t) {
@@ -221,9 +225,9 @@ impl MilkRun {
             vars.extend(MilkAccent::none());
         }
         let line: Vec<String> = vars.iter().map(|(k, v)| format!("{k}={v:.4}")).collect();
-        let _ = m.say(&format!("vars {}", line.join(" ")));
+        let _ = m.feed(&format!("vars {}", line.join(" ")));
         let lv = levels(st, &mut self.att);
-        let _ = m.say(&format!("audio {}", lv.iter().map(|v| format!("{v:.3}")).collect::<Vec<_>>().join(" ")));
+        let _ = m.feed(&format!("audio {}", lv.iter().map(|v| format!("{v:.3}")).collect::<Vec<_>>().join(" ")));
         if !self.pcm.is_empty() {
             let s = std::mem::take(&mut self.pcm);
             let _ = m.pcm(&s);
