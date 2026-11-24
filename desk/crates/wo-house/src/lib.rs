@@ -92,6 +92,18 @@ pub struct Track {
     pub source: Option<String>,
 }
 
+/// A record's tempo and key, as the house has them on file (/booth/traits).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct Traits {
+    #[serde(default)]
+    pub bpm: Option<f64>,
+    /// "8A"; none for a record in no key.
+    #[serde(default)]
+    pub camelot: Option<String>,
+    #[serde(default)]
+    pub key_confidence: f64,
+}
+
 /// A fetch under way, as the house tells it.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct Progress {
@@ -637,6 +649,26 @@ impl House {
     pub fn cover_small(&self, id: i64) -> Result<Vec<u8>> {
         let mut r = self.get(&format!("/tracks/{id}/cover?size=sm")).call()?;
         Ok(r.body_mut().with_config().limit(4 << 20).read_to_vec()?)
+    }
+
+    /// Tempo and key of the records named, as the house has them on file (/booth/traits),
+    /// a thousand at most a call; one not measured is left out.
+    pub fn traits(&self, ids: &[i64]) -> Result<std::collections::HashMap<i64, Traits>> {
+        #[derive(Deserialize)]
+        struct All {
+            #[serde(default)]
+            traits: std::collections::HashMap<String, Traits>,
+        }
+        let mut out = std::collections::HashMap::new();
+        for chunk in ids.chunks(1000) {
+            if chunk.is_empty() {
+                continue;
+            }
+            let list: Vec<String> = chunk.iter().map(i64::to_string).collect();
+            let all: All = self.json(&format!("/booth/traits?ids={}", list.join(",")))?;
+            out.extend(all.traits.into_iter().filter_map(|(k, v)| Some((k.parse().ok()?, v))));
+        }
+        Ok(out)
     }
 
     pub fn analysis(&self, id: i64) -> Result<Analysis> {

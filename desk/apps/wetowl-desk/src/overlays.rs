@@ -451,7 +451,17 @@ impl App {
             self.save_prefs(ui.ctx());
         }
         y += 34.0;
-        y += words(p, y, "Off, as in rekordbox with both channels assigned THRU: the channel faders do the mixing; the crossfader on screen, the keys and the controller's do nothing. The Auto DJ still mixes its own way. Each deck's side is also set by the 1 / 2 buttons beside the crossfader in rekordbox's layout.", t::faint()) + 22.0;
+        y += words(p, y, "Off, as in rekordbox with both channels assigned THRU: the channel faders do the mixing; the crossfader on screen, the keys and the controller's do nothing. The Auto DJ still mixes its own way. Each deck's side is also set by the 1 / 2 buttons beside the crossfader in rekordbox's layout.", t::faint()) + 16.0;
+        row(p, y, "Tempo return");
+        let secs = [2.0, 4.0, 8.0, 16.0, 32.0, 64.0];
+        let at = secs.iter().position(|s| (s - desk.tempo_return_secs()).abs() < 0.01);
+        if let Some(i) = kit::segmented(ui, p, Rect::from_min_size(pos2(x, y), vec2(w.min(340.0), 28.0)), &["2 s", "4", "8", "16", "32", "64 s"], at, Tone::Neutral, "set-tempo-return") {
+            desk.set_tempo_return_secs(secs[i]);
+            self.prefs.tempo_return_secs = desk.tempo_return_secs();
+            self.save_prefs(ui.ctx());
+        }
+        y += 34.0;
+        y += words(p, y, "How long a deck's 0 % button (under its tempo fader) takes it back to the record's own tempo, eased so the room does not hear it turn. A hand on the fader meanwhile stops it there.", t::faint()) + 22.0;
 
         kit::section(p, pos2(r.left(), y), Align2::LEFT_TOP, "Waveforms and layout");
         y += 26.0;

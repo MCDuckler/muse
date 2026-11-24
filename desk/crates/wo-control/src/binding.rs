@@ -66,6 +66,12 @@ pub enum Action {
     DoubleLoop(usize),
     /// A loop of so many beats from the bar (the same again lets go).
     LoopBeats(usize, f64),
+    /// A loop at the deck's own length (the loop button; again lets go).
+    Loop(usize),
+    /// The deck's loop length halved (-1) or doubled (1), a loop running with it.
+    LoopLength(usize, i8),
+    /// The deck's tempo slowly back to the record's own (again: stops there).
+    TempoReturn(usize),
     Unloop(usize),
     /// The BEAT FX section (its first unit): rekordbox's, as a DJM's or a DDJ's.
     Fx(FxHand),
@@ -325,6 +331,10 @@ impl Binding {
             "loop.in" if pressed => vec![Action::LoopIn(d)],
             "loop.out" if pressed => vec![Action::LoopOut(d)],
             "loop.exit" if pressed => vec![Action::Unloop(d)],
+            "loop" if pressed => vec![Action::Loop(d)],
+            "loop.shorter" if pressed => vec![Action::LoopLength(d, -1)],
+            "loop.longer" if pressed => vec![Action::LoopLength(d, 1)],
+            "tempo.return" if pressed => vec![Action::TempoReturn(d)],
             "loop.halve" if pressed => vec![Action::HalveLoop(d)],
             "loop.double" if pressed => vec![Action::DoubleLoop(d)],
             "load" if pressed => vec![Action::Load(d)],

@@ -182,7 +182,10 @@ pub(crate) fn sign_in(tx: &Sender<Done>, server: String, user: String, password:
 pub(crate) fn fetch_more(tx: &Sender<Done>, house: &House, offset: i64, turn: u64) {
     let (tx, house) = (tx.clone(), house.clone());
     thread::spawn(move || {
-        let rows = house.tracks("added", offset, 200).map(|p| (p.items.iter().map(Record::from_house).collect(), p.total)).map_err(|e| e.to_string());
+        let mut rows = house.tracks("added", offset, 200).map(|p| (p.items.iter().map(Record::from_house).collect::<Vec<_>>(), p.total)).map_err(|e| e.to_string());
+        if let Ok((r, _)) = &mut rows {
+            keyed(&house, r);
+        }
         let _ = tx.send(Done::More { turn, rows });
     });
 }
@@ -253,10 +256,39 @@ pub(crate) fn fetch_shelf(tx: &Sender<Done>, house: &House, shelf: Shelf, turn: 
                 (v, n)
             }),
         }
-        .map(|(tracks, total)| (tracks.iter().map(Record::from_house).collect(), total))
+        .map(|(tracks, total)| (tracks.iter().map(Record::from_house).collect::<Vec<_>>(), total))
         .map_err(|e| e.to_string());
+        let mut rows = rows;
+        if let Ok((r, _)) = &mut rows {
+            keyed(&house, r);
+        }
         let _ = tx.send(Done::Shelf { turn, rows, notes, checked });
     });
+}
+
+/// House records' keys (and a tempo where the listing had none), from what the house has
+/// on file: one ask for the lot. The listings carry no key; without this the crate's Key
+/// column stood empty until a record went on a deck.
+pub(crate) fn keyed(house: &House, rows: &mut [Record]) {
+    let ids: Vec<i64> = rows.iter().filter(|r| r.id > 0 && r.key.is_empty()).map(|r| r.id).collect();
+    if ids.is_empty() {
+        return;
+    }
+    let Ok(traits) = house.traits(&ids) else { return };
+    for r in rows.iter_mut() {
+        if let Some(t) = traits.get(&r.id) {
+            if r.key.is_empty()
+                && let Some(k) = &t.camelot
+            {
+                r.key = k.clone();
+            }
+            if r.bpm <= 0.0
+                && let Some(b) = t.bpm
+            {
+                r.bpm = b;
+            }
+        }
+    }
 }
 
 pub(crate) fn fetch_playlists(tx: &Sender<Done>, house: &House) {

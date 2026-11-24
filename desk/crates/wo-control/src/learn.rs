@@ -46,7 +46,10 @@ macro_rules! deck {
             t(concat!("deck.", $d, ".hotcue.2"), Kind::Button, "Hot cue 2", $g),
             t(concat!("deck.", $d, ".hotcue.3"), Kind::Button, "Hot cue 3", $g),
             t(concat!("deck.", $d, ".hotcue.4"), Kind::Button, "Hot cue 4", $g),
-            t(concat!("deck.", $d, ".beatloop.4"), Kind::Button, "Loop 4 beats", $g),
+            t(concat!("deck.", $d, ".tempo.return"), Kind::Button, "Tempo back to its own", $g),
+            t(concat!("deck.", $d, ".loop"), Kind::Button, "Loop (its length)", $g),
+            t(concat!("deck.", $d, ".loop.shorter"), Kind::Button, "Loop length ½", $g),
+            t(concat!("deck.", $d, ".loop.longer"), Kind::Button, "Loop length ×2", $g),
             t(concat!("deck.", $d, ".loop.exit"), Kind::Button, "Loop exit", $g),
             t(concat!("deck.", $d, ".pfl"), Kind::Button, "Headphones cue", $g),
         ]
@@ -148,6 +151,13 @@ impl Mappings {
     /// The ones kept at `file` (None: in memory only, for tests).
     pub fn at(file: Option<PathBuf>) -> Mappings {
         let mut m: Mappings = file.as_ref().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        // mapped as "Loop 4 beats" before a deck had a loop length of its own: that
+        // button loops at the deck's length now
+        for x in &mut m.mapped {
+            if let Some(side) = x.id.strip_prefix("deck.").and_then(|r| r.strip_suffix(".beatloop.4")) {
+                x.id = format!("deck.{side}.loop");
+            }
+        }
         m.file = file;
         m
     }

@@ -222,7 +222,7 @@ pub fn fetched_dir() -> Option<PathBuf> {
 
 /// The app's cached beats for a record (`stems/<id>-beats-v1.json` beside `fetched/`),
 /// a steady tempo fitted through them, and which beat is a bar's first.
-fn beats_for(fetched: &Path, id: i64) -> Option<(Vec<f64>, usize)> {
+pub fn beats_for(fetched: &Path, id: i64) -> Option<(Vec<f64>, usize)> {
     let file = fetched.parent()?.join("stems").join(format!("{id}-beats-v1.json"));
     let text = std::fs::read_to_string(file).ok()?;
     let ms = |key: &str| -> Vec<f64> {

@@ -591,12 +591,19 @@ a click: following rekordbox")).clicked() {
         let lengths = [("¼", 0.25), ("½", 0.5), ("1", 1.0), ("2", 2.0), ("4", 4.0), ("8", 8.0), ("16", 16.0), ("32", 32.0)];
         let row1 = Rect::from_min_size(r.min, vec2(r.width(), 26.0));
         let row2 = Rect::from_min_max(pos2(r.left(), r.bottom() - 26.0), r.max);
-        crate::ui::icons::paint(p, Rect::from_center_size(pos2(row1.left() + 9.0, row1.center().y), vec2(16.0, 16.0)), Icon::Loop, if v.looped.is_some() { t::tint(d) } else { t::label() });
-        let seg = Rect::from_min_max(pos2(row1.left() + 26.0, row1.top()), row1.max);
-        let chosen = v.looped.and(v.loop_beats).and_then(|b| lengths.iter().position(|l| l.1 == b));
+        // LOOP: a loop at the length chosen beside it, from the bar (looping: lets go)
+        let len = desk.loop_len(d);
+        let lb = Rect::from_min_size(row1.min, vec2(30.0, row1.height()));
+        let tip = format!("A loop {} long from the bar (looping: let go). The length beside it sets how long", beats_words(len));
+        if Btn::new("").icon(Icon::Loop).tone(Tone::Deck(d)).on(v.looped.is_some()).show(ui, p, lb, (d, "loop-go")).on_hover_text(tip).clicked() {
+            desk.loop_toggle(d);
+        }
+        // the length the loop button loops (a loop running from one goes to it)
+        let seg = Rect::from_min_max(pos2(lb.right() + 4.0, row1.top()), row1.max);
+        let chosen = lengths.iter().position(|l| (l.1 - len).abs() < 1e-9);
         let names: Vec<&str> = lengths.iter().map(|l| l.0).collect();
         if let Some(i) = kit::segmented(ui, p, seg, &names, chosen, Tone::Deck(d), (d, "loops")) {
-            desk.loop_beats(d, lengths[i].1);
+            desk.set_loop_len(d, lengths[i].1);
         }
         let looped_by_hand = v.looped.is_some() && v.loop_beats.is_none();
         let jumps_w = 2.0 * 34.0 + 4.0;
@@ -633,7 +640,9 @@ a click: following rekordbox")).clicked() {
         if kit::chip(ui, p, range, &wo_deskcore::range_name(v.range).replace('%', ""), false, Tone::Neutral, true, (d, "range")).on_hover_text("The fader's range: ±6 %, ±10 %, ±16 % or WIDE (±100 %)").clicked() {
             desk.cycle_range(d);
         }
-        let pf = Rect::from_min_max(pos2(r.left(), range.bottom() + 12.0), pos2(r.right(), r.bottom() - 22.0));
+        let pf = Rect::from_min_max(pos2(r.left(), range.bottom() + 12.0), pos2(r.right(), r.bottom() - 46.0));
+        // TEMPO RETURN: back to the record's own tempo, slowly (the time in the settings)
+        self.tempo_return_btn(desk, ui, p, Rect::from_min_size(pos2(r.left() + 2.0, r.bottom() - 40.0), vec2(r.width() - 4.0, 20.0)), v, d);
         let resp = ui.interact(pf, ui.scope_id().with((d, "pitch")), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::ResizeVertical);
         let h = motion::tween_bool(ui.ctx(), resp.id.with("h"), resp.hovered() || resp.dragged(), motion::QUICK, motion::STANDARD);
         let travel = pf.height() / 2.0 - 9.0;
@@ -657,6 +666,30 @@ a click: following rekordbox")).clicked() {
         p.line_segment([pos2(cap.left() + 7.0, cap.center().y), pos2(cap.right() - 7.0, cap.center().y)], Stroke::new(1.5, Color32::from_rgb(0x55, 0x59, 0x62)));
         let pitch = (v.rate - 1.0) * 100.0;
         kit::text(p, pos2(r.center().x, r.bottom()), Align2::CENTER_BOTTOM, &format!("{pitch:+.1}%"), 11.0, "mono", if zero { t::muted() } else { t::soft() });
+    }
+
+    /// The tempo back to the record's own, slowly (pressed again: it stops there); a synced
+    /// follower has the master's, none of its own. Lit while it goes, filled as it gets there.
+    pub(crate) fn tempo_return_btn(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, v: &wo_deskcore::DeckView, d: usize) {
+        let going = desk.tempo_returning(d);
+        let can = desk.can_return(d) && (v.pitch.abs() > 1e-6 || going.is_some());
+        let secs = desk.tempo_return_secs();
+        let tip = if !desk.can_return(d) {
+            "Synced: this deck's tempo is the master's (SYNC off to take it back to its own)".to_owned()
+        } else if going.is_some() {
+            "Going back to the record's own tempo: press to stop where it is".to_owned()
+        } else {
+            format!("Back to the record's own tempo (0 %), slowly: over {secs:.0} s (Settings → Tempo return)")
+        };
+        let resp = Btn::new("0 %").tone(Tone::Deck(d)).on(going.is_some()).size(10.0).show(ui, p, r, (d, "tempo-return")).on_hover_text(tip);
+        if let Some(k) = going {
+            let fill = Rect::from_min_size(pos2(r.left(), r.bottom() - 2.0), vec2(r.width() * k as f32, 2.0));
+            p.rect_filled(fill, CornerRadius::same(1), t::tint(d));
+            ui.ctx().request_repaint();
+        }
+        if resp.clicked() && can {
+            desk.tempo_return(d);
+        }
     }
 
     fn mixer(&mut self, desk: &mut Desk, ui: &mut Ui, p: &Painter, r: Rect, s: &Snapshot) {
@@ -1967,23 +2000,48 @@ a click: following rekordbox")).clicked() {
         let inner = r.shrink(t::INSET);
         kit::section(p, pos2(inner.left(), inner.top() + 2.0), Align2::LEFT_TOP, "Auto DJ");
         // the style it mixes in
+        // …or in order: the queue top to bottom, faded, no sync
         let styles = [Style::Easy, Style::Normal, Style::Bold];
-        let seg_w = (inner.width() - 90.0).min(186.0);
+        let seg_w = (inner.width() - 90.0).min(250.0);
         let seg = Rect::from_min_size(pos2(inner.right() - seg_w, inner.top() - 3.0), vec2(seg_w, 24.0));
-        if let Some(i) = kit::segmented(ui, p, seg, &["Easy", "Normal", "Bold"], styles.iter().position(|&st| st == desk.style), Tone::Neutral, "style") {
-            desk.style = styles[i];
+        let chosen = if desk.in_order() { Some(3) } else { styles.iter().position(|&st| st == desk.style) };
+        let seg_r = kit::segmented(ui, p, seg, &["Easy", "Normal", "Bold", "In order"], chosen, Tone::Neutral, "style");
+        ui.interact(Rect::from_min_size(pos2(seg.right() - seg.width() / 4.0, seg.top()), vec2(seg.width() / 4.0, seg.height())), ui.scope_id().with("in-order-tip"), Sense::hover())
+            .on_hover_text(format!("The queue played top to bottom: each record whole, faded out as the next fades in ({:.0} s), no beat sync. The queue done, it stops", desk.fade_secs()));
+        if let Some(i) = seg_r {
+            if i == 3 {
+                desk.set_in_order(true);
+            } else {
+                desk.set_in_order(false);
+                desk.style = styles[i];
+            }
+            self.prefs.auto_dj_in_order = desk.in_order();
+            self.prefs.save();
+        }
+        // in order: the fade's length, under the switch
+        if desk.in_order() {
+            let fades = [2.0, 4.0, 6.0, 8.0, 12.0, 16.0];
+            let names = ["2 s", "4", "6", "8", "12", "16 s"];
+            let fr = Rect::from_min_size(pos2(seg.left(), seg.bottom() + 3.0), vec2(seg.width(), 20.0));
+            let at = fades.iter().position(|f| (f - desk.fade_secs()).abs() < 0.01);
+            if let Some(i) = kit::segmented(ui, p, fr, &names, at, Tone::Neutral, "fade-len") {
+                desk.set_fade_secs(fades[i]);
+                self.prefs.auto_dj_fade = desk.fade_secs();
+                self.prefs.save();
+            }
         }
         // under the card: the hands on the move, the room's word, the last mix's thumb — the
         // room and the thumb on one row where the panel is short
         let last = desk.last_mix();
-        let avail = inner.height() - 30.0;
+        let head = if desk.in_order() { 54.0 } else { 30.0 };
+        let avail = inner.height() - head;
         let mut below = if last.is_some() { 108.0 } else { 72.0 };
         let merged = last.is_some() && avail - below < 150.0;
         if merged {
             below -= 36.0;
         }
         let card_h = (avail - below).max(64.0);
-        let card = Rect::from_min_size(pos2(inner.left(), inner.top() + 30.0), vec2(inner.width(), card_h));
+        let card = Rect::from_min_size(pos2(inner.left(), inner.top() + head), vec2(inner.width(), card_h));
         p.rect(card, CornerRadius::same(t::R_PAD), white(0.035), Stroke::new(1.0, white(0.06)), StrokeKind::Inside);
         let c = card.shrink(12.0);
         let master = s.decks.iter().position(|d| d.master).unwrap_or(0);
@@ -2487,4 +2545,15 @@ pub(crate) struct TreeBrowse {
 /// The tree's row marked for a controller (its id), kept in egui's memory for `shelf_row`.
 fn tree_mark_id() -> egui::Id {
     egui::Id::unique("crate-tree-mark")
+}
+
+/// A loop's length in words: "4 beats", "1 beat", "½ beat".
+pub(crate) fn beats_words(b: f64) -> String {
+    if b < 1.0 {
+        format!("1/{} beat", (1.0 / b).round())
+    } else if b == 1.0 {
+        "1 beat".into()
+    } else {
+        format!("{b} beats")
+    }
 }

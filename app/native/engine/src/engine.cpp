@@ -51,6 +51,7 @@ namespace we {
 constexpr int kBlock = 256;           // the engine's own block, frames
 constexpr int kChunkBits = 16;        // a source's memory comes in chunks of 64k frames
 constexpr int64_t kChunk = 1 << kChunkBits;
+constexpr double kSyncSnap = 0.015;   // a synced deck this far off its beat (s) is put there, not eased
 constexpr double kRateMin = 0.25, kRateMax = 4.0;   // a deck's rate, and its bend, each
 // The hand on the record: how closely the record follows it (a critically damped
 // spring, this many Hz — it smooths a jog wheel's steps and a mouse's frames without
@@ -744,6 +745,24 @@ void syncBlock(Deck& f) {
   if (f.bend != 1.0) {
     // A hand on the jog: the place it leaves the deck in is kept.
     f.offset -= err;
+    f.trim = 1;
+    return;
+  }
+  // Whole beats off (the master jumped a beat or a bar on: a hot cue, a beat jump, a loop
+  // let go): taken as the new place. Walked back to at a hair of rate, as it was, the
+  // follower went through every place between, out of beat, for minutes (a beat at
+  // 0.3 %: nearly three). A beat is the master's, or the follower's where it is slower.
+  {
+    const double unit = periodAt(f, frameToSec(f.heardNow)) * std::max(f.fold, 1.0);
+    const double whole = unit > 0 ? std::round(err / unit) : 0.0;
+    if (whole != 0) { f.offset -= whole * unit; err -= whole * unit; }
+  }
+  // In a loop of its own (a roll): the tempo only, its place the loop's.
+  if (f.looping) { f.trim = 1; return; }
+  // A part of a beat off, more than an ear lets by (the master moved unquantized): put
+  // there at once, unless the master is under a hand (scratched, it comes back).
+  if (std::fabs(err) > kSyncSnap && !m.hand) {
+    jump(f, f.heardNow + secToFrame(err));
     f.trim = 1;
     return;
   }

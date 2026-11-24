@@ -584,13 +584,10 @@ impl App {
         // many beats, again lets go) and ‹ › for half and double; MA, IN and OUT by hand, and
         // EXIT
         let v = &s.decks[d];
-        let len_id = ui.scope_id().with(("club-loop-len", d));
         let ma_id = ui.scope_id().with(("club-loop-ma", d));
-        let mut beats: f64 = ui.ctx().data(|m| m.get_temp(len_id)).unwrap_or(4.0);
+        // the deck's loop length: what this box loops, and the loop button on a controller
+        let beats = desk.loop_len(d);
         let mut manual: bool = ui.ctx().data(|m| m.get_temp(ma_id)).unwrap_or(false);
-        if let Some(b) = v.loop_beats {
-            beats = b;
-        }
         let g = 4.0;
         let rh = 22.0;
         let top_h = (r.height() - 2.0 * (rh + g)).clamp(30.0, 56.0);
@@ -616,23 +613,17 @@ impl App {
             }
         } else {
             let shown = if beats < 1.0 { format!("1/{}", (1.0 / beats).round()) } else { format!("{beats}") };
-            let resp = ui.interact(box_r, ui.scope_id().with(("club-loop", d)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("A loop this many beats long from the bar (again lets go)");
+            let resp = ui.interact(box_r, ui.scope_id().with(("club-loop", d)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("A loop this many beats long from the bar (looping: let go). ‹ › set the length");
             p.rect(box_r, CornerRadius::same(2), if auto_on { mix(PANEL, CUE, 0.22) } else { rgb(0x0A0A0B) }, Stroke::new(1.0, if auto_on { CUE } else { LINE }), StrokeKind::Inside);
             words(p, box_r.center(), Align2::CENTER_CENTER, &shown, 15.0, "mono-semi", if auto_on { CUE } else { TEXT });
             if resp.clicked() {
-                desk.loop_beats(d, beats);
+                desk.loop_toggle(d);
             }
-            if button(ui, p, half(r1, 0.0), "‹", false, LIT, ("club-loop-less", d)).clicked() {
-                beats = (beats / 2.0).max(1.0 / 32.0);
-                if v.looped.is_some() {
-                    desk.halve_loop(d);
-                }
+            if button(ui, p, half(r1, 0.0), "‹", false, LIT, ("club-loop-less", d)).on_hover_text("The loop half as long").clicked() {
+                desk.loop_len_step(d, -1);
             }
-            if button(ui, p, half(r1, 1.0), "›", false, LIT, ("club-loop-more", d)).clicked() {
-                beats = (beats * 2.0).min(512.0);
-                if v.looped.is_some() {
-                    desk.double_loop(d);
-                }
+            if button(ui, p, half(r1, 1.0), "›", false, LIT, ("club-loop-more", d)).on_hover_text("The loop twice as long").clicked() {
+                desk.loop_len_step(d, 1);
             }
         }
         if button(ui, p, half(r2, 0.0), "AU", !manual, LIT, ("club-au", d)).on_hover_text("Auto beat loop").clicked() {
@@ -642,7 +633,6 @@ impl App {
             manual = true;
         }
         ui.ctx().data_mut(|m| {
-            m.insert_temp(len_id, beats);
             m.insert_temp(ma_id, manual);
         });
     }
@@ -765,6 +755,9 @@ impl App {
                 }
             }
         }
+        // under them: TEMPO RETURN, back to the record's own tempo slowly
+        let back = Rect::from_center_size(pos2(c.x, c.y + rad * 0.62 + 17.0), vec2(46.0, 15.0));
+        self.tempo_return_btn(desk, ui, p, back, v, d);
     }
 
     /// The mixer between the decks, rekordbox's narrow one: each channel TRIM, HIGH, MID,

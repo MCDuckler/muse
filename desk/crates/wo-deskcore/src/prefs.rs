@@ -42,6 +42,12 @@ pub struct Prefs {
     pub music_folders: Vec<PathBuf>,
     /// rkbx_link chosen by hand (the program or its folder).
     pub rkbx_link: Option<PathBuf>,
+    /// The Auto DJ in order: the queue top to bottom, faded, no sync (player.rs), and the
+    /// fade's length, seconds.
+    pub auto_dj_in_order: bool,
+    pub auto_dj_fade: f64,
+    /// How long TEMPO RETURN takes a deck back to its own tempo, seconds (tempo.rs).
+    pub tempo_return_secs: f64,
 }
 
 /// A deck's side of the crossfader: rekordbox's crossfader assign (neither side: THRU).
@@ -119,6 +125,9 @@ impl Default for Prefs {
             follow_rekordbox: false,
             music_folders: vec![],
             rkbx_link: None,
+            auto_dj_in_order: false,
+            auto_dj_fade: crate::player::FADE,
+            tempo_return_secs: crate::tempo::SECS,
         }
     }
 }

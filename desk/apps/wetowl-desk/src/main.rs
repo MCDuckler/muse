@@ -417,6 +417,9 @@ impl App {
         let prefs = Prefs::read();
         desk.set_crossfader_assign(prefs.xf_assign());
         desk.set_auto_gain_on(prefs.auto_gain);
+        desk.set_fade_secs(prefs.auto_dj_fade);
+        desk.set_tempo_return_secs(prefs.tempo_return_secs);
+        desk.set_in_order(prefs.auto_dj_in_order);
         motion::set_reduced(ctx, prefs.reduced_motion);
         let tex = |name: &str, b: wo_deskcore::Backdrop| {
             ctx.load_texture(name, ColorImage::from_rgba_unmultiplied([b.width as usize, b.height as usize], &b.rgba), TextureOptions::LINEAR)

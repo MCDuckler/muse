@@ -3,6 +3,11 @@
 //! and nothing else (no planner, no beatmatch, no bands, loops or the booth's sounds).
 //! The decks, the waveforms and the show go on as ever: it is the Auto DJ with its
 //! hands off.
+//!
+//! The Auto DJ IN ORDER is the same with the queue for its list: the queue played top to
+//! bottom as it stands (records queued later join its end), each record whole, faded
+//! out as the next fades in over the fade a hand set, no beat sync; the queue done, it
+//! plays nothing new.
 use wo_booth::Transition;
 use wo_engine::DeckId;
 
@@ -11,8 +16,10 @@ use crate::library::Shelf;
 use crate::records::Record;
 use crate::Desk;
 
-/// The crossfade between two records, seconds.
-pub const FADE: f64 = 3.0;
+/// The crossfade between two records, seconds, until a hand sets it.
+pub const FADE: f64 = 6.0;
+/// The crossfade's reach, seconds.
+pub const FADE_RANGE: (f64, f64) = (1.0, 30.0);
 /// Into a record that stops dead (a cold end): next to nothing.
 const COLD: f64 = 0.4;
 /// Back within the first seconds of a record goes to the one before; later, to its start.
@@ -50,6 +57,53 @@ impl Player {
 }
 
 impl Desk {
+    /// The Auto DJ moves plainly: a list playing in order, or the queue in order.
+    pub(crate) fn plain_mode(&self) -> bool {
+        self.player.is_some() || self.in_order
+    }
+
+    /// The Auto DJ in order (the queue top to bottom, faded, no sync), or choosing and
+    /// mixing for itself.
+    pub fn in_order(&self) -> bool {
+        self.in_order
+    }
+
+    pub fn set_in_order(&mut self, on: bool) {
+        if on == self.in_order {
+            return;
+        }
+        self.in_order = on;
+        self.changes += 1;
+        // a move not begun yet is planned again, the new way
+        let to = 1 - self.master;
+        let parked = self.mix.as_ref().is_none_or(|m| !m.started) && !self.engine.deck(DeckId::new(to).unwrap()).read().playing;
+        if parked {
+            self.mix = None;
+        }
+        if on {
+            self.note(LogKind::Plan, format!("In order: the queue top to bottom, a {:.0} s fade between, no sync", self.fade_secs));
+            self.set.playing = false;
+            // the record waiting was the Auto DJ's own choice: the queue's first instead
+            if self.player.is_none() && parked && !self.mind.by_hand[to] && !self.hand_queue.is_empty() {
+                if let Some(r) = self.queued_next() {
+                    self.load(to, r);
+                }
+            }
+        } else {
+            self.note(LogKind::Plan, "Mixing again: in step, the Auto DJ's own moves");
+        }
+    }
+
+    /// The fade between records in order, seconds.
+    pub fn fade_secs(&self) -> f64 {
+        self.fade_secs
+    }
+
+    pub fn set_fade_secs(&mut self, s: f64) {
+        self.fade_secs = s.clamp(FADE_RANGE.0, FADE_RANGE.1);
+        self.changes += 1;
+    }
+
     /// The shelf open played in order from the record `from` (none: its first), on now.
     pub fn play_shelf(&mut self, from: Option<i64>) {
         let name = match &self.library.shelf {
@@ -142,7 +196,11 @@ impl Desk {
     }
 
     /// The list's next record, for the deck just freed (none: the list is done).
+    /// In order without a list: the queue's next, taken off it (none: the queue is done).
     pub(crate) fn list_next_record(&mut self) -> Option<Option<Record>> {
+        if self.player.is_none() && self.in_order {
+            return Some(self.queued_next());
+        }
         let p = self.player.as_mut()?;
         let on = self.slots[self.master].record.id;
         // where the record now playing is in the list (a hand may have put another on)
@@ -155,12 +213,25 @@ impl Desk {
     /// The plain move planned: the master out at its sound's end less the crossfade, the
     /// incoming from its start, not in step. None where there is nothing to play into.
     pub(crate) fn plan_plain(&mut self) -> bool {
-        let Some(p) = self.player.as_ref() else { return false };
+        if !self.plain_mode() {
+            return false;
+        }
         let (from, to) = (self.master, 1 - self.master);
-        // the list's next (or one a hand put there), and enough of it in to start
-        let want = p.after(p.at).map(|j| p.list[j].id);
+        // the list's next (or one a hand put there; in order, whatever waits: the queue's),
+        // and enough of it in to start
+        let want = self.player.as_ref().map(|p| p.after(p.at).map(|j| p.list[j].id));
+        // in order, the incoming empty (the queue ran out) and a record queued since: on
+        let empty = !self.slots[to].record.playable() || self.spent[to];
+        if want.is_none()
+            && empty
+            && !self.engine.deck(DeckId::new(to).unwrap()).read().playing
+            && let Some(r) = self.queued_next()
+        {
+            self.load(to, r);
+            return true;
+        }
         let rec = &self.slots[to].record;
-        if !rec.playable() || (want != Some(rec.id) && !self.mind.by_hand[to]) {
+        if empty || want.is_some_and(|w| w != Some(rec.id) && !self.mind.by_hand[to]) {
             return true;
         }
         let decoded = self.slots[to].wave.lock().unwrap().seconds();
@@ -206,7 +277,7 @@ impl Desk {
     pub(crate) fn plain_out(&self, from: usize) -> (f64, f64) {
         let t = &self.slots[from].timing;
         let end = t.sound_end.filter(|&e| e > 1.0).unwrap_or(t.duration.max(self.slots[from].record.seconds as f64));
-        let length = if t.ends == "cold" { COLD } else { FADE.min(end / 4.0) };
+        let length = if t.ends == "cold" { COLD } else { self.fade_secs.min(end / 4.0) };
         ((end - length).max(0.0), length)
     }
 

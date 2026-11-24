@@ -43,6 +43,7 @@ mod transition;
 pub mod parts;
 pub mod prefs;
 pub mod records;
+pub mod tempo;
 pub mod scratch;
 pub mod show;
 pub mod stage;
@@ -86,6 +87,8 @@ pub const NUDGE_A_TURN: f64 = 0.6;
 /// How far ahead of a transition's out point the next record is started (the engine
 /// then starts it sample-exactly on the point).
 pub(crate) const LEAD: f64 = 0.25;
+/// A deck's loop length's reach, beats.
+pub const LOOP_LEN: (f64, f64) = (1.0 / 32.0, 32.0);
 
 
 /// One deck as it is this frame.
@@ -477,6 +480,17 @@ pub struct Desk {
     set: set::SetState,
     /// A list played in order, plainly (player.rs).
     player: Option<player::Player>,
+    /// The Auto DJ in order: the queue played top to bottom, no sync, a fade between
+    /// (player.rs); the fade's length, seconds.
+    in_order: bool,
+    fade_secs: f64,
+    /// Tempo returns under way, a deck each, and how long one takes (tempo.rs).
+    tempo_back: [Option<tempo::Back>; 2],
+    tempo_back_secs: f64,
+    /// Each deck's loop length, beats: what its loop button loops.
+    loop_len: [f64; 2],
+    /// A deck freed with the list or the queue done: its record played, nothing new on it.
+    spent: [bool; 2],
     /// Records a hand queued for the Auto DJ (crate_.rs).
     hand_queue: Vec<Record>,
     /// The library's next page asked for at this many rows.
@@ -650,6 +664,12 @@ impl Desk {
             set: Default::default(),
             hand_queue: vec![],
             player: None,
+            in_order: false,
+            fade_secs: player::FADE,
+            tempo_back: [None; 2],
+            tempo_back_secs: tempo::SECS,
+            loop_len: [4.0; 2],
+            spent: [false; 2],
             more_asked: None,
             control_lines: Default::default(),
             session_kept: None,
@@ -730,6 +750,7 @@ impl Desk {
     /// A record onto a deck: its grid at once, its sound and waveform as they decode.
     pub fn load(&mut self, slot: usize, record: Record) {
         self.mind.by_hand[slot] = false;
+        self.spent[slot] = false;
         let deck = self.engine.deck(DeckId::new(slot).unwrap());
         deck.play(false);
         deck.unsync();
@@ -935,6 +956,7 @@ impl Desk {
         self.stems_tick();
         self.mind_tick();
         self.doubles_tick();
+        self.tempo_tick();
         self.master_follows();
         self.history_tick();
         self.feed_stage();
@@ -953,7 +975,7 @@ impl Desk {
         if !started {
             // in order: out where the master's sound ends (its analysis may have come
             // since), unless a hand said sooner
-            let out = if self.player.is_some() && self.mix.as_ref().is_some_and(|m| m.why == "in order") {
+            let out = if self.plain_mode() && self.mix.as_ref().is_some_and(|m| m.why == "in order") {
                 let (end, _) = self.plain_out(from);
                 let out = out.min(end).max(heard.min(end));
                 if let Some(m) = self.mix.as_mut() {
@@ -963,7 +985,7 @@ impl Desk {
             } else {
                 out
             };
-            if self.player.is_some() && heard >= out - LEAD {
+            if self.plain_mode() && self.mix.as_ref().is_some_and(|m| m.why == "in order") && heard >= out - LEAD {
                 let d = self.engine.deck(DeckId::new(to).unwrap());
                 d.play(true);
                 if let Some(m) = self.mix.as_mut() {
@@ -1137,12 +1159,16 @@ impl Desk {
         self.apply_levels();
         self.engine.deck(DeckId::new(to).unwrap()).unsync();
         self.master = to;
-        // in order and the list is done: the deck stays empty of anything new
-        if let Some(None) = self.list_next_record() {
-            self.note(autodj::LogKind::Plan, "The list is done");
-            return;
-        }
-        let next = self.take_next();
+        // in order and the list (or the queue) is done: the deck stays empty of anything new
+        let next = match self.list_next_record() {
+            Some(None) => {
+                self.spent[from] = true;
+                self.note(autodj::LogKind::Plan, if self.player.is_some() { "The list is done" } else { "The queue is done" });
+                return;
+            }
+            Some(Some(r)) => r,
+            None => self.take_next(),
+        };
         self.load(from, next);
     }
 
@@ -1873,6 +1899,39 @@ impl Desk {
         self.hands(d, |h, t| h.loop_beats(beats, t));
     }
 
+    /// Deck `d`'s loop length, beats: what its loop button loops.
+    pub fn loop_len(&self, d: usize) -> f64 {
+        self.loop_len[d]
+    }
+
+    /// Deck `d`'s loop length set (¹⁄₃₂ to 32 beats, a power of two); a loop running from
+    /// a length goes to it at once.
+    pub fn set_loop_len(&mut self, d: usize, beats: f64) {
+        let b = 2f64.powf(beats.max(1e-6).log2().round()).clamp(LOOP_LEN.0, LOOP_LEN.1);
+        self.loop_len[d] = b;
+        let h = &self.slots[d].hands;
+        if h.looped.is_some() && h.loop_beats.is_some_and(|x| x != b) {
+            self.hands(d, |h, t| h.loop_beats(b, t));
+        }
+        self.changes += 1;
+    }
+
+    /// The loop length halved (-1) or doubled (1).
+    pub fn loop_len_step(&mut self, d: usize, dir: i8) {
+        let b = self.loop_len[d] * if dir < 0 { 0.5 } else { 2.0 };
+        self.set_loop_len(d, b);
+    }
+
+    /// The loop button: a loop at the deck's length from the bar; looping, it lets go.
+    pub fn loop_toggle(&mut self, d: usize) {
+        if self.slots[d].hands.looped.is_some() {
+            self.unloop(d);
+        } else {
+            let b = self.loop_len[d];
+            self.loop_beats(d, b);
+        }
+    }
+
     pub fn loop_in(&mut self, d: usize) {
         self.hands(d, |h, t| h.loop_in(t));
     }
@@ -1906,6 +1965,8 @@ impl Desk {
 
     /// The pitch fader, -1..1.
     pub fn set_pitch(&mut self, d: usize, v: f64) {
+        // a hand on the fader has it: a tempo return stops where it is
+        self.tempo_back[d] = None;
         self.hands(d, |h, t| h.set_pitch(v, t));
     }
 
@@ -2441,6 +2502,11 @@ impl Desk {
             A::HalveLoop(d) => self.halve_loop(d),
             A::DoubleLoop(d) => self.double_loop(d),
             A::LoopBeats(d, beats) => self.loop_beats(d, beats),
+            A::Loop(d) => self.loop_toggle(d),
+            A::LoopLength(d, dir) => self.loop_len_step(d, dir),
+            A::TempoReturn(d) => {
+                self.tempo_return(d);
+            }
             A::Unloop(d) => self.unloop(d),
             A::Fx(h) => self.fx_hand(h),
             A::Crossfader(x) => self.hand_crossfader(x),
@@ -2561,6 +2627,8 @@ impl Desk {
             want.push((format!("deck.{side}.loop.in"), h.loop_in.is_some() || h.looped.is_some()));
             want.push((format!("deck.{side}.loop.out"), h.looped.is_some()));
             want.push((format!("deck.{side}.loop.exit"), h.looped.is_some()));
+            want.push((format!("deck.{side}.loop"), h.looped.is_some()));
+            want.push((format!("deck.{side}.tempo.return"), self.tempo_back[d].is_some()));
             // a record loaded: the jog's ring goes round once
             if self.load_gen[d] != self.lit_load[d] {
                 self.lit_load[d] = self.load_gen[d];

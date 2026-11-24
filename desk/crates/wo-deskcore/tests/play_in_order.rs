@@ -44,6 +44,7 @@ fn a_list_plays_in_order_with_plain_fades() {
     let (a, b) = (s0.decks[0].record.clone(), s0.decks[1].record.clone());
     let more = |seed: u32, id: i64| wo_deskcore::Record { id, title: format!("Test Pressing {id}"), audio: wo_deskcore::Audio::Synth { seed }, ..a.clone() };
     let list = vec![b, a.clone(), more(3, -3), more(4, -4)];
+    d.set_fade_secs(3.0);
     d.play_list("test".into(), list.clone(), 0);
 
     let s = d.snapshot();
