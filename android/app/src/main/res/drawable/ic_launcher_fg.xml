@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- An owl's two eyes on the accent: the mark, as simple as a launcher icon needs. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFF5A4E"
+        android:pathData="M54,30c13.3,0 24,10.7 24,24s-10.7,24 -24,24s-24,-10.7 -24,-24s10.7,-24 24,-24z"/>
+    <path android:fillColor="#FF15171B"
+        android:pathData="M44,46a7,7 0,1 1,0 14a7,7 0,1 1,0 -14zM64,46a7,7 0,1 1,0 14a7,7 0,1 1,0 -14z"/>
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M45.5,50a2.5,2.5 0,1 1,0 5a2.5,2.5 0,1 1,0 -5zM65.5,50a2.5,2.5 0,1 1,0 5a2.5,2.5 0,1 1,0 -5z"/>
+    <path android:fillColor="#FF15171B" android:pathData="M54,60l-4,5h8z"/>
+</vector>
